@@ -14,9 +14,9 @@ window.FollowUpI18n = (() => {
   const DICT = {
     nl: {
       "app.followup": "FollowUp",
-      "app.brand": "Prion Medical",
 
       // chrome
+      "nav.aria": "Navigatie",
       "nav.list": "Lijst",
       "nav.map": "Kaart",
       "nav.stats": "Statistieken",
@@ -293,8 +293,8 @@ window.FollowUpI18n = (() => {
 
     en: {
       "app.followup": "FollowUp",
-      "app.brand": "Prion Medical",
 
+      "nav.aria": "Navigation",
       "nav.list": "List",
       "nav.map": "Map",
       "nav.stats": "Statistics",
@@ -586,9 +586,12 @@ window.FollowUpI18n = (() => {
     listeners.forEach((fn) => fn(lang));
   }
 
-  // Vaste tekst in index.html: <span data-i18n="btn.save"> of data-i18n-ph / data-i18n-title.
+  // Vaste tekst in index.html: <span data-i18n="btn.save"> of data-i18n-ph /
+  // data-i18n-title / data-i18n-aria (dat laatste zet alleen een aria-label,
+  // zonder er een tooltip bij te geven).
   function applyStatic(root = document) {
     root.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
+    root.querySelectorAll("[data-i18n-aria]").forEach((el) => { el.setAttribute("aria-label", t(el.dataset.i18nAria)); });
     root.querySelectorAll("[data-i18n-ph]").forEach((el) => { el.placeholder = t(el.dataset.i18nPh); });
     root.querySelectorAll("[data-i18n-title]").forEach((el) => {
       el.title = t(el.dataset.i18nTitle);

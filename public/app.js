@@ -300,7 +300,8 @@
       if (h.country) bits.push(t("country." + h.country + ".short"));
       if (h.unit.roomsInstalled) bits.push(`${h.unit.roomsInstalled}× ${t("stats.roomsLive").toLowerCase()}`);
       if (lc) bits.push(t("rel.last") + " " + relDays(lc));
-      return `<li data-id="${esc(h.id)}" class="${h.id === state.selectedId ? "selected" : ""}">
+      const chosen = h.id === state.selectedId;
+      return `<li data-id="${esc(h.id)}" class="${chosen ? "selected" : ""}" tabindex="0"${chosen ? ' aria-current="true"' : ""}>
         <i class="dot ${esc(h.status)}"></i>
         <div>
           <div class="name">${esc(h.name)}${isOverdue(h) ? `<span class="badge">${esc(t("badge.overdue"))}</span>` : ""}${h.lat == null ? `<span class="badge neutral">${esc(t("map.noLocation"))}</span>` : ""}</div>
@@ -313,6 +314,13 @@
   $("#list").addEventListener("click", (e) => {
     const li = e.target.closest("li[data-id]");
     if (li) select(li.dataset.id, true);
+  });
+  $("#list").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const li = e.target.closest("li[data-id]");
+    if (!li) return;
+    e.preventDefault();
+    select(li.dataset.id, true);
   });
 
   function bindChips(containerSel, key) {
