@@ -783,6 +783,10 @@
     const dlg = $("#dialog");
     const form = $("#dialogForm");
     form.innerHTML = html;
+    // #dialogForm wordt door elke dialoog hergebruikt. onchange is een
+    // eigenschap en geen luisteraar, zodat die van de vorige dialoog hier
+    // vervalt in plaats van zich op te stapelen.
+    form.onchange = null;
     dlg.showModal();
     const first = form.querySelector("input, select, textarea");
     if (first) first.focus();
@@ -910,7 +914,7 @@
     const sync = () => {
       $("#roomsField", form).hidden = !ROOM_TYPES.includes(form.elements.type.value);
     };
-    form.addEventListener("change", sync);
+    form.onchange = sync;
     sync();
   }
 
