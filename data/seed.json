@@ -612,6 +612,35 @@
       "activities": []
     },
     {
+      "id": "15790b6298",
+      "name": "AZ Sint-Maarten",
+      "country": "BE",
+      "sector": "",
+      "address": "Liersesteenweg 435, 2800 Mechelen",
+      "lat": 51.05148,
+      "lng": 4.47652,
+      "status": "red",
+      "stage": "prospect",
+      "products": [],
+      "nextAction": "",
+      "nextActionDate": "",
+      "demoDate": "",
+      "notes": "",
+      "createdAt": "2026-11-04",
+      "unit": {
+        "scopeBrands": [],
+        "scopeNotes": "",
+        "rooms": null,
+        "roomsDemo": null,
+        "roomsInstalled": null,
+        "colosPerYear": null,
+        "existingAI": "",
+        "screening": false
+      },
+      "contacts": [],
+      "activities": []
+    },
+    {
       "id": "f956369666",
       "name": "Amsterdam UMC – locatie AMC",
       "country": "NL",

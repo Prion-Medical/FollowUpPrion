@@ -52,7 +52,7 @@ login. `supabase/schema.sql` creates the tables.
 | `public/storage.js` | Two backends: local `server.py`, or Supabase with login |
 | `public/styles.css` | Prion Medical house style — ink/paper/Jost, amber accent `#d97b2a` |
 | `server.py` | Local static server + `GET`/`PUT /api/data` |
-| `data/seed.json` | 39 starter hospitals (BE/NL/LU), no contacts, approximate coordinates |
+| `data/seed.json` | 40 starter hospitals (BE/NL/LU), no contacts, approximate coordinates |
 
 ## Conventions
 
