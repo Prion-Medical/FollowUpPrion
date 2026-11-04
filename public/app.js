@@ -862,22 +862,22 @@
       if (action === "delete") {
         if (!confirm(t("confirm.deleteActivity"))) return;
         h.activities = h.activities.filter((x) => x.id !== a.id);
+        syncRooms(h, a, null);
       } else {
         const rec = a || { id: uid() };
         const wantsRooms = ROOM_TYPES.includes(data.type);
+        // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
+        const before = a ? { type: rec.type, rooms: rec.rooms } : null;
         Object.assign(rec, {
           date: data.date, type: data.type, product: data.product, contactId: data.contactId,
           rooms: wantsRooms ? num(data.rooms) : null, note: data.note.trim(),
         });
-        if (!a) {
-          h.activities.push(rec);
-          autoStatus(h, rec);
-        }
+        if (!a) h.activities.push(rec);
+        // Ook bij een wijziging: een contactmoment dat nú een installatie of
+        // een bestelling is, zet de kleur en de fase mee goed.
+        if (!a || before.type !== rec.type) autoStatus(h, rec);
         // Een installatie of demo met aantal kamers werkt de afdelingsgegevens bij.
-        if (rec.rooms) {
-          if (rec.type === "installation") h.unit.roomsInstalled = rec.rooms;
-          if (rec.type === "demo") h.unit.roomsDemo = rec.rooms;
-        }
+        syncRooms(h, before, rec);
       }
       scheduleSave();
       renderAll();
@@ -910,6 +910,25 @@
       toast(t("status.toOrange"));
     }
     if (act.type === "demo" && ["prospect", "first_contact", "meeting", "demo_planned"].includes(h.stage)) h.stage = "demo_installed";
+  }
+
+  // Kamers van de afdeling bijwerken na een demo of een installatie.
+  //
+  // Installaties tellen op: na een installatie van 2 en later nog een van 3
+  // staan er 5 kamers live. We passen het verschil toe en niet de som van alle
+  // contactmomenten, zodat een aantal dat hier al handmatig stond blijft staan.
+  // Een demo overschrijft wél: dat is de huidige toestand, geen optelsom — we
+  // nemen het aantal van de laatste demo waarvoor een aantal is ingevuld.
+  function syncRooms(h, before, after) {
+    const installed = (a) => (a && a.rooms && a.type === "installation" ? a.rooms : 0);
+    const delta = installed(after) - installed(before);
+    if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
+      h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);
+    }
+    if ((before && before.type === "demo") || (after && after.type === "demo")) {
+      const demos = h.activities.filter((a) => a.type === "demo" && a.rooms);
+      if (demos.length) h.unit.roomsDemo = demos.sort((a, b) => b.date.localeCompare(a.date))[0].rooms;
+    }
   }
 
   // ---------- nieuw ziekenhuis ----------
