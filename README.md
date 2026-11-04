@@ -68,14 +68,25 @@ Volledig opnieuw beginnen: verwijder `data/db.json` en herstart de server.
 
 ### Online (Supabase + GitHub Pages)
 
-Zo werkt de app ook op je gsm, met login:
+Zo werkt de app ook op je gsm, met login. **Deze app heeft een eigen databank, los
+van FollowUp Vaseo** — gebruik dus niet het project van Vaseo, maar maak een nieuw aan.
 
-1. Maak een project op [supabase.com](https://supabase.com).
-2. SQL Editor → New query → plak `supabase/schema.sql` → Run.
-3. Authentication → Users → voeg je eigen gebruiker toe.
-4. Vul in `public/config.js` de Project URL en de "anon public" sleutel in.
-   Die sleutel mag publiek staan: de databank laat enkel aangemelde gebruikers toe.
-5. Push naar GitHub en zet Pages aan (branch `main`, map `/`).
+1. Maak op [supabase.com](https://supabase.com) een **nieuw** project aan. Kies een
+   regio in de EU (Frankfurt) en bewaar het databankwachtwoord in je
+   wachtwoordbeheerder; je hebt het verder niet nodig voor de app.
+2. SQL Editor → New query → plak `supabase/schema.sql` → Run. Dat script mag je
+   later opnieuw uitvoeren als het verandert: het maakt niets dubbel aan.
+3. Authentication → Users → **Add user** → voeg ieder van het team toe, met
+   e-mailadres en wachtwoord.
+4. **Zet registratie uit: Authentication → Sign In / Providers → Email → "Allow new
+   users to sign up" af.** Niet overslaan. Elke aangemelde gebruiker ziet *alle*
+   gegevens (zo staat het in `supabase/schema.sql`), dus zolang registratie open
+   staat, kan iedereen die het adres van de app kent zelf een account maken en
+   alle contactgegevens lezen.
+5. Project Settings → API → neem de **Project URL** en de **anon public** sleutel
+   over in `public/config.js`. Die sleutel mag publiek staan: de databank laat
+   enkel aangemelde gebruikers toe.
+6. Push naar GitHub en zet Pages aan (branch `main`, map `/`).
 
 Bij de eerste keer openen is de databank leeg; de app biedt dan aan om de startlijst te laden.
 

@@ -9,6 +9,7 @@
  * publiek staan: de databank laat enkel aangemelde gebruikers toe.
  */
 window.FOLLOWUP_CONFIG = {
-  supabaseUrl: "",
-  supabaseAnonKey: "",
+  // De Project URL, zonder /rest/v1/ erachter: de bibliotheek plakt dat er zelf bij.
+  supabaseUrl: "https://hpkmobbfcryygtxgjvlu.supabase.co",
+  supabaseAnonKey: "sb_publishable_yr3JMrwWdwLaPLprTOKZOQ_2fW_U2OV",
 };
