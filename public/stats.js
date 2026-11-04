@@ -65,7 +65,7 @@ window.FollowUpStats = (() => {
 
   // ---------- bouwstenen ----------
   function tile(value, label, sub) {
-    return `<div class="s-tile"><b>${value}</b><span>${esc(label)}</span>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`;
+    return `<div class="s-tile"><b>${esc(value)}</b><span>${esc(label)}</span>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`;
   }
 
   function legend(series) {
@@ -222,13 +222,13 @@ window.FollowUpStats = (() => {
           <th class="num">${esc(t("unit.colosPerYear"))}</th><th>${esc(t("unit.existingAI"))}</th>
         </tr></thead>
         <tbody>${list.map((h) => `<tr>
-          <td><i class="dot ${h.status}"></i> ${esc(h.name)}</td>
+          <td><i class="dot ${esc(h.status)}"></i> ${esc(h.name)}</td>
           <td>${esc(h.country ? t("country." + h.country + ".short") : "—")}</td>
           <td>${esc(t("stage." + h.stage))}</td>
           <td>${esc(h.products.join(", ") || "—")}</td>
-          <td class="num">${h.unit.rooms ?? "—"}</td>
-          <td class="num">${h.unit.roomsDemo ?? "—"}</td>
-          <td class="num">${h.unit.roomsInstalled ?? "—"}</td>
+          <td class="num">${esc(h.unit.rooms ?? "—")}</td>
+          <td class="num">${esc(h.unit.roomsDemo ?? "—")}</td>
+          <td class="num">${esc(h.unit.roomsInstalled ?? "—")}</td>
           <td class="num">${h.unit.colosPerYear != null ? fmt(h.unit.colosPerYear) : "—"}</td>
           <td>${esc(h.unit.existingAI || "—")}</td>
         </tr>`).join("")}</tbody>

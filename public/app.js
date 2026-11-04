@@ -187,7 +187,7 @@
 
   function pinIcon(h) {
     const cls = ["pin", h.status, h.id === state.selectedId ? "selected" : "", h.id === state.dragId ? "dragging" : ""].join(" ");
-    return L.divIcon({ className: "", html: `<div class="${cls}"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] });
+    return L.divIcon({ className: "", html: `<div class="${esc(cls)}"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] });
   }
 
   function renderMarkers() {
@@ -300,8 +300,8 @@
       if (h.country) bits.push(t("country." + h.country + ".short"));
       if (h.unit.roomsInstalled) bits.push(`${h.unit.roomsInstalled}× ${t("stats.roomsLive").toLowerCase()}`);
       if (lc) bits.push(t("rel.last") + " " + relDays(lc));
-      return `<li data-id="${h.id}" class="${h.id === state.selectedId ? "selected" : ""}">
-        <i class="dot ${h.status}"></i>
+      return `<li data-id="${esc(h.id)}" class="${h.id === state.selectedId ? "selected" : ""}">
+        <i class="dot ${esc(h.status)}"></i>
         <div>
           <div class="name">${esc(h.name)}${isOverdue(h) ? `<span class="badge">${esc(t("badge.overdue"))}</span>` : ""}${h.lat == null ? `<span class="badge neutral">${esc(t("map.noLocation"))}</span>` : ""}</div>
           <div class="meta">${esc(bits.join(" · "))}</div>
@@ -386,7 +386,7 @@
   // ---------- fiche ----------
   const opt = (value, label, current) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
   const numField = (h, key, label) => `<label class="field">${esc(label)}
-      <input type="number" min="0" data-unit="${key}" value="${h.unit[key] ?? ""}">
+      <input type="number" min="0" data-unit="${key}" value="${esc(h.unit[key] ?? "")}">
     </label>`;
 
   function renderFiche() {
@@ -403,7 +403,7 @@
     el.innerHTML = `
       <div class="fiche-head">
         <div class="row">
-          <i class="dot ${h.status}" style="width:14px;height:14px"></i>
+          <i class="dot ${esc(h.status)}" style="width:14px;height:14px"></i>
           <input class="fiche-title" data-field="name" value="${esc(h.name)}" aria-label="${esc(t("fiche.name"))}">
           <button class="icon-btn show-on-map" data-act="show-map" title="${esc(t("map.showOnMap"))}" aria-label="${esc(t("map.showOnMap"))}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg></button>
           <button class="icon-btn" data-act="close" title="${esc(t("btn.close"))}" aria-label="${esc(t("btn.close"))}">✕</button>
@@ -452,7 +452,7 @@
               ${sub ? `<div class="t-sub">${esc(sub)}</div>` : ""}
               ${a.note ? `<div class="t-note">${esc(a.note)}</div>` : ""}
             </div>
-            <div><button class="icon-btn" data-act="edit-activity" data-id="${a.id}" title="${esc(t("btn.edit"))}">✎</button></div>
+            <div><button class="icon-btn" data-act="edit-activity" data-id="${esc(a.id)}" title="${esc(t("btn.edit"))}">✎</button></div>
           </li>`;
         }).join("")}</ul>` : `<p class="muted">${esc(t("empty.activities"))}</p>`}
       </div>
@@ -462,8 +462,8 @@
         ${contacts.length ? contacts.map((c) => `
           <div class="contact ${c.primary ? "primary" : ""}">
             <div class="c-actions">
-              <button class="icon-btn" data-act="primary" data-id="${c.id}" title="${esc(t("dlg.c.primary"))}">${c.primary ? "★" : "☆"}</button>
-              <button class="icon-btn" data-act="edit-contact" data-id="${c.id}" title="${esc(t("btn.edit"))}">✎</button>
+              <button class="icon-btn" data-act="primary" data-id="${esc(c.id)}" title="${esc(t("dlg.c.primary"))}">${c.primary ? "★" : "☆"}</button>
+              <button class="icon-btn" data-act="edit-contact" data-id="${esc(c.id)}" title="${esc(t("btn.edit"))}">✎</button>
             </div>
             <div class="c-name">${esc(c.name)}${c.primary ? `<span class="tag primary">${esc(t("tag.primary"))}</span>` : ""}${c.product ? `<span class="tag">${esc(c.product)}</span>` : ""}</div>
             ${c.role ? `<div class="c-role">${esc(c.role)}</div>` : ""}
