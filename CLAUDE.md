@@ -46,7 +46,7 @@ login. `supabase/schema.sql` creates the tables.
 | File | What it is |
 |---|---|
 | `public/domain.js` | Fixed values both app.js and stats.js need, plus `esc()` |
-| `public/app.js` | The whole app: map, list, record, dialogs, export/import (~1,100 lines) |
+| `public/app.js` | The whole app: map, list, record, dialogs, export/import (~1,200 lines) |
 | `public/i18n.js` | NL/EN dictionaries and `t()` |
 | `public/stats.js` | Statistics page, charts as plain HTML |
 | `public/storage.js` | Two backends: local `server.py`, or Supabase with login |
