@@ -47,10 +47,17 @@ window.FollowUpStore = (() => {
         err.textContent = "";
         const btn = form.querySelector("button");
         btn.disabled = true;
-        const { error } = await client.auth.signInWithPassword({
-          email: form.elements.email.value.trim(),
-          password: form.elements.password.value,
-        });
+        let error = null;
+        try {
+          ({ error } = await client.auth.signInWithPassword({
+            email: form.elements.email.value.trim(),
+            password: form.elements.password.value,
+          }));
+        } catch (e) {
+          // Geen netwerk of databank onbereikbaar: zonder deze vangnet blijft
+          // de knop uit staan en kan je alleen nog herladen.
+          error = e;
+        }
         btn.disabled = false;
         if (error) {
           err.textContent = t("login.failed") + (error.message === "Invalid login credentials" ? t("login.badCredentials") : error.message);
