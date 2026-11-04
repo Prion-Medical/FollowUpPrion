@@ -348,13 +348,24 @@
   bindChips("#productFilters", "product");
   bindChips("#countryFilters", "country");
 
-  $("#search").addEventListener("input", (e) => {
-    state.filter.query = e.target.value.trim();
+  // Even wachten met hertekenen: bij elke toetsaanslag alle markers van de
+  // kaart halen en opnieuw zetten is zonde van het werk.
+  let searchTimer = null;
+  function applySearch() {
+    clearTimeout(searchTimer);
+    const q = $("#search").value.trim();
+    if (q === state.filter.query) return;
+    state.filter.query = q;
     renderList();
     renderMarkers();
+  }
+  $("#search").addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(applySearch, 120);
   });
   $("#search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
+      applySearch(); // niet op de pauze wachten als je meteen Enter duwt
       const first = $("#list li[data-id]");
       if (first) select(first.dataset.id, true);
     }
