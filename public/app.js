@@ -773,6 +773,10 @@
   }
 
   // ---------- dialogen ----------
+  // onSubmit krijgt de waarde van de knop waarop geduwd is ("ok", "delete", of
+  // bij de export de soort lijst). Geeft onSubmit KEEP_OPEN terug, dan blijft de
+  // dialoog open — handig als je er meerdere dingen achter elkaar doet.
+  const KEEP_OPEN = "keep-open";
   function openDialog(html, onSubmit) {
     const dlg = $("#dialog");
     const form = $("#dialogForm");
@@ -785,7 +789,7 @@
       if (!submitter || submitter.value === "cancel") return;
       if (submitter.value === "delete") { onSubmit(null, "delete"); return; }
       if (!form.reportValidity()) { e.preventDefault(); return; }
-      onSubmit(Object.fromEntries(new FormData(form)), "ok");
+      if (onSubmit(Object.fromEntries(new FormData(form)), submitter.value) === KEEP_OPEN) e.preventDefault();
     };
     return form;
   }
@@ -1030,9 +1034,7 @@
         <button class="btn" value="units">${esc(t("export.units"))}</button>
         <button class="btn" value="json">${esc(t("export.json"))}</button>
       </div>
-      <div class="actions"><button class="btn" value="cancel">${esc(t("btn.close"))}</button></div>`, () => {});
-    $("#dialogForm").onsubmit = (e) => {
-      const kind = e.submitter && e.submitter.value;
+      <div class="actions"><button class="btn" value="cancel">${esc(t("btn.close"))}</button></div>`, (data, kind) => {
       const hs = state.db.hospitals;
       const d = today();
       const contactName = (h, id) => (h.contacts.find((c) => c.id === id) || {}).name;
@@ -1070,7 +1072,8 @@
       } else if (kind === "json") {
         download(`followup-prion-backup-${d}.json`, JSON.stringify(state.db, null, 2), "application/json");
       }
-    };
+      return KEEP_OPEN; // meestal wil je meer dan één lijst
+    });
   });
 
   $("#importBtn").addEventListener("click", () => $("#importFile").click());
