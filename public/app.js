@@ -923,7 +923,13 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
   // Puntkomma + decimale komma, zoals Excel met Belgische/Nederlandse instellingen verwacht.
-  const csvCell = (v) => (typeof v === "number" ? String(v).replace(".", ",") : `"${String(v ?? "").replace(/"/g, '""')}"`);
+  // Een cel die met = + - @ een tab of een regeleinde begint, wordt door Excel
+  // als formule uitgevoerd; een voorafgaande ' maakt er weer gewone tekst van.
+  const csvCell = (v) => {
+    if (typeof v === "number") return String(v).replace(".", ",");
+    const s = String(v ?? "");
+    return `"${(/^[=+\-@\t\r]/.test(s) ? "'" + s : s).replace(/"/g, '""')}"`;
+  };
   const csv = (rows) => "﻿" + rows.map((r) => r.map(csvCell).join(";")).join("\r\n");
 
   $("#exportBtn").addEventListener("click", () => {
