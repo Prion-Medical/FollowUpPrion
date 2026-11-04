@@ -270,6 +270,7 @@ label.field.check input[type="checkbox"] { width: auto; }
 .contact .c-actions { position: absolute; top: 4px; right: 4px; display: flex; }
 .tag { font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; padding: 2px 7px; border-radius: 100px; border: 1px solid var(--line); color: var(--grey); margin-left: 6px; vertical-align: 2px; }
 .tag.primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.tag.dept { background: var(--accent-soft); border-color: transparent; color: var(--accent-dark); }
 
 .timeline { list-style: none; margin: 0; padding: 0; }
 .timeline li { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }

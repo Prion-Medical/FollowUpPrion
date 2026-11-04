@@ -40,6 +40,9 @@ window.FollowUpDomain = (() => {
   const ROOM_TYPES = ["demo", "installation", "order"];
   const PRODUCTS = ["EndoQ", "Ainex"];
   const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "other"];
+  // Diensten waar een contactpersoon toe behoort. Niet alleen de artsen
+  // beslissen mee: ICT, aankoop en de biomedische dienst evengoed.
+  const DEPARTMENTS = ["physician", "endoscopy", "it", "purchasing", "biomed", "admin", "other"];
   const SECTORS = ["public", "private", "university"];
   const COUNTRIES = ["BE", "NL", "LU"];
 
@@ -47,6 +50,6 @@ window.FollowUpDomain = (() => {
 
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, SECTORS, COUNTRIES, esc,
+    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, esc,
   };
 })();

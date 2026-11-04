@@ -10,7 +10,7 @@
   // zo moet een nieuwe fase of een nieuw merk maar op één plaats bij.
   const {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS, ROOM_TYPES,
-    PRODUCTS, SCOPE_BRANDS, SECTORS, COUNTRIES, esc,
+    PRODUCTS, SCOPE_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, esc,
   } = window.FollowUpDomain;
   // Scope-merken zijn eigennamen; enkel "other" is een sleutel met vertaling.
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
@@ -139,6 +139,8 @@
   function normalizeContact(c) {
     c.id = str(c.id) || uid();
     for (const k of ["name", "role", "phone", "email", "address", "product", "notes"]) c[k] = str(c[k]);
+    // De dienst is een vaste sleutel; de functie ernaast blijft vrije tekst.
+    c.department = DEPARTMENTS.includes(c.department) ? c.department : "";
     c.primary = !!c.primary;
     return c;
   }
@@ -280,7 +282,7 @@
   function matchesQuery(h, q) {
     if (!q) return true;
     const hay = [h.name, h.address, h.unit.scopeNotes, h.unit.existingAI, h.notes,
-      ...h.contacts.flatMap((c) => [c.name, c.role, c.address, c.email])]
+      ...h.contacts.flatMap((c) => [c.name, c.role, c.address, c.email, c.department && t("dept." + c.department)])]
       .join(" ").toLowerCase();
     return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
   }
@@ -495,7 +497,7 @@
               <button class="icon-btn" data-act="primary" data-id="${esc(c.id)}" title="${esc(t("dlg.c.primary"))}">${c.primary ? "★" : "☆"}</button>
               <button class="icon-btn" data-act="edit-contact" data-id="${esc(c.id)}" title="${esc(t("btn.edit"))}">✎</button>
             </div>
-            <div class="c-name">${esc(c.name)}${c.primary ? `<span class="tag primary">${esc(t("tag.primary"))}</span>` : ""}${c.product ? `<span class="tag">${esc(c.product)}</span>` : ""}</div>
+            <div class="c-name">${esc(c.name)}${c.department ? `<span class="tag dept">${esc(t("dept." + c.department))}</span>` : ""}${c.primary ? `<span class="tag primary">${esc(t("tag.primary"))}</span>` : ""}${c.product ? `<span class="tag">${esc(c.product)}</span>` : ""}</div>
             ${c.role ? `<div class="c-role">${esc(c.role)}</div>` : ""}
             ${c.phone ? `<div class="c-line">☎ <a href="tel:${esc(c.phone.replace(/[^\d+]/g, ""))}">${esc(c.phone)}</a></div>` : ""}
             ${c.email ? `<div class="c-line">✉ <a href="mailto:${esc(c.email)}">${esc(c.email)}</a></div>` : ""}
@@ -807,12 +809,15 @@
   }
 
   function contactDialog(h, c) {
-    const v = c || { name: "", role: "", phone: "", email: "", address: "", product: "", notes: "", primary: false };
+    const v = c || { name: "", department: "", role: "", phone: "", email: "", address: "", product: "", notes: "", primary: false };
     openDialog(`
       <h2>${esc(c ? t("dlg.contactEdit") : t("dlg.contactNew"))}</h2>
       <div class="grid">
         <label class="field full">${esc(t("dlg.c.name"))}<input name="name" required value="${esc(v.name)}"></label>
-        <label class="field full">${esc(t("dlg.c.role"))}<input name="role" value="${esc(v.role)}" placeholder="${esc(t("dlg.c.role.ph"))}"></label>
+        <label class="field">${esc(t("dlg.c.dept"))}
+          <select name="department">${[opt("", "—", v.department), ...DEPARTMENTS.map((d) => opt(d, t("dept." + d), v.department))].join("")}</select>
+        </label>
+        <label class="field">${esc(t("dlg.c.role"))}<input name="role" value="${esc(v.role)}" placeholder="${esc(t("dlg.c.role.ph"))}"></label>
         <label class="field">${esc(t("dlg.c.phone"))}<input name="phone" value="${esc(v.phone)}"></label>
         <label class="field">${esc(t("dlg.c.email"))}<input name="email" type="email" value="${esc(v.email)}"></label>
         <label class="field full">${esc(t("dlg.c.address"))}<input name="address" value="${esc(v.address)}"></label>
@@ -836,7 +841,8 @@
         const rec = c || { id: uid() };
         const hadProduct = c ? c.product : "";
         Object.assign(rec, {
-          name: data.name.trim(), role: data.role.trim(), phone: data.phone.trim(), email: data.email.trim(),
+          name: data.name.trim(), department: data.department, role: data.role.trim(),
+          phone: data.phone.trim(), email: data.email.trim(),
           address: data.address.trim(), product: data.product, notes: data.notes.trim(), primary: !!data.primary,
         });
         if (rec.primary) h.contacts.forEach((x) => { if (x !== rec) x.primary = false; });
@@ -1052,8 +1058,9 @@
         ]), "text/csv");
       } else if (kind === "contacts") {
         download(`contacts-${d}.csv`, csv([
-          [t("col.hospital"), t("col.name"), t("col.role"), t("col.phone"), t("col.email"), t("col.address"), t("col.product"), t("col.isPrimary"), t("col.notes")],
-          ...hs.flatMap((h) => h.contacts.map((c) => [h.name, c.name, c.role, c.phone, c.email, c.address, c.product, c.primary ? t("col.yes") : "", c.notes])),
+          [t("col.hospital"), t("col.name"), t("col.dept"), t("col.role"), t("col.phone"), t("col.email"), t("col.address"), t("col.product"), t("col.isPrimary"), t("col.notes")],
+          ...hs.flatMap((h) => h.contacts.map((c) => [h.name, c.name, c.department && t("dept." + c.department), c.role,
+            c.phone, c.email, c.address, c.product, c.primary ? t("col.yes") : "", c.notes])),
         ]), "text/csv");
       } else if (kind === "activities") {
         download(`activities-${d}.csv`, csv([
