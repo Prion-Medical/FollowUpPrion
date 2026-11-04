@@ -790,6 +790,18 @@
     return form;
   }
 
+  // Een product komt in h.products zodra een contactpersoon eraan hangt. Valt
+  // die weg, dan laten we het product ook vallen — tenzij een andere
+  // contactpersoon of een contactmoment het nog gebruikt. Zo blijft het niet
+  // eeuwig in de filters staan.
+  function syncProducts(h, dropped) {
+    for (const p of dropped) {
+      if (!p || !h.products.includes(p)) continue;
+      const used = h.contacts.some((c) => c.product === p) || h.activities.some((a) => a.product === p);
+      if (!used) h.products = h.products.filter((x) => x !== p);
+    }
+  }
+
   function contactDialog(h, c) {
     const v = c || { name: "", role: "", phone: "", email: "", address: "", product: "", notes: "", primary: false };
     openDialog(`
@@ -815,8 +827,10 @@
         if (!confirm(t("confirm.deleteContact", { name: c.name }))) return;
         h.contacts = h.contacts.filter((x) => x.id !== c.id);
         h.activities.forEach((a) => { if (a.contactId === c.id) a.contactId = ""; });
+        syncProducts(h, [c.product]);
       } else {
         const rec = c || { id: uid() };
+        const hadProduct = c ? c.product : "";
         Object.assign(rec, {
           name: data.name.trim(), role: data.role.trim(), phone: data.phone.trim(), email: data.email.trim(),
           address: data.address.trim(), product: data.product, notes: data.notes.trim(), primary: !!data.primary,
@@ -824,6 +838,7 @@
         if (rec.primary) h.contacts.forEach((x) => { if (x !== rec) x.primary = false; });
         if (!c) h.contacts.push(rec);
         if (rec.product && !h.products.includes(rec.product)) h.products.push(rec.product);
+        if (hadProduct && hadProduct !== rec.product) syncProducts(h, [hadProduct]);
       }
       scheduleSave();
       renderAll();
