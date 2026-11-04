@@ -4,6 +4,9 @@
  * Let op: de jaarfilter geldt voor contactmomenten. De cijfers van de
  * endoscopie-afdeling (kamers, coloscopieën) zijn de huidige toestand en
  * staan dus los van het gekozen jaar.
+ *
+ * De grafiek "actieve abonnementen per maand" telt over de jaargrens heen: daar
+ * kiest de jaarfilter enkel welke twaalf maanden je ziet, niet wat meetelt.
  */
 window.FollowUpStats = (() => {
   "use strict";
@@ -15,23 +18,24 @@ window.FollowUpStats = (() => {
   const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, esc } = window.FollowUpDomain;
   const SERIES = { EndoQ: "var(--series-1)", Ainex: "var(--series-2)", "": "var(--series-none)" };
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
-  // Nog geen doelcijfers afgesproken — vul ze in de app zelf aan.
-  const DEFAULT_TARGETS = {
-    2026: { EndoQ: 0, Ainex: 0 },
-    2027: { EndoQ: 0, Ainex: 0 },
-    2028: { EndoQ: 0, Ainex: 0 },
-    2029: { EndoQ: 0, Ainex: 0 },
-    2030: { EndoQ: 0, Ainex: 0 },
-  };
+  // Nog geen doelcijfers afgesproken — vul ze in de app zelf aan. De jaren
+  // schuiven mee met de kalender: dit jaar en de vier volgende.
+  const DEFAULT_TARGETS = Object.fromEntries(
+    Array.from({ length: 5 }, (_, i) => [String(new Date().getFullYear() + i), { EndoQ: 0, Ainex: 0 }]));
 
-  const view = { year: String(new Date().getFullYear()), product: "all" };
+  // chart: "subs" = actieve abonnementen (EndoQ en Ainex gaan per abonnement),
+  // "installs" = nieuwe installaties per maand, voor als er ooit een product
+  // bijkomt dat je één keer verkoopt.
+  const view = { year: String(new Date().getFullYear()), product: "all", chart: "subs" };
   let tip;
 
   const fmt = (n, d = 0) => (n == null || isNaN(n) ? "—" : Number(n).toLocaleString(I18N.locale, { maximumFractionDigits: d, minimumFractionDigits: d }));
   const rooms = (a) => Number(a.rooms) || 1;   // een installatie zonder aantal telt als één kamer
+  // Een stopzetting telt negatief, zodat "actief" echt actief blijft.
+  const signedRooms = (a) => (a.type === "cancellation" ? -rooms(a) : rooms(a));
   const sum = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
   const months = () => Array.from({ length: 12 }, (_, i) => new Date(2021, i, 1).toLocaleDateString(I18N.locale, { month: "short" }));
-  const productLabel = (p) => p || (I18N.lang === "nl" ? "Geen product" : "No product");
+  const productLabel = (p) => p || t("stats.noProduct");
 
   // Asmaxima waarvan de helft een rond getal is: 2, 4, 6, 8, 10 × 10^n
   function niceMax(v) {
@@ -125,13 +129,14 @@ window.FollowUpStats = (() => {
   }
 
   // ---------- secties ----------
-  function targetsCard(db, installs) {
+  function targetsCard(db, events) {
     const year = view.year === "all" ? String(new Date().getFullYear()) : view.year;
     const goals = targetsFor(db, year);
-    const byYear = installs.filter((a) => a.date.startsWith(year));
+    const byYear = events.filter((a) => a.date.startsWith(year));
     const products = view.product === "all" ? PRODUCTS : [view.product];
     return card(`${t("stats.target")} ${year}`, products.map((p) => {
-      const done = sum(byYear.filter((a) => a.product === p), rooms);
+      // Netto voor dat jaar: wat erbij kwam min wat er weer stopte.
+      const done = Math.max(0, sum(byYear.filter((a) => a.product === p), signedRooms));
       const goal = Number(goals[p]) || 0;
       const pct = goal ? Math.min(100, (done / goal) * 100) : 0;
       return `<div class="s-target">
@@ -145,21 +150,44 @@ window.FollowUpStats = (() => {
     }).join("") + `<p class="muted">${esc(t("stats.targetsSub"))}</p>`);
   }
 
-  function monthsCard(installs) {
+  // Twaalf maanden: het gekozen jaar, of de laatste twaalf bij "alle jaren".
+  function monthBuckets() {
     const M = months();
-    let buckets;
     if (view.year === "all") {
       const now = new Date();
-      buckets = Array.from({ length: 12 }, (_, i) => {
+      return Array.from({ length: 12 }, (_, i) => {
         const d = new Date(now.getFullYear(), now.getMonth() - 11 + i, 1);
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
         return { key, short: M[d.getMonth()], label: `${M[d.getMonth()]} ${d.getFullYear()}`, values: {} };
       });
-    } else {
-      buckets = M.map((m, i) => ({ key: `${view.year}-${String(i + 1).padStart(2, "0")}`, short: m, label: `${m} ${view.year}`, values: {} }));
     }
+    return M.map((m, i) => ({ key: `${view.year}-${String(i + 1).padStart(2, "0")}`, short: m, label: `${m} ${view.year}`, values: {} }));
+  }
+
+  // Actieve abonnementen per maand: alles wat tot en met die maand geïnstalleerd
+  // is, min wat er ondertussen stopte. Dit is een stand, geen optelsom per
+  // maand, dus het loopt over de jaargrens heen.
+  function subscriptionsCard(events) {
+    const buckets = monthBuckets();
+    for (const b of buckets) {
+      for (const a of events) {
+        if (!a.date || a.date.slice(0, 7) > b.key) continue;
+        b.values[a.product || ""] = (b.values[a.product || ""] || 0) + signedRooms(a);
+      }
+      // Meer stopgezet dan geïnstalleerd kan niet; dat is gewoon nul.
+      for (const p of Object.keys(b.values)) b.values[p] = Math.max(0, b.values[p]);
+    }
+    const series = seriesIn(events);
+    return card(t("stats.activeSubs"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : ["EndoQ"]), "wide");
+  }
+
+  // Nieuwe installaties per maand. Voor EndoQ en Ainex zegt de grafiek hierboven
+  // meer, maar deze blijft staan: voor een product dat je één keer verkoopt in
+  // plaats van per abonnement is dít het juiste cijfer.
+  function installationsCard(installs) {
+    const buckets = monthBuckets();
     for (const a of installs) {
-      const b = buckets.find((x) => a.date.startsWith(x.key));
+      const b = buckets.find((x) => x.key === (a.date || "").slice(0, 7));
       if (b) b.values[a.product || ""] = (b.values[a.product || ""] || 0) + rooms(a);
     }
     const series = seriesIn(installs);
@@ -240,7 +268,7 @@ window.FollowUpStats = (() => {
     const years = new Set([String(new Date().getFullYear()), ...Object.keys(DEFAULT_TARGETS)]);
     for (const h of db.hospitals) for (const a of h.activities) years.add(a.date.slice(0, 4));
     const installs = rows(db, { types: ["installation"] });
-    const allYearInstalls = rows(db, { types: ["installation"], ignoreYear: true });
+    const subsEvents = rows(db, { types: ["installation", "cancellation"], ignoreYear: true });
     const acts = rows(db);
     const hs = hospitals(db);
     const live = hs.filter((h) => h.unit.roomsInstalled);
@@ -258,6 +286,7 @@ window.FollowUpStats = (() => {
             ${[...years].sort().reverse().filter((y) => /^\d{4}$/.test(y)).map((y) => `<option ${y === view.year ? "selected" : ""}>${y}</option>`).join("")}
           </select></label>
           <div class="s-seg">${["all", ...PRODUCTS].map((p) => `<button data-stat-product="${p}" class="${view.product === p ? "active" : ""}">${p === "all" ? esc(t("stats.all")) : p}</button>`).join("")}</div>
+          <div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}">${esc(t(key))}</button>`).join("")}</div>
         </div>
       </div>
       <div class="s-tiles">
@@ -269,8 +298,8 @@ window.FollowUpStats = (() => {
         ${tile(colosCovered ? fmt(colosCovered) : "—", t("stats.colosCovered"), live.length ? `n = ${live.length}` : "")}
       </div>
       <div class="s-grid-cards">
-        ${monthsCard(installs)}
-        ${targetsCard(db, allYearInstalls)}
+        ${view.chart === "subs" ? subscriptionsCard(subsEvents) : installationsCard(installs)}
+        ${targetsCard(db, subsEvents)}
         ${hospitalsCard(db)}
         ${pipelineCard(db)}
         ${countryCard(db)}
@@ -281,6 +310,7 @@ window.FollowUpStats = (() => {
 
     el.querySelector("[data-stat=year]").onchange = (e) => { view.year = e.target.value; render(db, el, onTargetsChange); };
     el.querySelectorAll("[data-stat-product]").forEach((b) => (b.onclick = () => { view.product = b.dataset.statProduct; render(db, el, onTargetsChange); }));
+    el.querySelectorAll("[data-stat-chart]").forEach((b) => (b.onclick = () => { view.chart = b.dataset.statChart; render(db, el, onTargetsChange); }));
     el.querySelectorAll("[data-target-year]").forEach((inp) => (inp.onchange = () => {
       const y = inp.dataset.targetYear;
       db.targets ||= {};
