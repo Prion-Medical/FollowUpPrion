@@ -34,10 +34,13 @@ window.FollowUpDomain = (() => {
     training: "#0ea5a5",
     quote: "#b45309",
     order: "#147a43",
+    cancellation: "#c0433a",
     other: "#8a94a3",
   };
-  // Contactmomenten waarbij een aantal kamers zinvol is.
-  const ROOM_TYPES = ["demo", "installation", "order"];
+  // Contactmomenten waarbij een aantal kamers zinvol is. "cancellation" hoort
+  // er ook bij: EndoQ en Ainex gaan per abonnement, en een stopgezet abonnement
+  // haalt kamers weg — zie syncRooms() in app.js.
+  const ROOM_TYPES = ["demo", "installation", "order", "cancellation"];
   const PRODUCTS = ["EndoQ", "Ainex"];
   const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "other"];
   // Diensten waar een contactpersoon toe behoort. Niet alleen de artsen

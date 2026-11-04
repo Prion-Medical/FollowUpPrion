@@ -937,15 +937,21 @@
     if (act.type === "demo" && ["prospect", "first_contact", "meeting", "demo_planned"].includes(h.stage)) h.stage = "demo_installed";
   }
 
-  // Kamers van de afdeling bijwerken na een demo of een installatie.
+  // Kamers van de afdeling bijwerken na een demo, installatie of stopzetting.
   //
   // Installaties tellen op: na een installatie van 2 en later nog een van 3
-  // staan er 5 kamers live. We passen het verschil toe en niet de som van alle
-  // contactmomenten, zodat een aantal dat hier al handmatig stond blijft staan.
+  // staan er 5 kamers live. Een stopgezet abonnement telt er weer af. We passen
+  // het verschil toe en niet de som van alle contactmomenten, zodat een aantal
+  // dat hier al handmatig stond blijft staan.
   // Een demo overschrijft wél: dat is de huidige toestand, geen optelsom — we
   // nemen het aantal van de laatste demo waarvoor een aantal is ingevuld.
   function syncRooms(h, before, after) {
-    const installed = (a) => (a && a.rooms && a.type === "installation" ? a.rooms : 0);
+    const installed = (a) => {
+      if (!a || !a.rooms) return 0;
+      if (a.type === "installation") return a.rooms;
+      if (a.type === "cancellation") return -a.rooms;
+      return 0;
+    };
     const delta = installed(after) - installed(before);
     if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
       h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);

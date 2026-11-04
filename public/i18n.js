@@ -97,6 +97,7 @@ window.FollowUpI18n = (() => {
       "act.training": "Training",
       "act.quote": "Offerte",
       "act.order": "Bestelling",
+      "act.cancellation": "Stopgezet",
       "act.other": "Andere",
 
       // sector / land
@@ -382,6 +383,7 @@ window.FollowUpI18n = (() => {
       "act.training": "Training",
       "act.quote": "Quote",
       "act.order": "Order",
+      "act.cancellation": "Stopped",
       "act.other": "Other",
 
       "sector.public": "Public",
