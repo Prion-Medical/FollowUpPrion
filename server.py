@@ -24,6 +24,8 @@ SEED = DATA / "seed.json"
 BACKUPS = DATA / "backups"
 PORT = int(os.environ.get("PORT", "8080"))
 MAX_BODY = 20 * 1024 * 1024
+# Enkel deze hosts mogen /api/data gebruiken; zie _host_ok().
+ALLOWED_HOSTS = {f"localhost:{PORT}", f"127.0.0.1:{PORT}", f"[::1]:{PORT}"}
 
 
 def load_db():
@@ -61,14 +63,25 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _host_ok(self):
+        # De server luistert enkel op 127.0.0.1, maar zonder deze controle kan
+        # een webpagina via DNS-rebinding alsnog bij de databank: de browser
+        # stuurt dan een eigen naam mee in Host. Enkel /api/data is beschermd;
+        # de app zelf is gewone statische inhoud.
+        return (self.headers.get("Host") or "").strip() in ALLOWED_HOSTS
+
     def do_GET(self):
         if self.path.split("?")[0] == "/api/data":
+            if not self._host_ok():
+                return self._send(403, '{"error":"verkeerde host"}')
             return self._send(200, load_db())
         return super().do_GET()
 
     def do_PUT(self):
         if self.path.split("?")[0] != "/api/data":
             return self._send(404, '{"error":"not found"}')
+        if not self._host_ok():
+            return self._send(403, '{"error":"verkeerde host"}')
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0 or length > MAX_BODY:
             return self._send(400, '{"error":"lege of te grote body"}')
@@ -81,6 +94,8 @@ class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         if not self.path.startswith("/api/"):
             self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "same-origin")
         super().end_headers()
 
     def log_message(self, fmt, *args):
