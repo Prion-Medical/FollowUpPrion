@@ -667,7 +667,15 @@
     input.after(list);
     let results = [], active = -1, timer = null, seq = 0;
 
-    const close = () => { list.hidden = true; active = -1; };
+    // De lijst staat vast gepositioneerd, dus bij scrollen sluiten we ze. Die
+    // luisteraar hangt aan document en moet er weer af: attachAddressSearch
+    // loopt bij élke hertekening van de fiche opnieuw.
+    function onScroll(e) { if (!list.contains(e.target)) close(); }
+    const close = () => {
+      list.hidden = true;
+      active = -1;
+      document.removeEventListener("scroll", onScroll, true);
+    };
     const paint = () => {
       list.innerHTML = results.length
         ? results.map((r, i) => `<li data-i="${i}" class="${i === active ? "active" : ""}">${esc(r.address)}</li>`).join("")
@@ -681,6 +689,7 @@
       if (below >= 160 || below >= r.top) { list.style.top = r.bottom + 4 + "px"; list.style.bottom = ""; }
       else { list.style.bottom = innerHeight - r.top + 4 + "px"; list.style.top = ""; }
       list.hidden = false;
+      document.addEventListener("scroll", onScroll, true);
     };
     const pick = (i) => {
       const r = results[i];
@@ -697,10 +706,19 @@
         const c = map.getCenter();
         const inRegion = c.lng >= REGION_BBOX[0] && c.lat >= REGION_BBOX[1] && c.lng <= REGION_BBOX[2] && c.lat <= REGION_BBOX[3];
         const [lat, lon] = inRegion ? [c.lat.toFixed(3), c.lng.toFixed(3)] : [50.85, 4.35];
-        const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lang=${I18N.lang === "nl" ? "nl" : "en"}&lat=${lat}&lon=${lon}`;
-        let json = await (await fetch(`${url}&bbox=${REGION_BBOX.join(",")}`)).json();
+        // Photon kent enkel default, de, en en fr — "nl" geeft een 400. Met
+        // "default" komen de namen in de plaatselijke taal, wat voor de Benelux
+        // precies is wat we willen (Vlaams-Brabant, Hippokrateslaan, ...).
+        const lang = I18N.lang === "nl" ? "default" : "en";
+        const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lang=${lang}&lat=${lat}&lon=${lon}`;
+        const ask = async (u) => {
+          const res = await fetch(u);
+          if (!res.ok) throw new Error(`Photon ${res.status}`);
+          return res.json();
+        };
+        let json = await ask(`${url}&bbox=${REGION_BBOX.join(",")}`);
         if (my !== seq) return;
-        if (!json.features.length) json = await (await fetch(url)).json();
+        if (!json.features.length) json = await ask(url);
         if (my !== seq) return;
         const seen = new Set();
         results = json.features.map((f) => ({
@@ -712,7 +730,13 @@
         active = -1;
         if (document.activeElement === input) paint();
       } catch (e) {
-        if (my === seq) close();
+        // Dienst onbereikbaar of een fout antwoord: toon "niets gevonden" in
+        // plaats van de lijst stil te laten verdwijnen, anders lijkt het alsof
+        // het zoeken gewoon niets doet.
+        if (my !== seq) return;
+        results = [];
+        if (document.activeElement === input) paint();
+        else close();
       }
     }
 
@@ -740,7 +764,6 @@
       }
     });
     input.addEventListener("blur", () => setTimeout(close, 150));
-    document.addEventListener("scroll", (e) => { if (!list.hidden && !list.contains(e.target)) close(); }, true);
     // mousedown i.p.v. click: anders verliest het veld eerst de focus en sluit de lijst.
     list.addEventListener("mousedown", (e) => {
       e.preventDefault();
