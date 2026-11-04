@@ -9,8 +9,8 @@
   // Vaste waarden en esc() staan in domain.js: stats.js heeft ze ook nodig, en
   // zo moet een nieuwe fase of een nieuw merk maar op één plaats bij.
   const {
-    STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS, ROOM_TYPES, PRODUCTS,
-    SCOPE_BRANDS, SECTORS, COUNTRIES, esc,
+    DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS, ROOM_TYPES,
+    PRODUCTS, SCOPE_BRANDS, SECTORS, COUNTRIES, esc,
   } = window.FollowUpDomain;
   // Scope-merken zijn eigennamen; enkel "other" is een sleutel met vertaling.
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
@@ -1053,6 +1053,11 @@
       await store.ready();
       const { db, empty } = await store.load();
       state.db = db;
+      // Het versienummer zegt of deze app de vorm van de data nog begrijpt.
+      // Komt ze van een nieuwere versie, dan waarschuwen we en laten we het
+      // nummer staan — overschrijven zou stille gegevensverlies betekenen.
+      if (Number(state.db.version) > DB_VERSION) showBanner(t("save.newerVersion"));
+      state.db.version = Math.max(Number(state.db.version) || 1, DB_VERSION);
       state.db.hospitals.forEach(normalize);
       showSaveState("save.saved");
       if (empty) offerSeed();

@@ -11,6 +11,10 @@
 window.FollowUpDomain = (() => {
   "use strict";
 
+  // Verhoog dit nummer pas als de vorm van de data verandert; normalize() in
+  // app.js moet dan oudere documenten kunnen bijwerken.
+  const DB_VERSION = 1;
+
   const STATUSES = ["green", "orange", "red"];
   // In de databank staat de sleutel, niet de vertaalde tekst.
   const STAGES = [
@@ -42,7 +46,7 @@ window.FollowUpDomain = (() => {
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   return {
-    STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
+    DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, SECTORS, COUNTRIES, esc,
   };
 })();
