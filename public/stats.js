@@ -11,7 +11,8 @@ window.FollowUpStats = (() => {
   const I18N = window.FollowUpI18n;
   const t = (k, v) => I18N.t(k, v);
 
-  const PRODUCTS = ["EndoQ", "Ainex"];
+  // Vaste waarden en esc() komen uit domain.js, samen met app.js.
+  const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, esc } = window.FollowUpDomain;
   const SERIES = { EndoQ: "var(--series-1)", Ainex: "var(--series-2)", "": "var(--series-none)" };
   // Nog geen doelcijfers afgesproken — vul ze in de app zelf aan.
   const DEFAULT_TARGETS = {
@@ -21,18 +22,10 @@ window.FollowUpStats = (() => {
     2029: { EndoQ: 0, Ainex: 0 },
     2030: { EndoQ: 0, Ainex: 0 },
   };
-  const STAGES = [
-    "prospect", "first_contact", "meeting", "demo_planned", "demo_installed",
-    "evaluation", "customer", "on_hold", "not_interested",
-  ];
-  const STATUS = ["green", "orange", "red"];
-  const COUNTRIES = ["BE", "NL", "LU"];
-  const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "Andere / Other"];
 
   const view = { year: String(new Date().getFullYear()), product: "all" };
   let tip;
 
-  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const fmt = (n, d = 0) => (n == null || isNaN(n) ? "—" : Number(n).toLocaleString(I18N.locale, { maximumFractionDigits: d, minimumFractionDigits: d }));
   const rooms = (a) => Number(a.rooms) || 1;   // een installatie zonder aantal telt als één kamer
   const sum = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
@@ -189,7 +182,7 @@ window.FollowUpStats = (() => {
 
   function pipelineCard(db) {
     const hs = hospitals(db);
-    const statusTiles = `<div class="s-status">${STATUS.map((k) =>
+    const statusTiles = `<div class="s-status">${STATUSES.map((k) =>
       `<div><i class="dot ${k}"></i><b>${hs.filter((h) => h.status === k).length}</b><span>${esc(t("status." + k + ".short"))}</span></div>`).join("")}</div>`;
     const items = STAGES.map((s) => ({ label: t("stage." + s), total: hs.filter((h) => h.stage === s).length })).filter((i) => i.total);
     return card(t("stats.pipeline"), statusTiles + hbars(items, null, t("stats.noData")));

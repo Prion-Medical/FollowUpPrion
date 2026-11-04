@@ -6,31 +6,12 @@
   const I18N = window.FollowUpI18n;
   const t = (k, v) => I18N.t(k, v);
 
-  const STATUSES = ["green", "orange", "red"];
-  // Verkoopfases — in de databank staat de sleutel, niet de vertaalde tekst.
-  const STAGES = [
-    "prospect", "first_contact", "meeting", "demo_planned", "demo_installed",
-    "evaluation", "customer", "on_hold", "not_interested",
-  ];
-  const ACT_TYPES = {
-    prospecting: "#7b61ff",
-    email: "#3a8dde",
-    call: "#0f5b8f",
-    visit: "#16a3a3",
-    congress: "#8a5cf6",
-    demo: "#f29a1f",
-    installation: "#22a45d",
-    training: "#0ea5a5",
-    quote: "#b45309",
-    order: "#147a43",
-    other: "#8a94a3",
-  };
-  // Contactmomenten waarbij een aantal kamers zinvol is.
-  const ROOM_TYPES = ["demo", "installation", "order"];
-  const PRODUCTS = ["EndoQ", "Ainex"];
-  const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "Andere / Other"];
-  const SECTORS = ["public", "private", "university"];
-  const COUNTRIES = ["BE", "NL", "LU"];
+  // Vaste waarden en esc() staan in domain.js: stats.js heeft ze ook nodig, en
+  // zo moet een nieuwe fase of een nieuw merk maar op één plaats bij.
+  const {
+    STATUSES, STAGES, PRE_SALE, ACT_TYPES, ROOM_TYPES, PRODUCTS, SCOPE_BRANDS,
+    SECTORS, COUNTRIES, esc,
+  } = window.FollowUpDomain;
   // Benelux: west/zuid → oost/noord.
   const REGION_BOUNDS = [[49.3, 2.3], [53.7, 7.4]];
   const REGION_BBOX = [2.3, 49.3, 7.4, 53.7];
@@ -47,7 +28,6 @@
   const $ = (sel, root = document) => root.querySelector(sel);
 
   // ---------- helpers ----------
-  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const uid = () => Math.random().toString(16).slice(2, 12);
   const today = () => new Date().toISOString().slice(0, 10);
   const fmtDate = (d) => d ? new Date(d + "T00:00:00").toLocaleDateString(I18N.locale, { day: "2-digit", month: "short", year: "numeric" }) : t("rel.none");
@@ -814,7 +794,6 @@
   }
 
   // Kleur automatisch mee laten evolueren; manueel aanpassen blijft altijd mogelijk.
-  const PRE_SALE = ["prospect", "first_contact", "meeting", "demo_planned", "demo_installed", "evaluation"];
   function autoStatus(h, act) {
     if ((act.type === "installation" || act.type === "order") && h.status !== "green") {
       h.status = "green";
