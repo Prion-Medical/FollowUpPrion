@@ -81,19 +81,30 @@
 
   // ---------- opslag ----------
   let saveTimer = null;
+  // Of er nog iets te bewaren is, houden we zelf bij. Eerder werd daarvoor de
+  // tekst op het scherm vergeleken met t("save.saved") — na een taalwissel
+  // klopte die vergelijking niet meer en waarschuwde de browser altijd.
+  let dirty = false;
+  let saveState = { key: "", error: false };
+  function showSaveState(key, error = false) {
+    saveState = { key, error };
+    const el = $("#saveState");
+    el.textContent = key ? t(key) : "";
+    el.classList.toggle("error", error);
+  }
   function scheduleSave() {
-    $("#saveState").textContent = t("save.saving");
-    $("#saveState").classList.remove("error");
+    dirty = true;
+    showSaveState("save.saving");
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, 400);
   }
   async function save() {
     try {
       await store.save(state.db);
-      $("#saveState").textContent = t("save.saved");
+      dirty = false;
+      showSaveState("save.saved");
     } catch (e) {
-      $("#saveState").textContent = t("save.failed");
-      $("#saveState").classList.add("error");
+      showSaveState("save.failed", true);
       if (e instanceof store.ConflictError) {
         showBanner(t("save.conflict"), true);
       } else {
@@ -103,7 +114,7 @@
     }
   }
   window.addEventListener("beforeunload", (e) => {
-    if (saveTimer && $("#saveState").textContent !== t("save.saved")) { e.preventDefault(); }
+    if (dirty) e.preventDefault();
   });
   function showBanner(msg, reload = false) {
     const b = $("#banner");
@@ -1043,7 +1054,7 @@
       const { db, empty } = await store.load();
       state.db = db;
       state.db.hospitals.forEach(normalize);
-      $("#saveState").textContent = t("save.saved");
+      showSaveState("save.saved");
       if (empty) offerSeed();
     } catch (e) {
       showBanner(e.message);
@@ -1091,6 +1102,7 @@
   $("#langBtn").addEventListener("click", () => I18N.setLang(I18N.other));
   I18N.onChange(() => {
     updateLangBtn();
+    showSaveState(saveState.key, saveState.error);
     $("#statsBtn").textContent = statsView.hidden ? t("btn.stats") : t("btn.backToMap");
     renderAll();
   });
