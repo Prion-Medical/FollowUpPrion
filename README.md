@@ -59,7 +59,8 @@ Open daarna <http://localhost:8080>. Stoppen met `Ctrl+C` in de terminal.
 ### Lokaal (standaard)
 
 - `data/db.json` – je actuele data (wordt automatisch opgeslagen bij elke wijziging).
-- `data/backups/db-JJJJ-MM-DD.json` – automatische dagelijkse back-up.
+- `data/backups/db-JJJJ-MM-DD.json` – de toestand bij de eerste wijziging van die dag.
+- `data/backups/db-vorige.json` – de toestand van net voor de laatste opslag.
 - `data/seed.json` – startlijst met 39 ziekenhuizen in BE, NL en LU. Wordt alleen gebruikt
   als `db.json` nog niet bestaat. Geen contactpersonen: die vul je zelf aan.
 

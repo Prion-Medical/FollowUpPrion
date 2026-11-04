@@ -33,7 +33,10 @@ python3 server.py        # then open http://localhost:8080
 ```
 
 Or double-click `start.command`. Data lives in `data/db.json`, created from
-`data/seed.json` on first run, with a daily copy in `data/backups/`.
+`data/seed.json` on first run. `data/backups/` keeps `db-vorige.json` (the state
+just before the last save, for a one-step undo) and one `db-JJJJ-MM-DD.json` per
+day holding the state at that day's **first** change — deliberately not
+overwritten, so a bad save cannot take the day's only copy with it.
 
 With `public/config.js` filled in, the app talks to Supabase instead and asks for a
 login. `supabase/schema.sql` creates the tables.

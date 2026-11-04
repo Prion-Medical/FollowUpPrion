@@ -3,8 +3,9 @@
 
 Start:  python3 server.py   en open http://localhost:8080
 
-Bewaart alles in data/db.json. Bij elke wijziging wordt ook een dagelijkse
-back-up geschreven naar data/backups/db-JJJJ-MM-DD.json.
+Bewaart alles in data/db.json. Bij elke wijziging komt er een kopie in
+data/backups/: db-vorige.json (één stap terug) en db-JJJJ-MM-DD.json (de
+toestand bij de eerste wijziging van die dag).
 Geen externe libraries nodig.
 """
 import json
@@ -43,11 +44,24 @@ def save_db(payload):
         raise ValueError("Ongeldige data: 'hospitals' ontbreekt")
     text = json.dumps(data, indent=2, ensure_ascii=False)
     fd, tmp = tempfile.mkstemp(dir=DATA, suffix=".tmp")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+    except BaseException:
+        os.unlink(tmp)  # anders blijft er een halve .tmp in data/ staan
+        raise
+    # Twee vangnetten, elk één kopie:
+    #  - db-vorige.json: de toestand van net voor deze opslag, één stap terug;
+    #  - db-JJJJ-MM-DD.json: de toestand bij de eerste wijziging van die dag.
+    #    Die schrijven we niet meer over, anders neemt een verkeerde opslag de
+    #    dagkopie mee en valt er van vandaag niets terug te halen.
+    if DB.exists():
+        BACKUPS.mkdir(exist_ok=True)
+        day = BACKUPS / f"db-{date.today().isoformat()}.json"
+        if not day.exists():
+            shutil.copy(DB, day)
+        shutil.copy(DB, BACKUPS / "db-vorige.json")
     os.replace(tmp, DB)
-    BACKUPS.mkdir(exist_ok=True)
-    (BACKUPS / f"db-{date.today().isoformat()}.json").write_text(text, encoding="utf-8")
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -82,13 +96,18 @@ class Handler(SimpleHTTPRequestHandler):
             return self._send(404, '{"error":"not found"}')
         if not self._host_ok():
             return self._send(403, '{"error":"verkeerde host"}')
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._send(400, '{"error":"ongeldige Content-Length"}')
         if length <= 0 or length > MAX_BODY:
             return self._send(400, '{"error":"lege of te grote body"}')
         try:
             save_db(self.rfile.read(length).decode("utf-8"))
-        except (ValueError, json.JSONDecodeError) as e:
+        except (ValueError, UnicodeDecodeError, RecursionError) as e:
             return self._send(400, json.dumps({"error": str(e)}))
+        except OSError as e:
+            return self._send(500, json.dumps({"error": str(e)}))
         return self._send(200, '{"ok":true}')
 
     def end_headers(self):
