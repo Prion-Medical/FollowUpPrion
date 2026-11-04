@@ -10,7 +10,8 @@ create table if not exists public.app_state (
   updated_by  uuid default auth.uid()
 );
 
--- Dagelijkse kopie van het document, zodat je altijd kan terugkeren.
+-- Dagelijkse kopie van het document, zodat je altijd kan terugkeren. De kopie
+-- van een dag is de toestand bij de eerste wijziging van die dag.
 create table if not exists public.app_state_backups (
   id          text not null,
   day         date not null default current_date,
@@ -22,9 +23,22 @@ create table if not exists public.app_state_backups (
 create or replace function public.backup_app_state() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  insert into public.app_state_backups (id, day, data, saved_at)
-  values (new.id, current_date, new.data, now())
-  on conflict (id, day) do update set data = excluded.data, saved_at = excluded.saved_at;
+  -- Bewaar de toestand van vóór de eerste wijziging van vandaag en laat die
+  -- staan. Met "do update" overschreef een verkeerde of kwaadwillige opslag ook
+  -- de kopie van vandaag, en bleef er enkel die van gisteren over.
+  --
+  -- old bestaat niet bij een insert. Daarom twee takken en geen case-expressie:
+  -- in één expressie wordt old.data toch aangeraakt en loopt de eerste opslag
+  -- in een nieuw project mis.
+  if tg_op = 'UPDATE' then
+    insert into public.app_state_backups (id, day, data, saved_at)
+    values (new.id, current_date, old.data, now())
+    on conflict (id, day) do nothing;
+  else
+    insert into public.app_state_backups (id, day, data, saved_at)
+    values (new.id, current_date, new.data, now())
+    on conflict (id, day) do nothing;
+  end if;
   return new;
 end $$;
 
@@ -32,6 +46,15 @@ drop trigger if exists app_state_backup on public.app_state;
 create trigger app_state_backup
   after insert or update on public.app_state
   for each row execute function public.backup_app_state();
+
+-- De Data API werkt met twee rollen: anon (niet aangemeld) en authenticated
+-- (aangemeld). Een nieuw Supabase-project kan die rechten automatisch geven bij
+-- elke nieuwe tabel ("Automatically expose new tables"), maar dat staat niet
+-- overal aan. Daarom zetten we ze hier zelf, zodat dit script werkt ongeacht
+-- die instelling. Geen delete: verwijderen hoort hier niet via de app te kunnen.
+grant usage on schema public to authenticated;
+grant select, insert, update on public.app_state to authenticated;
+grant select on public.app_state_backups to authenticated;
 
 -- Beveiliging: enkel aangemelde gebruikers mogen lezen en schrijven.
 alter table public.app_state enable row level security;
