@@ -85,10 +85,17 @@ class Handler(SimpleHTTPRequestHandler):
         return (self.headers.get("Host") or "").strip() in ALLOWED_HOSTS
 
     def do_GET(self):
-        if self.path.split("?")[0] == "/api/data":
+        path = self.path.split("?")[0]
+        if path == "/api/data":
             if not self._host_ok():
                 return self._send(403, '{"error":"verkeerde host"}')
             return self._send(200, load_db())
+        # Met Supabase vraagt de app de startlijst op via ../data/seed.json. Op
+        # GitHub Pages is dat de repo-root, hier is dat buiten public/, dus
+        # serveren we dat ene bestand apart. Zo werkt "startlijst laden" lokaal
+        # net als online.
+        if path == "/data/seed.json" and SEED.exists():
+            return self._send(200, SEED.read_text(encoding="utf-8"))
         return super().do_GET()
 
     def do_PUT(self):
