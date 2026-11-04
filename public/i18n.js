@@ -154,6 +154,7 @@ window.FollowUpI18n = (() => {
 
       // endoscopie-afdeling
       "unit.scopeBrands": "Scopes in gebruik",
+      "scope.other": "Andere",
       "unit.scopeNotes": "Scope-details",
       "unit.scopeNotes.ph": "bv. Olympus CF-HQ190, 2 torens EVIS X1",
       "unit.rooms": "Endoscopiekamers",
@@ -424,6 +425,7 @@ window.FollowUpI18n = (() => {
       "empty.contacts": "No contacts yet.",
 
       "unit.scopeBrands": "Scopes in use",
+      "scope.other": "Other",
       "unit.scopeNotes": "Scope details",
       "unit.scopeNotes.ph": "e.g. Olympus CF-HQ190, 2 EVIS X1 towers",
       "unit.rooms": "Endoscopy rooms",

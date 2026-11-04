@@ -14,6 +14,7 @@ window.FollowUpStats = (() => {
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
   const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, esc } = window.FollowUpDomain;
   const SERIES = { EndoQ: "var(--series-1)", Ainex: "var(--series-2)", "": "var(--series-none)" };
+  const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Nog geen doelcijfers afgesproken — vul ze in de app zelf aan.
   const DEFAULT_TARGETS = {
     2026: { EndoQ: 0, Ainex: 0 },
@@ -202,7 +203,7 @@ window.FollowUpStats = (() => {
   function scopesCard(db) {
     const hs = hospitals(db);
     const items = SCOPE_BRANDS
-      .map((b) => ({ label: b, total: hs.filter((h) => h.unit.scopeBrands.includes(b)).length }))
+      .map((b) => ({ label: scopeLabel(b), total: hs.filter((h) => h.unit.scopeBrands.includes(b)).length }))
       .filter((i) => i.total)
       .sort((a, b) => b.total - a.total);
     return card(t("stats.scopes"), hbars(items, null, t("stats.noData")));

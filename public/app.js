@@ -9,9 +9,11 @@
   // Vaste waarden en esc() staan in domain.js: stats.js heeft ze ook nodig, en
   // zo moet een nieuwe fase of een nieuw merk maar op één plaats bij.
   const {
-    STATUSES, STAGES, PRE_SALE, ACT_TYPES, ROOM_TYPES, PRODUCTS, SCOPE_BRANDS,
-    SECTORS, COUNTRIES, esc,
+    STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS, ROOM_TYPES, PRODUCTS,
+    SCOPE_BRANDS, SECTORS, COUNTRIES, esc,
   } = window.FollowUpDomain;
+  // Scope-merken zijn eigennamen; enkel "other" is een sleutel met vertaling.
+  const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Benelux: west/zuid → oost/noord.
   const REGION_BOUNDS = [[49.3, 2.3], [53.7, 7.4]];
   const REGION_BBOX = [2.3, 49.3, 7.4, 53.7];
@@ -35,6 +37,18 @@
   const byId = (id) => state.db.hospitals.find((h) => h.id === id);
   const sel = () => byId(state.selectedId);
   const num = (v) => (v === "" || v == null ? null : Number(v));
+  // Data uit een back-up of uit de online databank kan alles bevatten: deze
+  // vier brengen een waarde terug tot het type dat de rest van de app verwacht.
+  const str = (v) => (v == null ? "" : String(v));
+  const numOrNull = (v) => {
+    const n = Number(v);
+    return v === "" || v == null || !Number.isFinite(n) ? null : n;
+  };
+  const dateOrEmpty = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(str(v)) ? str(v) : "");
+  const coord = (v, max) => {
+    const n = numOrNull(v);
+    return n == null || Math.abs(n) > max ? null : n;
+  };
 
   function lastContact(h) {
     return h.activities.reduce((max, a) => (a.date > max ? a.date : max), "");
@@ -105,23 +119,61 @@
     b.hidden = !msg;
   }
 
+  // Oudere of ingevoerde data kan velden missen of een verkeerd type hebben.
+  // Alles wordt hier naar de verwachte vorm gebracht, zodat de rest van de app
+  // mag rekenen op strings, getallen en lijsten. Status, fase, land, sector en
+  // het type contactmoment zijn vaste sleutels: iets anders vervangen we door
+  // de standaardwaarde — zo komt er ook nooit opmaak of script in de data.
+  // Nieuw veld toegevoegd? Vul het hier aan, anders breekt oudere data.
+  function normalizeContact(c) {
+    c.id = str(c.id) || uid();
+    for (const k of ["name", "role", "phone", "email", "address", "product", "notes"]) c[k] = str(c[k]);
+    c.primary = !!c.primary;
+    return c;
+  }
+  function normalizeActivity(a) {
+    a.id = str(a.id) || uid();
+    a.type = ACT_TYPE_KEYS.includes(a.type) ? a.type : "other";
+    a.date = dateOrEmpty(a.date);
+    a.product = str(a.product);
+    a.contactId = str(a.contactId);
+    a.note = str(a.note);
+    a.rooms = ROOM_TYPES.includes(a.type) ? numOrNull(a.rooms) : null;
+    return a;
+  }
   function normalize(h) {
-    h.contacts ||= [];
-    h.activities ||= [];
-    h.products ||= [];
-    h.status ||= "red";
-    h.stage ||= "prospect";
-    h.country ||= "";
-    h.sector ||= "";
-    h.demoDate ||= "";
-    h.createdAt ||= today();
-    h.unit ||= {};
-    h.unit.scopeBrands ||= [];
-    for (const k of ["rooms", "roomsDemo", "roomsInstalled", "colosPerYear"]) {
-      if (h.unit[k] === undefined || h.unit[k] === "") h.unit[k] = null;
-    }
-    h.unit.scopeNotes ||= "";
-    h.unit.existingAI ||= "";
+    h.id = str(h.id) || uid();
+    h.name = str(h.name).trim() || "—";
+    if (!Array.isArray(h.contacts)) h.contacts = [];
+    if (!Array.isArray(h.activities)) h.activities = [];
+    if (!Array.isArray(h.products)) h.products = [];
+    h.contacts.forEach(normalizeContact);
+    h.activities.forEach(normalizeActivity);
+    h.products = h.products.filter((p) => typeof p === "string");
+    h.status = STATUSES.includes(h.status) ? h.status : "red";
+    h.stage = STAGES.includes(h.stage) ? h.stage : "prospect";
+    h.country = COUNTRIES.includes(h.country) ? h.country : "";
+    h.sector = SECTORS.includes(h.sector) ? h.sector : "";
+    h.address = str(h.address);
+    h.notes = str(h.notes);
+    h.nextAction = str(h.nextAction);
+    h.nextActionDate = dateOrEmpty(h.nextActionDate);
+    h.demoDate = dateOrEmpty(h.demoDate);
+    h.createdAt = dateOrEmpty(h.createdAt) || today();
+    // Een halve locatie is geen locatie: de kaart rekent op lat én lng.
+    h.lat = coord(h.lat, 90);
+    h.lng = coord(h.lng, 180);
+    if (h.lat == null || h.lng == null) { h.lat = null; h.lng = null; }
+    if (!h.unit || typeof h.unit !== "object" || Array.isArray(h.unit)) h.unit = {};
+    h.unit.scopeBrands = Array.isArray(h.unit.scopeBrands)
+      ? h.unit.scopeBrands
+          .filter((b) => typeof b === "string")
+          // Vroeger bewaarde de app hier de getoonde tekst; nu de sleutel.
+          .map((b) => (b === "Andere / Other" ? "other" : b))
+      : [];
+    for (const k of ["rooms", "roomsDemo", "roomsInstalled", "colosPerYear"]) h.unit[k] = numOrNull(h.unit[k]);
+    h.unit.scopeNotes = str(h.unit.scopeNotes);
+    h.unit.existingAI = str(h.unit.existingAI);
     h.unit.screening = !!h.unit.screening;
     return h;
   }
@@ -427,7 +479,7 @@
         <p class="muted">${esc(t("unit.unknownOk"))}</p>
         <div class="grid">
           <div class="field full"><span class="field-label">${esc(t("unit.scopeBrands"))}</span>
-            <div class="toggles">${SCOPE_BRANDS.map((b) => `<label><input type="checkbox" data-scope="${esc(b)}" ${h.unit.scopeBrands.includes(b) ? "checked" : ""}>${esc(b)}</label>`).join("")}</div>
+            <div class="toggles">${SCOPE_BRANDS.map((b) => `<label><input type="checkbox" data-scope="${esc(b)}" ${h.unit.scopeBrands.includes(b) ? "checked" : ""}>${esc(scopeLabel(b))}</label>`).join("")}</div>
           </div>
           <label class="field full">${esc(t("unit.scopeNotes"))}
             <input data-unit="scopeNotes" value="${esc(h.unit.scopeNotes)}" placeholder="${esc(t("unit.scopeNotes.ph"))}">

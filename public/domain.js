@@ -3,6 +3,10 @@
  * Zowel app.js als stats.js hebben deze lijsten nodig. Ze staan hier op één
  * plaats, zodat een nieuwe verkoopfase of een nieuw scope-merk niet in twee
  * bestanden moet worden bijgehouden — en niet in één van de twee vergeten.
+ *
+ * In de databank staat telkens de sleutel, nooit de vertaalde tekst. De merken
+ * zijn eigennamen en dus in beide talen gelijk; "other" is wél een sleutel en
+ * wordt getoond via t("scope.other").
  */
 window.FollowUpDomain = (() => {
   "use strict";
@@ -31,7 +35,7 @@ window.FollowUpDomain = (() => {
   // Contactmomenten waarbij een aantal kamers zinvol is.
   const ROOM_TYPES = ["demo", "installation", "order"];
   const PRODUCTS = ["EndoQ", "Ainex"];
-  const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "Andere / Other"];
+  const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "other"];
   const SECTORS = ["public", "private", "university"];
   const COUNTRIES = ["BE", "NL", "LU"];
 
