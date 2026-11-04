@@ -1,0 +1,606 @@
+/* FollowUp Prion – talen (Nederlands / English).
+ *
+ * Alle zichtbare tekst loopt via t("sleutel"). Wat in de databank staat
+ * (fase, type contactmoment, sector, land) is een neutrale sleutel, geen
+ * vertaalde tekst — zo blijft de data gelijk in beide talen.
+ *
+ * All visible text goes through t("key"). What is stored in the database
+ * (stage, activity type, sector, country) is a neutral key, not translated
+ * text — so the data stays identical in both languages.
+ */
+window.FollowUpI18n = (() => {
+  "use strict";
+
+  const DICT = {
+    nl: {
+      "app.followup": "FollowUp",
+      "app.brand": "Prion Medical",
+
+      // chrome
+      "nav.list": "Lijst",
+      "nav.map": "Kaart",
+      "nav.stats": "Statistieken",
+      "nav.new": "Nieuw",
+      "btn.stats": "Statistieken",
+      "btn.backToMap": "← Kaart",
+      "btn.addHospital": "+ Ziekenhuis",
+      "btn.export": "Exporteren",
+      "btn.import": "Back-up importeren",
+      "btn.logout": "Afmelden",
+      "btn.more": "Meer",
+      "btn.showAll": "Toon alle",
+      "btn.region": "Hele Benelux",
+      "btn.reload": "Herlaad",
+      "btn.cancel": "Annuleer",
+      "btn.save": "Opslaan",
+      "btn.create": "Aanmaken",
+      "btn.delete": "Verwijder",
+      "btn.close": "Sluiten",
+      "btn.edit": "Bewerk",
+      "lang.switch": "English",
+      "lang.title": "Switch to English",
+
+      "save.saving": "Opslaan…",
+      "save.saved": "✓ Opgeslagen",
+      "save.failed": "Niet opgeslagen!",
+      "save.conflict": "De data werd ondertussen op een ander toestel gewijzigd. Herlaad de pagina; je laatste wijziging hier werd niet opgeslagen.",
+      "save.errorLocal": "Draait server.py nog?",
+      "save.errorOnline": "Ben je nog online?",
+      "save.errorBody": "Opslaan mislukt. {hint} Je wijzigingen staan alleen nog in dit venster. ({msg})",
+
+      "search.placeholder": "Zoek ziekenhuis, arts of stad…",
+      "list.empty": "Geen resultaten",
+      "filter.all": "Alle",
+      "filter.allProducts": "Alle producten",
+      "filter.overdue": "Actie te laat",
+      "filter.allCountries": "Hele Benelux",
+
+      "map.placeHint": "Tik op de kaart om de locatie te kiezen",
+      "map.noLocation": "geen locatie",
+      "map.locationSet": "Locatie ingesteld",
+      "map.locationUpdated": "Locatie bijgewerkt",
+      "map.addressSet": "Adres en locatie ingesteld",
+      "map.dragHint": "Sleep de marker naar de juiste plek",
+      "map.noLocationYet": "Dit ziekenhuis heeft nog geen locatie",
+      "map.showOnMap": "Toon op kaart",
+
+      // statussen
+      "status.green": "Aan het verkopen",
+      "status.orange": "In progress / actie nodig",
+      "status.red": "Nog geen contact",
+      "status.green.short": "Verkoop",
+      "status.orange.short": "In progress",
+      "status.red.short": "Geen contact",
+      "status.toGreen": "Status → groen (aan het verkopen)",
+      "status.toOrange": "Status → oranje (in progress)",
+
+      // verkoopfases
+      "stage.prospect": "Prospect",
+      "stage.first_contact": "Eerste contact",
+      "stage.meeting": "Meeting / bezoek",
+      "stage.demo_planned": "Demo gepland",
+      "stage.demo_installed": "Demo geïnstalleerd",
+      "stage.evaluation": "In evaluatie",
+      "stage.customer": "Klant",
+      "stage.on_hold": "On hold",
+      "stage.not_interested": "Niet geïnteresseerd",
+
+      // contactmomenten
+      "act.prospecting": "Prospectie",
+      "act.email": "E-mail",
+      "act.call": "Telefoon",
+      "act.visit": "Bezoek",
+      "act.congress": "Congres / beurs",
+      "act.demo": "Demo",
+      "act.installation": "Installatie",
+      "act.training": "Training",
+      "act.quote": "Offerte",
+      "act.order": "Bestelling",
+      "act.other": "Andere",
+
+      // sector / land
+      "sector.public": "Publiek",
+      "sector.private": "Privé",
+      "sector.university": "Universitair",
+      "country.BE": "België",
+      "country.NL": "Nederland",
+      "country.LU": "Luxemburg",
+      "country.BE.short": "BE",
+      "country.NL.short": "NL",
+      "country.LU.short": "LU",
+
+      // KPI's
+      "kpi.demosPlanned": "Demo's gepland",
+      "kpi.roomsDemo": "Demokamers",
+      "kpi.roomsInstalled": "Kamers live",
+      "kpi.overdue": "Acties te laat",
+
+      // fiche
+      "fiche.name": "Naam",
+      "fiche.lastContact": "Laatste contact",
+      "fiche.demos": "Demo's",
+      "fiche.installations": "Installaties",
+      "fiche.roomsLive": "Kamers live",
+      "section.followup": "Opvolging",
+      "section.activities": "Contactmomenten",
+      "section.contacts": "Contactpersonen",
+      "section.unit": "Endoscopie-afdeling",
+      "section.data": "Gegevens",
+      "field.stage": "Verkoopfase",
+      "field.nextAction": "Volgende actie",
+      "field.nextActionDate": "Volgende actie op",
+      "field.nextAction.ph": "bv. demo inplannen met Dr …",
+      "field.demoDate": "Demo gepland op",
+      "field.address": "Adres",
+      "field.address.ph": "Typ adres of naam ziekenhuis…",
+      "field.notes": "Notities",
+      "field.sector": "Sector",
+      "field.country": "Land",
+      "field.products": "Producten",
+      "field.location": "Locatie op kaart",
+      "field.createdAt": "Toegevoegd op",
+      "badge.late": "te laat",
+      "badge.overdue": "actie te laat",
+
+      "btn.place": "Plaats op kaart",
+      "btn.placeNew": "Klik nieuwe locatie",
+      "btn.drag": "Versleep marker",
+      "btn.dragDone": "✓ Klaar met verslepen",
+      "btn.addActivity": "+ Contactmoment",
+      "btn.addContact": "+ Contact",
+
+      "empty.activities": "Nog geen contactmomenten. Voeg prospectie, e-mail, bezoek, demo, installatie… toe.",
+      "empty.contacts": "Nog geen contactpersonen.",
+
+      // endoscopie-afdeling
+      "unit.scopeBrands": "Scopes in gebruik",
+      "unit.scopeNotes": "Scope-details",
+      "unit.scopeNotes.ph": "bv. Olympus CF-HQ190, 2 torens EVIS X1",
+      "unit.rooms": "Endoscopiekamers",
+      "unit.roomsDemo": "Kamers met demo",
+      "unit.roomsInstalled": "Kamers met installatie",
+      "unit.colosPerYear": "Coloscopieën per jaar",
+      "unit.existingAI": "AI al aanwezig",
+      "unit.existingAI.ph": "bv. GI Genius, Endo-AID, CAD EYE, geen",
+      "unit.screening": "Doet bevolkingsonderzoek darmkanker",
+      "unit.unknownOk": "Niet alles moet ingevuld zijn — laat leeg wat je nog niet weet.",
+
+      // contactdialoog
+      "dlg.contactNew": "Nieuwe contactpersoon",
+      "dlg.contactEdit": "Contactpersoon bewerken",
+      "dlg.c.name": "Naam",
+      "dlg.c.role": "Functie",
+      "dlg.c.role.ph": "bv. Gastro-enteroloog, Hoofd endoscopie, Aankoop, ICT",
+      "dlg.c.phone": "Telefoon",
+      "dlg.c.email": "E-mail",
+      "dlg.c.address": "Adres / dienst",
+      "dlg.c.product": "Product",
+      "dlg.c.primary": "Hoofdcontact",
+      "dlg.c.notes": "Notities",
+      "tag.primary": "HOOFDCONTACT",
+      "confirm.deleteContact": "{name} verwijderen?",
+
+      // contactmoment-dialoog
+      "dlg.actNew": "Nieuw contactmoment",
+      "dlg.actEdit": "Contactmoment bewerken",
+      "dlg.a.date": "Datum",
+      "dlg.a.type": "Type",
+      "dlg.a.product": "Product",
+      "dlg.a.contact": "Contactpersoon",
+      "dlg.a.rooms": "Aantal kamers",
+      "dlg.a.note": "Notitie",
+      "dlg.a.note.ph": "Wat werd besproken, afspraken…",
+      "confirm.deleteActivity": "Dit contactmoment verwijderen?",
+      "act.rooms": "kamers",
+
+      // nieuw ziekenhuis
+      "dlg.newHospital": "Nieuw ziekenhuis",
+      "dlg.addrHint": "Kies een suggestie om de locatie automatisch in te stellen. Anders klik je na het opslaan op de kaart.",
+      "dlg.addrFound": "✓ Locatie gevonden — wordt automatisch op de kaart gezet.",
+      "toast.created": "Ziekenhuis aangemaakt op de kaart",
+      "confirm.deleteHospital": "\"{name}\" en alle contacten/contactmomenten definitief verwijderen?",
+      "addr.empty": "Geen resultaten — je kan de locatie ook manueel op de kaart aanduiden.",
+
+      // export / import
+      "dlg.export": "Exporteren",
+      "dlg.exportHint": "CSV-bestanden openen rechtstreeks in Excel. De JSON-back-up kan je later terug importeren.",
+      "export.hospitals": "Overzicht ziekenhuizen (CSV)",
+      "export.contacts": "Contactpersonen (CSV)",
+      "export.activities": "Contactmomenten (CSV)",
+      "export.units": "Endoscopie-afdelingen (CSV)",
+      "export.json": "Volledige back-up (JSON)",
+      "import.confirm": "{n} ziekenhuizen importeren? Dit vervangt alle huidige data.",
+      "import.done": "Back-up geïmporteerd",
+      "import.failed": "Importeren mislukt: {msg}",
+      "import.noHospitals": "geen 'hospitals' gevonden",
+
+      // kolomkoppen CSV
+      "col.name": "Naam",
+      "col.country": "Land",
+      "col.sector": "Sector",
+      "col.status": "Status",
+      "col.stage": "Fase",
+      "col.products": "Producten",
+      "col.lastContact": "Laatste contact",
+      "col.demos": "Demo's",
+      "col.installations": "Installaties",
+      "col.nextAction": "Volgende actie",
+      "col.nextActionDate": "Actie op",
+      "col.demoDate": "Demo gepland op",
+      "col.primaryContact": "Hoofdcontact",
+      "col.address": "Adres",
+      "col.notes": "Notities",
+      "col.createdAt": "Toegevoegd op",
+      "col.hospital": "Ziekenhuis",
+      "col.role": "Functie",
+      "col.phone": "Telefoon",
+      "col.email": "E-mail",
+      "col.product": "Product",
+      "col.isPrimary": "Hoofdcontact",
+      "col.date": "Datum",
+      "col.type": "Type",
+      "col.contact": "Contactpersoon",
+      "col.rooms": "Kamers",
+      "col.note": "Notitie",
+      "col.yes": "ja",
+
+      // login + start
+      "store.localFail": "Kan de data niet laden. Start de website met: python3 server.py en open http://localhost:8080",
+      "login.intro": "Meld je aan om verder te gaan.",
+      "login.email": "E-mail",
+      "login.password": "Wachtwoord",
+      "login.submit": "Aanmelden",
+      "login.failed": "Aanmelden mislukt: ",
+      "login.badCredentials": "verkeerd e-mailadres of wachtwoord",
+      "seed.empty": "De online databank is nog leeg. ",
+      "seed.load": "Laad startlijst Benelux",
+      "seed.or": " of gebruik Importeer met een JSON-back-up.",
+      "seed.loaded": "{n} ziekenhuizen geladen",
+      "seed.missing": "Startlijst niet gevonden. Gebruik Importeer met een JSON-back-up.",
+
+      // relatieve datums
+      "rel.today": "vandaag",
+      "rel.yesterday": "gisteren",
+      "rel.inDays": "over {n} d",
+      "rel.daysAgo": "{n} d geleden",
+      "rel.last": "laatst",
+      "rel.none": "—",
+
+      // statistieken
+      "stats.year": "Jaar",
+      "stats.product": "Product",
+      "stats.all": "Alle",
+      "stats.targets": "Doelen",
+      "stats.targetsSub": "Kamers live per jaar",
+      "stats.perMonth": "Installaties per maand",
+      "stats.perHospital": "Kamers live per ziekenhuis",
+      "stats.perCountry": "Ziekenhuizen per land",
+      "stats.pipeline": "Pijplijn per fase",
+      "stats.activity": "Contactmomenten per type",
+      "stats.scopes": "Scope-merken in de pijplijn",
+      "stats.table": "Overzicht",
+      "stats.noData": "Nog geen gegevens",
+      "stats.hospitals": "Ziekenhuizen",
+      "stats.customers": "Klanten",
+      "stats.roomsLive": "Kamers live",
+      "stats.roomsDemo": "Kamers in demo",
+      "stats.coverage": "Dekking",
+      "stats.target": "Doel",
+      "stats.reached": "behaald",
+      "stats.colosCovered": "Coloscopieën gedekt / jaar",
+    },
+
+    en: {
+      "app.followup": "FollowUp",
+      "app.brand": "Prion Medical",
+
+      "nav.list": "List",
+      "nav.map": "Map",
+      "nav.stats": "Statistics",
+      "nav.new": "New",
+      "btn.stats": "Statistics",
+      "btn.backToMap": "← Map",
+      "btn.addHospital": "+ Hospital",
+      "btn.export": "Export",
+      "btn.import": "Import backup",
+      "btn.logout": "Sign out",
+      "btn.more": "More",
+      "btn.showAll": "Show all",
+      "btn.region": "All Benelux",
+      "btn.reload": "Reload",
+      "btn.cancel": "Cancel",
+      "btn.save": "Save",
+      "btn.create": "Create",
+      "btn.delete": "Delete",
+      "btn.close": "Close",
+      "btn.edit": "Edit",
+      "lang.switch": "Nederlands",
+      "lang.title": "Schakel over naar het Nederlands",
+
+      "save.saving": "Saving…",
+      "save.saved": "✓ Saved",
+      "save.failed": "Not saved!",
+      "save.conflict": "The data was changed on another device in the meantime. Reload the page; your last change here was not saved.",
+      "save.errorLocal": "Is server.py still running?",
+      "save.errorOnline": "Are you still online?",
+      "save.errorBody": "Saving failed. {hint} Your changes exist only in this window. ({msg})",
+
+      "search.placeholder": "Search hospital, doctor or city…",
+      "list.empty": "No results",
+      "filter.all": "All",
+      "filter.allProducts": "All products",
+      "filter.overdue": "Action overdue",
+      "filter.allCountries": "All Benelux",
+
+      "map.placeHint": "Tap the map to choose the location",
+      "map.noLocation": "no location",
+      "map.locationSet": "Location set",
+      "map.locationUpdated": "Location updated",
+      "map.addressSet": "Address and location set",
+      "map.dragHint": "Drag the marker to the right spot",
+      "map.noLocationYet": "This hospital has no location yet",
+      "map.showOnMap": "Show on map",
+
+      "status.green": "Selling",
+      "status.orange": "In progress / action needed",
+      "status.red": "No contact yet",
+      "status.green.short": "Selling",
+      "status.orange.short": "In progress",
+      "status.red.short": "No contact",
+      "status.toGreen": "Status → green (selling)",
+      "status.toOrange": "Status → orange (in progress)",
+
+      "stage.prospect": "Prospect",
+      "stage.first_contact": "First contact",
+      "stage.meeting": "Meeting / visit",
+      "stage.demo_planned": "Demo planned",
+      "stage.demo_installed": "Demo installed",
+      "stage.evaluation": "Under evaluation",
+      "stage.customer": "Customer",
+      "stage.on_hold": "On hold",
+      "stage.not_interested": "Not interested",
+
+      "act.prospecting": "Prospecting",
+      "act.email": "E-mail",
+      "act.call": "Call",
+      "act.visit": "Visit",
+      "act.congress": "Congress / fair",
+      "act.demo": "Demo",
+      "act.installation": "Installation",
+      "act.training": "Training",
+      "act.quote": "Quote",
+      "act.order": "Order",
+      "act.other": "Other",
+
+      "sector.public": "Public",
+      "sector.private": "Private",
+      "sector.university": "University",
+      "country.BE": "Belgium",
+      "country.NL": "Netherlands",
+      "country.LU": "Luxembourg",
+      "country.BE.short": "BE",
+      "country.NL.short": "NL",
+      "country.LU.short": "LU",
+
+      "kpi.demosPlanned": "Demos planned",
+      "kpi.roomsDemo": "Demo rooms",
+      "kpi.roomsInstalled": "Rooms live",
+      "kpi.overdue": "Actions overdue",
+
+      "fiche.name": "Name",
+      "fiche.lastContact": "Last contact",
+      "fiche.demos": "Demos",
+      "fiche.installations": "Installations",
+      "fiche.roomsLive": "Rooms live",
+      "section.followup": "Follow-up",
+      "section.activities": "Contact moments",
+      "section.contacts": "Contacts",
+      "section.unit": "Endoscopy unit",
+      "section.data": "Details",
+      "field.stage": "Sales stage",
+      "field.nextAction": "Next action",
+      "field.nextActionDate": "Next action on",
+      "field.nextAction.ph": "e.g. schedule demo with Dr …",
+      "field.demoDate": "Demo planned for",
+      "field.address": "Address",
+      "field.address.ph": "Type address or hospital name…",
+      "field.notes": "Notes",
+      "field.sector": "Sector",
+      "field.country": "Country",
+      "field.products": "Products",
+      "field.location": "Location on map",
+      "field.createdAt": "Added on",
+      "badge.late": "overdue",
+      "badge.overdue": "action overdue",
+
+      "btn.place": "Place on map",
+      "btn.placeNew": "Click new location",
+      "btn.drag": "Drag marker",
+      "btn.dragDone": "✓ Done dragging",
+      "btn.addActivity": "+ Contact moment",
+      "btn.addContact": "+ Contact",
+
+      "empty.activities": "No contact moments yet. Add prospecting, e-mail, visit, demo, installation…",
+      "empty.contacts": "No contacts yet.",
+
+      "unit.scopeBrands": "Scopes in use",
+      "unit.scopeNotes": "Scope details",
+      "unit.scopeNotes.ph": "e.g. Olympus CF-HQ190, 2 EVIS X1 towers",
+      "unit.rooms": "Endoscopy rooms",
+      "unit.roomsDemo": "Rooms with demo",
+      "unit.roomsInstalled": "Rooms with installation",
+      "unit.colosPerYear": "Colonoscopies per year",
+      "unit.existingAI": "AI already present",
+      "unit.existingAI.ph": "e.g. GI Genius, Endo-AID, CAD EYE, none",
+      "unit.screening": "Runs bowel cancer screening programme",
+      "unit.unknownOk": "Not everything has to be filled in — leave blank what you do not know yet.",
+
+      "dlg.contactNew": "New contact",
+      "dlg.contactEdit": "Edit contact",
+      "dlg.c.name": "Name",
+      "dlg.c.role": "Role",
+      "dlg.c.role.ph": "e.g. Gastroenterologist, Head of endoscopy, Procurement, IT",
+      "dlg.c.phone": "Phone",
+      "dlg.c.email": "E-mail",
+      "dlg.c.address": "Address / department",
+      "dlg.c.product": "Product",
+      "dlg.c.primary": "Primary contact",
+      "dlg.c.notes": "Notes",
+      "tag.primary": "PRIMARY",
+      "confirm.deleteContact": "Delete {name}?",
+
+      "dlg.actNew": "New contact moment",
+      "dlg.actEdit": "Edit contact moment",
+      "dlg.a.date": "Date",
+      "dlg.a.type": "Type",
+      "dlg.a.product": "Product",
+      "dlg.a.contact": "Contact",
+      "dlg.a.rooms": "Number of rooms",
+      "dlg.a.note": "Note",
+      "dlg.a.note.ph": "What was discussed, agreements…",
+      "confirm.deleteActivity": "Delete this contact moment?",
+      "act.rooms": "rooms",
+
+      "dlg.newHospital": "New hospital",
+      "dlg.addrHint": "Pick a suggestion to set the location automatically. Otherwise click the map after saving.",
+      "dlg.addrFound": "✓ Location found — will be placed on the map automatically.",
+      "toast.created": "Hospital created on the map",
+      "confirm.deleteHospital": "Permanently delete \"{name}\" and all its contacts/contact moments?",
+      "addr.empty": "No results — you can also mark the location on the map by hand.",
+
+      "dlg.export": "Export",
+      "dlg.exportHint": "CSV files open straight into Excel. The JSON backup can be imported again later.",
+      "export.hospitals": "Hospital overview (CSV)",
+      "export.contacts": "Contacts (CSV)",
+      "export.activities": "Contact moments (CSV)",
+      "export.units": "Endoscopy units (CSV)",
+      "export.json": "Full backup (JSON)",
+      "import.confirm": "Import {n} hospitals? This replaces all current data.",
+      "import.done": "Backup imported",
+      "import.failed": "Import failed: {msg}",
+      "import.noHospitals": "no 'hospitals' found",
+
+      "col.name": "Name",
+      "col.country": "Country",
+      "col.sector": "Sector",
+      "col.status": "Status",
+      "col.stage": "Stage",
+      "col.products": "Products",
+      "col.lastContact": "Last contact",
+      "col.demos": "Demos",
+      "col.installations": "Installations",
+      "col.nextAction": "Next action",
+      "col.nextActionDate": "Action on",
+      "col.demoDate": "Demo planned for",
+      "col.primaryContact": "Primary contact",
+      "col.address": "Address",
+      "col.notes": "Notes",
+      "col.createdAt": "Added on",
+      "col.hospital": "Hospital",
+      "col.role": "Role",
+      "col.phone": "Phone",
+      "col.email": "E-mail",
+      "col.product": "Product",
+      "col.isPrimary": "Primary contact",
+      "col.date": "Date",
+      "col.type": "Type",
+      "col.contact": "Contact",
+      "col.rooms": "Rooms",
+      "col.note": "Note",
+      "col.yes": "yes",
+
+      "store.localFail": "Cannot load the data. Start the site with: python3 server.py and open http://localhost:8080",
+      "login.intro": "Sign in to continue.",
+      "login.email": "E-mail",
+      "login.password": "Password",
+      "login.submit": "Sign in",
+      "login.failed": "Sign-in failed: ",
+      "login.badCredentials": "wrong e-mail address or password",
+      "seed.empty": "The online database is still empty. ",
+      "seed.load": "Load Benelux starter list",
+      "seed.or": " or use Import with a JSON backup.",
+      "seed.loaded": "{n} hospitals loaded",
+      "seed.missing": "Starter list not found. Use Import with a JSON backup.",
+
+      "rel.today": "today",
+      "rel.yesterday": "yesterday",
+      "rel.inDays": "in {n} d",
+      "rel.daysAgo": "{n} d ago",
+      "rel.last": "last",
+      "rel.none": "—",
+
+      "stats.year": "Year",
+      "stats.product": "Product",
+      "stats.all": "All",
+      "stats.targets": "Targets",
+      "stats.targetsSub": "Rooms live per year",
+      "stats.perMonth": "Installations per month",
+      "stats.perHospital": "Rooms live per hospital",
+      "stats.perCountry": "Hospitals per country",
+      "stats.pipeline": "Pipeline by stage",
+      "stats.activity": "Contact moments by type",
+      "stats.scopes": "Scope brands in the pipeline",
+      "stats.table": "Overview",
+      "stats.noData": "No data yet",
+      "stats.hospitals": "Hospitals",
+      "stats.customers": "Customers",
+      "stats.roomsLive": "Rooms live",
+      "stats.roomsDemo": "Rooms in demo",
+      "stats.coverage": "Coverage",
+      "stats.target": "Target",
+      "stats.reached": "reached",
+      "stats.colosCovered": "Colonoscopies covered / year",
+    },
+  };
+
+  const LOCALES = { nl: "nl-BE", en: "en-GB" };
+  const KEY = "followup-lang";
+
+  function initial() {
+    try {
+      const saved = localStorage.getItem(KEY);
+      if (saved && DICT[saved]) return saved;
+    } catch (e) { /* privévenster / private window */ }
+    return (navigator.language || "nl").toLowerCase().startsWith("nl") ? "nl" : "en";
+  }
+
+  let lang = initial();
+  const listeners = [];
+
+  function t(key, vars) {
+    let s = DICT[lang][key];
+    if (s === undefined) s = DICT.nl[key];
+    if (s === undefined) return key; // ontbrekende sleutel valt op / missing key is visible
+    if (vars) for (const [k, v] of Object.entries(vars)) s = s.split("{" + k + "}").join(String(v));
+    return s;
+  }
+
+  function setLang(next) {
+    if (!DICT[next] || next === lang) return;
+    lang = next;
+    try { localStorage.setItem(KEY, lang); } catch (e) { /* privévenster */ }
+    document.documentElement.lang = lang;
+    applyStatic();
+    listeners.forEach((fn) => fn(lang));
+  }
+
+  // Vaste tekst in index.html: <span data-i18n="btn.save"> of data-i18n-ph / data-i18n-title.
+  function applyStatic(root = document) {
+    root.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
+    root.querySelectorAll("[data-i18n-ph]").forEach((el) => { el.placeholder = t(el.dataset.i18nPh); });
+    root.querySelectorAll("[data-i18n-title]").forEach((el) => {
+      el.title = t(el.dataset.i18nTitle);
+      if (el.hasAttribute("aria-label")) el.setAttribute("aria-label", t(el.dataset.i18nTitle));
+    });
+  }
+
+  return {
+    t,
+    setLang,
+    applyStatic,
+    onChange: (fn) => listeners.push(fn),
+    get lang() { return lang; },
+    get locale() { return LOCALES[lang]; },
+    get other() { return lang === "nl" ? "en" : "nl"; },
+  };
+})();

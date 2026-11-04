@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="FollowUp">
+  <title>FollowUp Prion</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="styles.css?v=202611041300">
+</head>
+<body data-view="map">
+  <header class="topbar">
+    <div class="brand">
+      <img class="brand__logo" src="logo.png" alt="Prion Medical">
+      <span class="brand__region" data-i18n="app.followup">FollowUp</span>
+    </div>
+    <div class="kpis" id="kpis"></div>
+    <div class="top-actions">
+      <span class="save-state" id="saveState"></span>
+      <button class="btn ghost lang" id="langBtn" title="Switch to English">English</button>
+      <button class="btn ghost desktop-only" id="statsBtn" data-i18n="btn.stats">Statistieken</button>
+      <button class="btn primary desktop-only" id="addHospitalBtn" data-i18n="btn.addHospital">+ Ziekenhuis</button>
+      <div class="menu">
+        <button class="btn ghost icon" id="menuBtn" aria-haspopup="true" aria-expanded="false" aria-label="Meer" data-i18n-title="btn.more">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+        </button>
+        <div class="menu__list" id="menuList" hidden>
+          <button id="exportBtn" data-i18n="btn.export">Exporteren</button>
+          <button id="importBtn" data-i18n="btn.import">Back-up importeren</button>
+          <button id="logoutBtn" data-i18n="btn.logout" hidden>Afmelden</button>
+        </div>
+      </div>
+      <input type="file" id="importFile" accept="application/json" hidden>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="search">
+        <svg class="search__icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="search" type="search" data-i18n-ph="search.placeholder" placeholder="Zoek ziekenhuis, arts of stad…" autocomplete="off" enterkeyhint="search">
+      </div>
+      <div class="filters" id="statusFilters">
+        <button class="chip active" data-status="all" data-i18n="filter.all">Alle</button>
+        <button class="chip" data-status="green"><i class="dot green"></i><span data-i18n="status.green.short">Verkoop</span></button>
+        <button class="chip" data-status="orange"><i class="dot orange"></i><span data-i18n="status.orange.short">In progress</span></button>
+        <button class="chip" data-status="red"><i class="dot red"></i><span data-i18n="status.red.short">Geen contact</span></button>
+      </div>
+      <div class="filters" id="productFilters">
+        <button class="chip active" data-product="all" data-i18n="filter.allProducts">Alle producten</button>
+        <button class="chip" data-product="EndoQ">EndoQ</button>
+        <button class="chip" data-product="Ainex">Ainex</button>
+        <button class="chip" data-product="overdue" data-i18n="filter.overdue">Actie te laat</button>
+      </div>
+      <div class="filters" id="countryFilters">
+        <button class="chip active" data-country="all" data-i18n="filter.allCountries">Hele Benelux</button>
+        <button class="chip" data-country="BE" data-i18n="country.BE">België</button>
+        <button class="chip" data-country="NL" data-i18n="country.NL">Nederland</button>
+        <button class="chip" data-country="LU" data-i18n="country.LU">Luxemburg</button>
+      </div>
+      <ul class="list" id="list"></ul>
+    </aside>
+
+    <section class="map-wrap">
+      <div id="map"></div>
+      <div class="map-tools">
+        <button class="btn small" id="fitBtn" data-i18n="btn.showAll">Toon alle</button>
+        <button class="btn small" id="regionBtn" data-i18n="btn.region">Hele Benelux</button>
+      </div>
+      <div class="legend">
+        <span><i class="dot green"></i><span data-i18n="status.green">Aan het verkopen</span></span>
+        <span><i class="dot orange"></i><span data-i18n="status.orange">In progress / actie nodig</span></span>
+        <span><i class="dot red"></i><span data-i18n="status.red">Nog geen contact</span></span>
+      </div>
+      <div class="place-hint" id="placeHint" hidden><span data-i18n="map.placeHint">Tik op de kaart om de locatie te kiezen</span> · <button class="link" id="cancelPlace" data-i18n="btn.cancel">Annuleer</button></div>
+    </section>
+
+    <aside class="fiche" id="fiche" hidden></aside>
+    <section class="stats-view" id="statsView" hidden></section>
+  </main>
+
+  <nav class="tabbar" aria-label="Navigatie">
+    <button data-view="list">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>
+      <span data-i18n="nav.list">Lijst</span>
+    </button>
+    <button data-view="map" class="active">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg>
+      <span data-i18n="nav.map">Kaart</span>
+    </button>
+    <button data-view="stats">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+      <span data-i18n="nav.stats">Statistieken</span>
+    </button>
+    <button data-action="add">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      <span data-i18n="nav.new">Nieuw</span>
+    </button>
+  </nav>
+
+  <dialog id="dialog"><form method="dialog" id="dialogForm"></form></dialog>
+  <div class="toast" id="toast" hidden></div>
+
+  <div class="login" id="login" hidden>
+    <form class="login-card" id="loginForm">
+      <img class="login-logo" src="logo.png" alt="Prion Medical">
+      <p class="eyebrow" data-i18n="app.followup">FollowUp</p>
+      <p class="muted" data-i18n="login.intro">Meld je aan om verder te gaan.</p>
+      <label class="field"><span data-i18n="login.email">E-mail</span><input name="email" type="email" autocomplete="username" required></label>
+      <label class="field"><span data-i18n="login.password">Wachtwoord</span><input name="password" type="password" autocomplete="current-password" required></label>
+      <p class="login-error" id="loginError"></p>
+      <button class="btn primary" type="submit" data-i18n="login.submit">Aanmelden</button>
+    </form>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js" integrity="sha384-rwykjmWNwVxboyFmvK9OXN0wj9hnMHA2aAHtits54DuACyCq0M2PrSNxhRb+hvXT" crossorigin="anonymous"></script>
+  <script src="config.js?v=202611041300"></script>
+  <script src="i18n.js?v=202611041300"></script>
+  <script src="stats.js?v=202611041300"></script>
+  <script src="storage.js?v=202611041300"></script>
+  <script src="app.js?v=202611041300"></script>
+</body>
+</html>

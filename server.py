@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""FollowUp Prion – lokale server / local server.
+
+Start:  python3 server.py   en open http://localhost:8080
+
+Bewaart alles in data/db.json. Bij elke wijziging wordt ook een dagelijkse
+back-up geschreven naar data/backups/db-JJJJ-MM-DD.json.
+Geen externe libraries nodig.
+"""
+import json
+import os
+import shutil
+import sys
+import tempfile
+from datetime import date
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+PUBLIC = ROOT / "public"
+DATA = ROOT / "data"
+DB = DATA / "db.json"
+SEED = DATA / "seed.json"
+BACKUPS = DATA / "backups"
+PORT = int(os.environ.get("PORT", "8080"))
+MAX_BODY = 20 * 1024 * 1024
+
+
+def load_db():
+    if not DB.exists():
+        if SEED.exists():
+            shutil.copy(SEED, DB)
+        else:
+            DB.write_text(json.dumps({"version": 1, "hospitals": []}), encoding="utf-8")
+    return DB.read_text(encoding="utf-8")
+
+
+def save_db(payload):
+    data = json.loads(payload)
+    if not isinstance(data, dict) or not isinstance(data.get("hospitals"), list):
+        raise ValueError("Ongeldige data: 'hospitals' ontbreekt")
+    text = json.dumps(data, indent=2, ensure_ascii=False)
+    fd, tmp = tempfile.mkstemp(dir=DATA, suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, DB)
+    BACKUPS.mkdir(exist_ok=True)
+    (BACKUPS / f"db-{date.today().isoformat()}.json").write_text(text, encoding="utf-8")
+
+
+class Handler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(PUBLIC), **kwargs)
+
+    def _send(self, code, body, ctype="application/json; charset=utf-8"):
+        raw = body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_GET(self):
+        if self.path.split("?")[0] == "/api/data":
+            return self._send(200, load_db())
+        return super().do_GET()
+
+    def do_PUT(self):
+        if self.path.split("?")[0] != "/api/data":
+            return self._send(404, '{"error":"not found"}')
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > MAX_BODY:
+            return self._send(400, '{"error":"lege of te grote body"}')
+        try:
+            save_db(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, json.JSONDecodeError) as e:
+            return self._send(400, json.dumps({"error": str(e)}))
+        return self._send(200, '{"ok":true}')
+
+    def end_headers(self):
+        if not self.path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
+    def log_message(self, fmt, *args):
+        # log_error geeft een HTTPStatus mee i.p.v. een string (bv. bij een 404
+        # op /favicon.ico); str() voorkomt dat de request-thread daarop crasht.
+        if "/api/" in str(args[0] if args else ""):
+            sys.stderr.write("%s\n" % (fmt % args))
+
+
+if __name__ == "__main__":
+    DATA.mkdir(exist_ok=True)
+    load_db()
+    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    print(f"FollowUp Prion draait op http://localhost:{PORT}  (Ctrl+C om te stoppen)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass

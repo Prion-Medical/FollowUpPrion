@@ -1,0 +1,9 @@
+# Eigen data (nooit committen: bevat contactgegevens van artsen)
+data/db.json
+data/backups/
+
+# Claude Code: lokale tooling en skills, niet van de app zelf
+.claude/
+
+__pycache__/
+.DS_Store
