@@ -59,6 +59,14 @@
   function isOverdue(h) {
     return !!h.nextActionDate && h.nextActionDate < today();
   }
+  // nextAction en nextActionDate volgen uit het eerste geplande moment. Zo
+  // blijven de lijst, de filter "actie te laat" en de CSV werken zoals
+  // voorheen, zonder tweede plaats waar hetzelfde wordt bijgehouden.
+  function syncNextAction(h) {
+    const p = h.planned[0];
+    h.nextActionDate = p ? p.date : "";
+    h.nextAction = p ? p.note : "";
+  }
   function hasDemoPlanned(h) {
     return !!h.demoDate && h.demoDate >= today();
   }
@@ -154,6 +162,18 @@
     a.rooms = ROOM_TYPES.includes(a.type) ? numOrNull(a.rooms) : null;
     return a;
   }
+  // Een gepland moment is géén contactmoment: het staat apart en raakt de
+  // kleur, de fase en de statistieken niet. Een aantal kamers hoort bij wat
+  // echt gebeurd is, dus dat vragen we pas bij het afvinken.
+  function normalizePlanned(p) {
+    p.id = str(p.id) || uid();
+    p.type = ACT_TYPE_KEYS.includes(p.type) ? p.type : "other";
+    p.date = dateOrEmpty(p.date);
+    p.product = str(p.product);
+    p.contactId = str(p.contactId);
+    p.note = str(p.note);
+    return p;
+  }
   function normalize(h) {
     h.id = str(h.id) || uid();
     h.name = str(h.name).trim() || "—";
@@ -171,6 +191,22 @@
     h.notes = str(h.notes);
     h.nextAction = str(h.nextAction);
     h.nextActionDate = dateOrEmpty(h.nextActionDate);
+    if (!Array.isArray(h.planned)) h.planned = [];
+    h.planned.forEach(normalizePlanned);
+    // Vroeger was er één volgende actie per ziekenhuis: tekst en datum apart,
+    // en de tekst mocht er staan zonder datum. Allebei worden ze hier het
+    // eerste geplande moment. Staat er geen datum bij, dan zetten we die op
+    // vandaag: zo duikt de tekst op in de agenda in plaats van te verdwijnen,
+    // want hieronder vallen momenten zonder datum weg. Daarna is h.planned
+    // gevuld en gebeurt dit niet nog een keer.
+    if (!h.planned.length && (h.nextActionDate || h.nextAction)) {
+      h.planned.push(normalizePlanned({
+        date: h.nextActionDate || today(), type: "other", note: h.nextAction,
+      }));
+    }
+    // Zonder datum is het geen planning, en de agenda rekent op de sortering.
+    h.planned = h.planned.filter((p) => p.date).sort((a, b) => a.date.localeCompare(b.date));
+    syncNextAction(h);
     h.demoDate = dateOrEmpty(h.demoDate);
     h.createdAt = dateOrEmpty(h.createdAt) || today();
     // Een halve locatie is geen locatie: de kaart rekent op lat én lng.
@@ -463,12 +499,6 @@
           <label class="field">${esc(t("field.demoDate"))}
             <input type="date" data-field="demoDate" value="${esc(h.demoDate)}">
           </label>
-          <label class="field">${esc(t("field.nextActionDate"))}
-            <input type="date" data-field="nextActionDate" value="${esc(h.nextActionDate)}">
-          </label>
-          <label class="field full">${esc(t("field.nextAction"))} ${late ? `<span class="badge">${esc(t("badge.late"))}</span>` : ""}
-            <input data-field="nextAction" value="${esc(h.nextAction)}" placeholder="${esc(t("field.nextAction.ph"))}">
-          </label>
         </div>
       </div>
 
@@ -598,7 +628,7 @@
     scheduleSave();
     renderList();
     renderKpis();
-    if (["name", "nextActionDate", "demoDate", "stage", "country"].includes(d.field)) { renderFiche(); renderMarkers(); }
+    if (["name", "demoDate", "stage", "country"].includes(d.field)) { renderFiche(); renderMarkers(); }
   });
 
   $("#fiche").addEventListener("click", (e) => {

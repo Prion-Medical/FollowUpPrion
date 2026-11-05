@@ -69,9 +69,17 @@ a discipline, not a guarantee — when editing a template, check it. Translated 
 and numbers are ours and safe.
 
 **Data shape.** One document: `{ version, hospitals: [...] }`. Each hospital carries
-`contacts[]`, `activities[]` and a `unit` object (scope brands, rooms, rooms with
+`contacts[]`, `activities[]`, `planned[]` and a `unit` object (scope brands, rooms, rooms with
 demo/installation, colonoscopies per year, existing AI, screening). `normalize()` fills
 in missing fields — extend it whenever you add one, so older saved data keeps working.
+
+**Planned versus logged.** `activities[]` is the log of what happened, and it drives
+status, stage, rooms and both charts. `planned[]` is the agenda and drives none of that —
+deliberately a separate array, so a planned installation can never turn a hospital green
+or land in the statistics. Ticking a planned moment off opens the contact-moment dialog
+prefilled and removes the plan. `nextAction` and `nextActionDate` are **derived** from the
+first planned item by `syncNextAction()`, which keeps the list, the "actie te laat" filter
+and the CSV working; do not write to them directly.
 
 **Status and stage.** Red → orange on first contact; green on installation or order.
 `autoStatus()` and `stageStatus()` hold the rules. Manual override must always remain
