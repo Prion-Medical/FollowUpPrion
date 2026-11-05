@@ -503,6 +503,26 @@
       </div>
 
       <div class="section">
+        <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small primary" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
+        ${h.planned.length ? `<ul class="timeline">${h.planned.map((p) => {
+          const c = h.contacts.find((x) => x.id === p.contactId);
+          const sub = [p.product, c && c.name].filter(Boolean).join(" · ");
+          return `<li class="${p.date < today() ? "late" : ""}">
+            <div class="t-date">${esc(fmtDate(p.date))}<span class="t-rel">${esc(relDays(p.date))}</span></div>
+            <div class="t-body">
+              <div class="t-type"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(t("act." + p.type))}</div>
+              ${sub ? `<div class="t-sub">${esc(sub)}</div>` : ""}
+              ${p.note ? `<div class="t-note">${esc(p.note)}</div>` : ""}
+            </div>
+            <div class="t-acts">
+              <button class="icon-btn" data-act="done-planned" data-id="${esc(p.id)}" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">✓</button>
+              <button class="icon-btn" data-act="edit-planned" data-id="${esc(p.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">✎</button>
+            </div>
+          </li>`;
+        }).join("")}</ul>` : `<p class="muted">${esc(t("empty.planned"))}</p>`}
+      </div>
+
+      <div class="section">
         <h3>${esc(t("section.activities"))} <button class="btn small primary" data-act="add-activity">${esc(t("btn.addActivity"))}</button></h3>
         ${acts.length ? `<ul class="timeline">${acts.map((a) => {
           const c = h.contacts.find((x) => x.id === a.contactId);
@@ -660,6 +680,11 @@
       }
       case "add-activity": return activityDialog(h, null);
       case "edit-activity": return activityDialog(h, h.activities.find((a) => a.id === id));
+      case "add-planned": return plannedDialog(h, null);
+      case "edit-planned": return plannedDialog(h, h.planned.find((p) => p.id === id));
+      // Afvinken: het geplande moment wordt een contactmoment. De dialoog staat
+      // al ingevuld; het aantal kamers vragen we daar voor het eerst.
+      case "done-planned": return activityDialog(h, null, h.planned.find((p) => p.id === id));
       case "place": return startPlacing(h.id);
       case "drag":
         state.dragId = state.dragId === h.id ? null : h.id;
@@ -889,14 +914,14 @@
     });
   }
 
-  function activityDialog(h, a) {
-    const v = a || {
+  function activityDialog(h, a, plan) {
+    const v = a || (plan ? { ...plan, rooms: "" } : {
       date: today(),
       type: h.activities.length ? "email" : "prospecting",
       product: h.products.length === 1 ? h.products[0] : "",
       contactId: (h.contacts.find((c) => c.primary) || {}).id || "",
       rooms: "", note: "",
-    };
+    });
     const form = openDialog(`
       <h2>${esc(a ? t("dlg.actEdit") : t("dlg.actNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
@@ -937,6 +962,13 @@
         if (!a || before.type !== rec.type) autoStatus(h, rec);
         // Een installatie of demo met aantal kamers werkt de afdelingsgegevens bij.
         syncRooms(h, before, rec);
+        // Kwam dit uit de agenda, dan is het nu gebeurd en hoeft het niet meer
+        // gepland te staan.
+        if (plan) {
+          h.planned = h.planned.filter((x) => x.id !== plan.id);
+          syncNextAction(h);
+          toast(t("toast.planDone"));
+        }
       }
       scheduleSave();
       renderAll();
@@ -946,6 +978,55 @@
     };
     form.onchange = sync;
     sync();
+  }
+
+  // Een moment plannen. Dezelfde soorten als een contactmoment, zodat een kleur
+  // in de agenda hetzelfde betekent, maar zonder kamers en zonder invloed op
+  // status, fase of statistieken.
+  function plannedDialog(h, p) {
+    const v = p || {
+      date: today(),
+      type: "visit",
+      product: h.products.length === 1 ? h.products[0] : "",
+      contactId: (h.contacts.find((c) => c.primary) || {}).id || "",
+      note: "",
+    };
+    openDialog(`
+      <h2>${esc(p ? t("dlg.plannedEdit") : t("dlg.plannedNew"))} · ${esc(h.name)}</h2>
+      <div class="grid">
+        <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
+        <label class="field">${esc(t("dlg.p.type"))}
+          <select name="type">${ACT_TYPE_KEYS.map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
+        </label>
+        <label class="field">${esc(t("dlg.p.product"))}
+          <select name="product">${["", ...PRODUCTS].map((x) => opt(x, x || "—", v.product)).join("")}</select>
+        </label>
+        <label class="field">${esc(t("dlg.p.contact"))}
+          <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
+        </label>
+        <label class="field full">${esc(t("dlg.p.note"))}<textarea name="note" rows="3" placeholder="${esc(t("dlg.p.note.ph"))}">${esc(v.note)}</textarea></label>
+      </div>
+      <div class="actions">
+        ${p ? `<button class="btn danger" value="delete" formnovalidate style="margin-right:auto">${esc(t("btn.delete"))}</button>` : ""}
+        <button class="btn" value="cancel" formnovalidate>${esc(t("btn.cancel"))}</button>
+        <button class="btn primary" value="ok">${esc(t("btn.save"))}</button>
+      </div>`, (data, action) => {
+      if (action === "delete") {
+        if (!confirm(t("confirm.deletePlanned"))) return;
+        h.planned = h.planned.filter((x) => x.id !== p.id);
+      } else {
+        const rec = p || { id: uid() };
+        Object.assign(rec, {
+          date: data.date, type: data.type, product: data.product,
+          contactId: data.contactId, note: data.note.trim(),
+        });
+        if (!p) h.planned.push(rec);
+        h.planned.sort((a, b) => a.date.localeCompare(b.date));
+      }
+      syncNextAction(h);
+      scheduleSave();
+      renderAll();
+    });
   }
 
   // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.

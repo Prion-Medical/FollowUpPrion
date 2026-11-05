@@ -325,6 +325,11 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
 /* ---------- tabbalk (enkel gsm) ---------- */
 .tabbar { display: none; }
 
+/* Gepland in de fiche: de relatieve dag onder de datum, te laat in het rood. */
+.timeline .t-rel { display: block; font-size: 11px; font-weight: 400; color: var(--muted); }
+.timeline li.late .t-date { color: var(--red); }
+.timeline .t-acts { display: flex; gap: 2px; flex: none; }
+
 /* ---------- statistieken ---------- */
 body[data-view="stats"] .sidebar, body[data-view="stats"] .map-wrap, body[data-view="stats"] .fiche { display: none; }
 .stats-view { flex: 1; overflow-y: auto; padding: 22px 26px 44px; min-width: 0; -webkit-overflow-scrolling: touch; }

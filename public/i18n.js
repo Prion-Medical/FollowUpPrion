@@ -124,6 +124,7 @@ window.FollowUpI18n = (() => {
       "fiche.installations": "Installaties",
       "fiche.roomsLive": "Kamers live",
       "section.followup": "Opvolging",
+      "section.planned": "Gepland",
       "section.activities": "Contactmomenten",
       "section.contacts": "Contactpersonen",
       "section.unit": "Endoscopie-afdeling",
@@ -149,6 +150,7 @@ window.FollowUpI18n = (() => {
       "btn.addContact": "+ Contact",
 
       "empty.activities": "Nog geen contactmomenten. Voeg prospectie, e-mail, bezoek, demo, installatie… toe.",
+      "empty.planned": "Nog niets gepland.",
       "empty.contacts": "Nog geen contactpersonen.",
 
       // endoscopie-afdeling
@@ -199,6 +201,18 @@ window.FollowUpI18n = (() => {
       "dlg.a.note": "Notitie",
       "dlg.a.note.ph": "Wat werd besproken, afspraken…",
       "confirm.deleteActivity": "Dit contactmoment verwijderen?",
+      "btn.addPlanned": "+ Plannen",
+      "btn.done.title": "Afvinken: hiervan een contactmoment maken",
+      "dlg.plannedNew": "Moment plannen",
+      "dlg.plannedEdit": "Gepland moment",
+      "dlg.p.date": "Datum",
+      "dlg.p.type": "Soort",
+      "dlg.p.product": "Product",
+      "dlg.p.contact": "Contactpersoon",
+      "dlg.p.note": "Nota",
+      "dlg.p.note.ph": "Wat is de bedoeling?",
+      "confirm.deletePlanned": "Dit geplande moment verwijderen?",
+      "toast.planDone": "Afgevinkt en als contactmoment bewaard",
       "act.rooms": "kamers",
 
       // nieuw ziekenhuis
@@ -407,6 +421,7 @@ window.FollowUpI18n = (() => {
       "fiche.installations": "Installations",
       "fiche.roomsLive": "Rooms live",
       "section.followup": "Follow-up",
+      "section.planned": "Planned",
       "section.activities": "Contact moments",
       "section.contacts": "Contacts",
       "section.unit": "Endoscopy unit",
@@ -432,6 +447,7 @@ window.FollowUpI18n = (() => {
       "btn.addContact": "+ Contact",
 
       "empty.activities": "No contact moments yet. Add prospecting, e-mail, visit, demo, installation…",
+      "empty.planned": "Nothing planned yet.",
       "empty.contacts": "No contacts yet.",
 
       "unit.scopeBrands": "Scopes in use",
@@ -479,6 +495,18 @@ window.FollowUpI18n = (() => {
       "dlg.a.note": "Note",
       "dlg.a.note.ph": "What was discussed, agreements…",
       "confirm.deleteActivity": "Delete this contact moment?",
+      "btn.addPlanned": "+ Plan",
+      "btn.done.title": "Tick off: turn this into a contact moment",
+      "dlg.plannedNew": "Plan a moment",
+      "dlg.plannedEdit": "Planned moment",
+      "dlg.p.date": "Date",
+      "dlg.p.type": "Type",
+      "dlg.p.product": "Product",
+      "dlg.p.contact": "Contact",
+      "dlg.p.note": "Note",
+      "dlg.p.note.ph": "What is this for?",
+      "confirm.deletePlanned": "Delete this planned moment?",
+      "toast.planDone": "Ticked off and saved as a contact moment",
       "act.rooms": "rooms",
 
       "dlg.newHospital": "New hospital",
