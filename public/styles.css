@@ -252,6 +252,11 @@ label.field textarea { resize: vertical; min-height: 70px; }
 label.field input:focus, label.field select:focus, label.field textarea:focus { outline: none; border-color: var(--ink); }
 label.field input[type="checkbox"] { width: 18px; min-height: 18px; height: 18px; -webkit-appearance: checkbox; appearance: auto; accent-color: var(--ink); }
 .field-label { font-size: 11px; color: var(--muted); }
+/* Datumveld met wisknop: de ingebouwde kiezer biedt zelf geen manier om een
+   datum weer leeg te maken, op gsm al helemaal niet. */
+.date-field { display: flex; align-items: stretch; gap: 6px; }
+.date-field input { flex: 1; min-width: 0; }
+.date-field .icon-btn { flex: none; border: 1px solid var(--line); }
 label.field.check { flex-direction: row; align-items: center; gap: 8px; }
 label.field.check input[type="checkbox"] { width: auto; }
 .toggles { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }

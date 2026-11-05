@@ -39,6 +39,7 @@ window.FollowUpI18n = (() => {
       "btn.delete": "Verwijder",
       "btn.close": "Sluiten",
       "btn.edit": "Bewerk",
+      "btn.clearDate": "Datum wissen",
       "lang.switch": "English",
       "lang.title": "Switch to English",
 
@@ -356,6 +357,7 @@ window.FollowUpI18n = (() => {
       "btn.delete": "Delete",
       "btn.close": "Close",
       "btn.edit": "Edit",
+      "btn.clearDate": "Clear date",
       "lang.switch": "Nederlands",
       "lang.title": "Schakel over naar het Nederlands",
 
