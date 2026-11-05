@@ -83,7 +83,10 @@ deliberately a separate array, so a planned installation can never turn a hospit
 or land in the statistics. Ticking a planned moment off opens the contact-moment dialog
 prefilled and removes the plan. `nextAction` and `nextActionDate` are **derived** from the
 first planned item by `syncNextAction()`, which keeps the list, the "actie te laat" filter
-and the CSV working; do not write to them directly.
+and the CSV working; do not write to them directly. The old `demoDate` field was folded
+into `planned[]` the same way: `normalize()` turns it into a planned moment of type
+`demo` and drops the field, and the "demo's gepland" KPI and the CSV column both read
+`planned[]` now. There is one place to plan a demo, and it clears itself when ticked off.
 
 **Status and stage.** Red → orange on first contact; green on installation or order.
 `autoStatus()` and `stageStatus()` hold the rules. Manual override must always remain

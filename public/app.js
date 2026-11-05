@@ -72,8 +72,11 @@
     h.nextActionDate = p ? p.date : "";
     h.nextAction = p ? p.note : "";
   }
+  // Een demo die nog moet komen. Vroeger was dit het losse veld demoDate; nu
+  // staat het gewoon in de agenda, zodat de teller en de agenda hetzelfde zien.
   function hasDemoPlanned(h) {
-    return !!h.demoDate && h.demoDate >= today();
+    const d = today();
+    return h.planned.some((p) => p.type === "demo" && p.date >= d);
   }
   function relDays(d) {
     if (!d) return "";
@@ -209,10 +212,19 @@
         date: h.nextActionDate || today(), type: "other", note: h.nextAction,
       }));
     }
+    // "Demo gepland op" was een los datumveld van vóór planned[]. Het stond niet
+    // in de agenda, werd bij het afvinken niet leeggemaakt en bleef dus staan
+    // lang nadat de demo was geweest. De datum wordt hier een gepland moment,
+    // tenzij er die dag al een demo staat. Daarna is het veld weg en gebeurt
+    // dit niet nog een keer.
+    const demo = dateOrEmpty(h.demoDate);
+    if (demo && !h.planned.some((p) => p.type === "demo" && p.date === demo)) {
+      h.planned.push(normalizePlanned({ date: demo, type: "demo" }));
+    }
+    delete h.demoDate;
     // Zonder datum is het geen planning, en de agenda rekent op de sortering.
     h.planned = h.planned.filter((p) => p.date).sort((a, b) => a.date.localeCompare(b.date));
     syncNextAction(h);
-    h.demoDate = dateOrEmpty(h.demoDate);
     h.createdAt = dateOrEmpty(h.createdAt) || today();
     // Een halve locatie is geen locatie: de kaart rekent op lat én lng.
     h.lat = coord(h.lat, 90);
@@ -501,12 +513,6 @@
           <label class="field">${esc(t("field.stage"))}
             <select data-field="stage">${STAGES.map((s) => opt(s, t("stage." + s), h.stage)).join("")}</select>
           </label>
-          <label class="field">${esc(t("field.demoDate"))}
-            <span class="date-field">
-              <input type="date" data-field="demoDate" value="${esc(h.demoDate)}">
-              ${h.demoDate ? `<button type="button" class="icon-btn" data-act="clear-date" data-target="demoDate" title="${esc(t("btn.clearDate"))}" aria-label="${esc(t("btn.clearDate"))}">✕</button>` : ""}
-            </span>
-          </label>
         </div>
       </div>
 
@@ -656,7 +662,7 @@
     scheduleSave();
     renderList();
     renderKpis();
-    if (["name", "demoDate", "stage", "country"].includes(d.field)) { renderFiche(); renderMarkers(); }
+    if (["name", "stage", "country"].includes(d.field)) { renderFiche(); renderMarkers(); }
   });
 
   $("#fiche").addEventListener("click", (e) => {
@@ -693,14 +699,6 @@
       // Afvinken: het geplande moment wordt een contactmoment. De dialoog staat
       // al ingevuld; het aantal kamers vragen we daar voor het eerst.
       case "done-planned": return activityDialog(h, null, h.planned.find((p) => p.id === id));
-      // De ingebouwde datumkiezer heeft op gsm geen knop om een datum weer leeg
-      // te maken. preventDefault houdt het omringende label tegen, dat de klik
-      // anders doorgeeft aan het invoerveld en de kiezer opnieuw opent.
-      case "clear-date":
-        e.preventDefault();
-        h[b.dataset.target] = "";
-        scheduleSave();
-        return renderAll();
       case "place": return startPlacing(h.id);
       case "drag":
         state.dragId = state.dragId === h.id ? null : h.id;
@@ -1118,7 +1116,7 @@
         id: uid(), name: data.name.trim(), country: data.country || (COUNTRIES.includes(data.cc) ? data.cc : ""),
         sector: data.sector, address: data.address.trim(),
         lat: hasLoc ? +data.lat : null, lng: hasLoc ? +data.lng : null,
-        status: "red", stage: "prospect", products: [], nextAction: "", nextActionDate: "", demoDate: "",
+        status: "red", stage: "prospect", products: [], nextAction: "", nextActionDate: "",
         notes: "", createdAt: today(),
       });
       state.db.hospitals.push(h);
@@ -1181,6 +1179,9 @@
       const hs = state.db.hospitals;
       const d = today();
       const contactName = (h, id) => (h.contacts.find((c) => c.id === id) || {}).name;
+      // De kolom "Demo gepland op" bestaat nog; de datum komt uit het eerste
+      // geplande demomoment dat nog moet komen.
+      const demoDate = (h) => ((h.planned.find((p) => p.type === "demo" && p.date >= d) || {}).date) || "";
       if (kind === "hospitals") {
         download(`hospitals-${d}.csv`, csv([
           [t("col.name"), t("col.country"), t("col.sector"), t("col.status"), t("col.stage"), t("col.products"),
@@ -1190,7 +1191,7 @@
           ...hs.map((h) => [h.name, h.country && t("country." + h.country), h.sector && t("sector." + h.sector),
             t("status." + h.status), t("stage." + h.stage), h.products.join(", "), lastContact(h),
             countType(h, "demo"), countType(h, "installation"), h.unit.roomsInstalled ?? "",
-            h.demoDate, h.nextAction, h.nextActionDate, (h.contacts.find((c) => c.primary) || {}).name,
+            demoDate(h), h.nextAction, h.nextActionDate, (h.contacts.find((c) => c.primary) || {}).name,
             h.address, h.createdAt, h.notes]),
         ]), "text/csv");
       } else if (kind === "contacts") {

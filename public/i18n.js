@@ -39,7 +39,6 @@ window.FollowUpI18n = (() => {
       "btn.delete": "Verwijder",
       "btn.close": "Sluiten",
       "btn.edit": "Bewerk",
-      "btn.clearDate": "Datum wissen",
       "lang.switch": "English",
       "lang.title": "Switch to English",
 
@@ -133,7 +132,6 @@ window.FollowUpI18n = (() => {
       "section.unit": "Endoscopie-afdeling",
       "section.data": "Gegevens",
       "field.stage": "Verkoopfase",
-      "field.demoDate": "Demo gepland op",
       "field.address": "Adres",
       "field.address.ph": "Typ adres of naam ziekenhuis…",
       "field.notes": "Notities",
@@ -357,7 +355,6 @@ window.FollowUpI18n = (() => {
       "btn.delete": "Delete",
       "btn.close": "Close",
       "btn.edit": "Edit",
-      "btn.clearDate": "Clear date",
       "lang.switch": "Nederlands",
       "lang.title": "Schakel over naar het Nederlands",
 
@@ -445,7 +442,6 @@ window.FollowUpI18n = (() => {
       "section.unit": "Endoscopy unit",
       "section.data": "Details",
       "field.stage": "Sales stage",
-      "field.demoDate": "Demo planned for",
       "field.address": "Address",
       "field.address.ph": "Type address or hospital name…",
       "field.notes": "Notes",
