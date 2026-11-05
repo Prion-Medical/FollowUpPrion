@@ -470,6 +470,10 @@ label.field textarea:focus-visible,
   .desktop-only { display: none !important; }
 
   .topbar { padding: calc(8px + var(--safe-top)) 14px 8px; gap: 10px; }
+  /* Op gsm is er naast de knoppen geen plaats voor het woordmerk: het logo zegt
+     het al, en anders loopt de balk buiten het scherm en schuift de hele
+     pagina zijwaarts. */
+  .brand__region { display: none; }
   .brand__logo { height: 26px; }
   .save-state { font-size: 11px; }
 
@@ -549,7 +553,9 @@ label.field textarea:focus-visible,
   .ag-acts { flex: 1 1 100%; justify-content: flex-end; margin-top: 2px; }
   .stats-view { padding: 16px 14px 28px; }
   .s-filters { width: 100%; }
-  .s-seg { flex: 1; }
+  /* flex-basis 0 zou betekenen dat de balken nooit afbreken maar buiten het
+     scherm lopen; met 100% krijgt elke balk een eigen regel. */
+  .s-seg { flex: 1 1 100%; }
   .s-seg button { flex: 1; padding: 0 8px; min-height: 40px; }
   .s-tiles { grid-template-columns: 1fr 1fr; }
   .s-tile b { font-size: 24px; }
