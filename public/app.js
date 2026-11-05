@@ -61,6 +61,17 @@
   function isOverdue(h) {
     return !!h.nextActionDate && h.nextActionDate < today();
   }
+  // Stil gevallen: er is contact geweest, er staat niets gepland en het laatste
+  // contactmoment is lang geleden. Zo'n ziekenhuis glipt door alle andere
+  // filters — niet rood (er was contact), niet groen (er staat niets), niet
+  // "actie te laat" (er staat geen actie om te laat mee te zijn) en het duikt
+  // nergens in de agenda op. Precies het ziekenhuis dat je wil terugvinden.
+  const QUIET_DAYS = 90;
+  function isQuiet(h) {
+    if (h.planned.length) return false;
+    const lc = lastContact(h);
+    return !!lc && daysAgo(lc) >= QUIET_DAYS;
+  }
   // Een datum als YYYY-MM-DD uit de losse delen. Niet via toISOString(): die
   // rekent in UTC en schuift bij ons 's avonds een dag op.
   const ymd = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -344,11 +355,15 @@
       .join(" ").toLowerCase();
     return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
   }
+  // Twee knoppen in de productenrij filteren niet op een merk maar op de
+  // opvolging zelf. Ze staan daar omdat het dezelfde rij is; de namen kunnen
+  // nooit met een product botsen, dat zijn EndoQ en Ainex.
+  const DERIVED_FILTERS = { overdue: isOverdue, quiet: isQuiet };
   function visibleHospitals() {
     const { status, product, country, query } = state.filter;
     return state.db.hospitals.filter((h) =>
       (status === "all" || h.status === status) &&
-      (product === "all" || (product === "overdue" ? isOverdue(h) : h.products.includes(product))) &&
+      (product === "all" || (DERIVED_FILTERS[product] ? DERIVED_FILTERS[product](h) : h.products.includes(product))) &&
       (country === "all" || h.country === country) &&
       matchesQuery(h, query));
   }
@@ -375,7 +390,7 @@
       return `<li data-id="${esc(h.id)}" class="${chosen ? "selected" : ""}" tabindex="0"${chosen ? ' aria-current="true"' : ""}>
         <i class="dot ${esc(h.status)}"></i>
         <div>
-          <div class="name">${esc(h.name)}${isOverdue(h) ? `<span class="badge">${esc(t("badge.overdue"))}</span>` : ""}${h.lat == null ? `<span class="badge neutral">${esc(t("map.noLocation"))}</span>` : ""}</div>
+          <div class="name">${esc(h.name)}${isOverdue(h) ? `<span class="badge">${esc(t("badge.overdue"))}</span>` : ""}${isQuiet(h) ? `<span class="badge quiet">${esc(t("badge.quiet"))}</span>` : ""}${h.lat == null ? `<span class="badge neutral">${esc(t("map.noLocation"))}</span>` : ""}</div>
           <div class="meta">${esc(bits.join(" · "))}</div>
           ${primary ? `<div class="meta">★ ${esc(primary.name)}</div>` : ""}
         </div>
@@ -437,6 +452,7 @@
     const sum = (f) => hs.reduce((s, h) => s + (f(h) || 0), 0);
     const demos = hs.filter(hasDemoPlanned).length;
     const late = hs.filter(isOverdue).length;
+    const quiet = hs.filter(isQuiet).length;
     $("#kpis").innerHTML = `
       <div class="kpi"><b style="color:var(--green)">${n("green")}</b><span>${esc(t("status.green.short"))}</span></div>
       <div class="kpi"><b style="color:var(--orange)">${n("orange")}</b><span>${esc(t("status.orange.short"))}</span></div>
@@ -444,7 +460,8 @@
       <div class="kpi"><b>${demos}</b><span>${esc(t("kpi.demosPlanned"))}</span></div>
       <div class="kpi"><b>${sum((h) => h.unit.roomsDemo)}</b><span>${esc(t("kpi.roomsDemo"))}</span></div>
       <div class="kpi"><b>${sum((h) => h.unit.roomsInstalled)}</b><span>${esc(t("kpi.roomsInstalled"))}</span></div>
-      <div class="kpi"><b style="${late ? "color:var(--red)" : ""}">${late}</b><span>${esc(t("kpi.overdue"))}</span></div>`;
+      <div class="kpi"><b style="${late ? "color:var(--red)" : ""}">${late}</b><span>${esc(t("kpi.overdue"))}</span></div>
+      <div class="kpi"><b style="${quiet ? "color:var(--orange)" : ""}">${quiet}</b><span>${esc(t("kpi.quiet"))}</span></div>`;
   }
 
   // ---------- selectie ----------

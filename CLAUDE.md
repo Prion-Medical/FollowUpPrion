@@ -88,6 +88,12 @@ into `planned[]` the same way: `normalize()` turns it into a planned moment of t
 `demo` and drops the field, and the "demo's gepland" KPI and the CSV column both read
 `planned[]` now. There is one place to plan a demo, and it clears itself when ticked off.
 
+**Gone quiet.** `isQuiet()` finds the hospitals nobody is chasing: contact has
+happened, `planned[]` is empty and the newest `activities[]` entry is at least
+`QUIET_DAYS` (90) old. A hospital with something planned is never quiet — it is
+either upcoming or "actie te laat" — and one that was never contacted stays red
+instead. Derived like `isOverdue()`, so nothing is stored and nothing migrates.
+
 **Status and stage.** Red → orange on first contact; green on installation or order.
 `autoStatus()` and `stageStatus()` hold the rules. Manual override must always remain
 possible.

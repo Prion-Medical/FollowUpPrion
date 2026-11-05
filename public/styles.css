@@ -165,6 +165,8 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.01em; }
   padding: 1px 7px; border-radius: 100px; background: var(--red); color: #fff; margin-left: 6px; vertical-align: 2px;
 }
 .badge.neutral { background: var(--paper-2); color: var(--grey); }
+/* Stil gevallen is geen fout maar wel iets om op te pakken: oranje, niet rood. */
+.badge.quiet { background: var(--orange); color: #fff; }
 
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .list .dot { margin-top: 5px; width: 12px; height: 12px; box-shadow: 0 0 0 2px var(--paper); }

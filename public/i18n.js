@@ -56,6 +56,7 @@ window.FollowUpI18n = (() => {
       "filter.all": "Alle",
       "filter.allProducts": "Alle producten",
       "filter.overdue": "Actie te laat",
+      "filter.quiet": "Stil gevallen",
       "filter.allCountries": "Hele Benelux",
 
       "map.placeHint": "Tik op de kaart om de locatie te kiezen",
@@ -118,6 +119,7 @@ window.FollowUpI18n = (() => {
       "kpi.roomsDemo": "Demokamers",
       "kpi.roomsInstalled": "Kamers live",
       "kpi.overdue": "Acties te laat",
+      "kpi.quiet": "Stil gevallen",
 
       // fiche
       "fiche.name": "Naam",
@@ -142,6 +144,7 @@ window.FollowUpI18n = (() => {
       "field.createdAt": "Toegevoegd op",
       "badge.late": "te laat",
       "badge.overdue": "actie te laat",
+      "badge.quiet": "stil",
 
       "btn.place": "Plaats op kaart",
       "btn.placeNew": "Klik nieuwe locatie",
@@ -372,6 +375,7 @@ window.FollowUpI18n = (() => {
       "filter.all": "All",
       "filter.allProducts": "All products",
       "filter.overdue": "Action overdue",
+      "filter.quiet": "Gone quiet",
       "filter.allCountries": "All Benelux",
 
       "map.placeHint": "Tap the map to choose the location",
@@ -429,6 +433,7 @@ window.FollowUpI18n = (() => {
       "kpi.roomsDemo": "Demo rooms",
       "kpi.roomsInstalled": "Rooms live",
       "kpi.overdue": "Actions overdue",
+      "kpi.quiet": "Gone quiet",
 
       "fiche.name": "Name",
       "fiche.lastContact": "Last contact",
@@ -452,6 +457,7 @@ window.FollowUpI18n = (() => {
       "field.createdAt": "Added on",
       "badge.late": "overdue",
       "badge.overdue": "action overdue",
+      "badge.quiet": "quiet",
 
       "btn.place": "Place on map",
       "btn.placeNew": "Click new location",
