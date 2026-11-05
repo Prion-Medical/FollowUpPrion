@@ -24,6 +24,8 @@
     filter: { status: "all", product: "all", country: "all", query: "" },
     placing: null, // {id} wanneer we op de kaart een locatie kiezen
     dragId: null,
+    // Welke maand de agenda toont, en eventueel één gekozen dag.
+    agenda: { y: new Date().getFullYear(), m: new Date().getMonth(), day: "" },
   };
   const markers = new Map();
   const store = window.FollowUpStore;
@@ -59,6 +61,9 @@
   function isOverdue(h) {
     return !!h.nextActionDate && h.nextActionDate < today();
   }
+  // Een datum als YYYY-MM-DD uit de losse delen. Niet via toISOString(): die
+  // rekent in UTC en schuift bij ons 's avonds een dag op.
+  const ymd = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   // nextAction en nextActionDate volgen uit het eerste geplande moment. Zo
   // blijven de lijst, de filter "actie te laat" en de CSV werken zoals
   // voorheen, zonder tweede plaats waar hetzelfde wordt bijgehouden.
@@ -1234,9 +1239,107 @@
     if (e.key === "/" && document.activeElement === document.body) { e.preventDefault(); $("#search").focus(); }
   });
 
+  // ---------- agenda ----------
+  // Alle geplande momenten van alle ziekenhuizen samen: een maandrooster om te
+  // zien waar het druk is, en eronder de lijst om mee te werken. De maand- en
+  // weekdagnamen komen van Intl en niet uit i18n.js — dat zijn negentien
+  // sleutels minder om in twee talen bij te houden.
+  function plannedAll() {
+    const out = [];
+    for (const h of state.db.hospitals) for (const p of h.planned) out.push({ h, p });
+    return out.sort((a, b) => a.p.date.localeCompare(b.p.date) || a.h.name.localeCompare(b.h.name));
+  }
+
+  function agendaRow({ h, p }) {
+    const c = h.contacts.find((x) => x.id === p.contactId);
+    const sub = [t("act." + p.type), p.product, c && c.name].filter(Boolean).join(" · ");
+    const when = new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" });
+    return `<li class="ag-row ${p.date < today() ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
+      <div class="ag-date"><b>${esc(when)}</b><span>${esc(relDays(p.date))}</span></div>
+      <div class="ag-body">
+        <div class="ag-name">${esc(h.name)}</div>
+        <div class="ag-sub"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(sub)}</div>
+        ${p.note ? `<div class="ag-note">${esc(p.note)}</div>` : ""}
+      </div>
+      <div class="ag-acts">
+        <button class="icon-btn" data-ag="done" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">✓</button>
+        <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">✎</button>
+        <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">→</button>
+      </div>
+    </li>`;
+  }
+
+  function renderAgenda() {
+    const { y, m, day } = state.agenda;
+    const items = plannedAll();
+    const td = today();
+    const month = `${y}-${String(m + 1).padStart(2, "0")}`;
+    const overdue = items.filter((x) => x.p.date < td);
+    const inMonth = items.filter((x) => x.p.date.startsWith(month));
+    const byDay = new Map();
+    for (const x of inMonth) {
+      if (!byDay.has(x.p.date)) byDay.set(x.p.date, []);
+      byDay.get(x.p.date).push(x);
+    }
+    // 1 januari 2024 was een maandag; enkel om de weekdagnamen op te halen.
+    const weekdays = Array.from({ length: 7 }, (_, i) =>
+      new Date(2024, 0, 1 + i).toLocaleDateString(I18N.locale, { weekday: "short" }));
+    const monthLabel = new Date(y, m, 1).toLocaleDateString(I18N.locale, { month: "long", year: "numeric" });
+    // Maandag vooraan, en de laatste dag van de maand via dag 0 van de volgende.
+    const lead = (new Date(y, m, 1).getDay() + 6) % 7;
+    const days = new Date(y, m + 1, 0).getDate();
+    const cells = [];
+    for (let i = 0; i < lead; i++) cells.push(`<span class="cal-day empty"></span>`);
+    for (let d = 1; d <= days; d++) {
+      const date = ymd(y, m, d);
+      const list = byDay.get(date) || [];
+      const dots = list.slice(0, 4).map((x) => `<i style="background:${ACT_TYPES[x.p.type] || "#999"}"></i>`).join("");
+      const cls = ["cal-day", date === td ? "today" : "", date === day ? "sel" : "", list.length && date < td ? "late" : ""].filter(Boolean).join(" ");
+      // Een schermlezer hoort anders enkel de datum: het aantal erbij.
+      const label = list.length ? `${fmtDate(date)} · ${t("agenda.planned", { n: list.length })}` : fmtDate(date);
+      cells.push(`<button class="${cls}" data-day="${date}" aria-label="${esc(label)}" aria-pressed="${date === day}">
+        <span class="cal-n">${d}</span>
+        <span class="cal-dots">${dots}${list.length > 4 ? `<em>+${list.length - 4}</em>` : ""}</span>
+      </button>`);
+    }
+    // Een maand die voorbij is tonen we volledig: daar staat niets meer "nog
+    // te doen", en een lege lijst naast gevulde bolletjes in het rooster leest
+    // als een fout. "Te laat" laten we er dan weg, anders staat alles dubbel.
+    const past = month < td.slice(0, 7);
+    const shown = day ? items.filter((x) => x.p.date === day)
+      : past ? inMonth : inMonth.filter((x) => x.p.date >= td);
+    agendaView.innerHTML = `
+      <div class="s-head">
+        <h2>${esc(t("agenda.title"))}</h2>
+        <div class="ag-nav">
+          <button class="btn small" data-ag="prev" title="${esc(t("btn.prevMonth"))}" aria-label="${esc(t("btn.prevMonth"))}">‹</button>
+          <button class="btn small" data-ag="today">${esc(t("btn.today"))}</button>
+          <button class="btn small" data-ag="next" title="${esc(t("btn.nextMonth"))}" aria-label="${esc(t("btn.nextMonth"))}">›</button>
+        </div>
+      </div>
+      <div class="cal">
+        <div class="cal-month">${esc(monthLabel)}</div>
+        <div class="cal-grid">
+          ${weekdays.map((w) => `<span class="cal-wd">${esc(w)}</span>`).join("")}
+          ${cells.join("")}
+        </div>
+      </div>
+      ${items.length ? "" : `<p class="muted">${esc(t("agenda.none"))}</p>`}
+      ${overdue.length && !day && !past ? `<div class="ag-block">
+        <h3 class="ag-h">${esc(t("agenda.overdue"))} <span class="badge">${overdue.length}</span></h3>
+        <ul class="ag-list">${overdue.map(agendaRow).join("")}</ul>
+      </div>` : ""}
+      ${items.length ? `<div class="ag-block">
+        <h3 class="ag-h">${esc(day ? fmtDate(day) : monthLabel)}${day ? ` · <button class="link" data-ag="clear">${esc(t("btn.wholeMonth"))}</button>` : ""}</h3>
+        ${shown.length ? `<ul class="ag-list">${shown.map(agendaRow).join("")}</ul>`
+          : `<p class="muted">${esc(t(day ? "agenda.dayEmpty" : past ? "agenda.monthNone" : "agenda.monthEmpty"))}</p>`}
+      </div>` : ""}`;
+  }
+
   // ---------- start ----------
   function renderAll() {
     if (!statsView.hidden) window.FollowUpStats.render(state.db, statsView, scheduleSave);
+    if (!agendaView.hidden) renderAgenda();
     renderKpis();
     renderList();
     renderMarkers();
@@ -1308,20 +1411,25 @@
     updateLangBtn();
     showSaveState(saveState.key, saveState.error);
     $("#statsBtn").textContent = statsView.hidden ? t("btn.stats") : t("btn.backToMap");
+    $("#agendaBtn").textContent = agendaView.hidden ? t("btn.agenda") : t("btn.backToMap");
     renderAll();
   });
 
-  // ---------- schermen: lijst / kaart / statistieken ----------
+  // ---------- schermen: lijst / kaart / agenda / statistieken ----------
   // Op desktop staan lijst en kaart naast elkaar; op gsm kies je via de tabbalk.
   const statsView = $("#statsView");
+  const agendaView = $("#agendaView");
   function setView(view) {
     document.body.dataset.view = view;
     statsView.hidden = view !== "stats";
+    agendaView.hidden = view !== "agenda";
     $("#statsBtn").textContent = view === "stats" ? t("btn.backToMap") : t("btn.stats");
+    $("#agendaBtn").textContent = view === "agenda" ? t("btn.backToMap") : t("btn.agenda");
     document.querySelectorAll(".tabbar [data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     try { localStorage.setItem("followup-view", view); } catch (e) { /* privévenster */ }
     if (view === "stats") window.FollowUpStats.render(state.db, statsView, scheduleSave);
     else window.FollowUpStats.hideTip();
+    if (view === "agenda") renderAgenda();
     if (view === "map") setTimeout(() => {
       map.invalidateSize();
       if (state.pendingFocus) {
@@ -1335,6 +1443,42 @@
     }, 0);
   }
   $("#statsBtn").addEventListener("click", () => setView(statsView.hidden ? "stats" : "map"));
+  $("#agendaBtn").addEventListener("click", () => setView(agendaView.hidden ? "agenda" : "map"));
+
+  // Knoppen in de agenda: maand vooruit of achteruit, een dag kiezen, en per
+  // regel afvinken, aanpassen of naar de fiche gaan.
+  agendaView.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-ag]");
+    if (b) {
+      const row = b.closest(".ag-row");
+      if (row) {
+        const h = byId(row.dataset.hid);
+        const p = h && h.planned.find((x) => x.id === row.dataset.pid);
+        if (!h || !p) return;
+        if (b.dataset.ag === "done") return activityDialog(h, null, p);
+        if (b.dataset.ag === "edit") return plannedDialog(h, p);
+        if (b.dataset.ag === "open") { setView("map"); select(h.id, true); }
+        return;
+      }
+      const a = state.agenda;
+      if (b.dataset.ag === "prev" || b.dataset.ag === "next") {
+        // Via Date, zodat december → januari het jaar meeneemt.
+        const d = new Date(a.y, a.m + (b.dataset.ag === "next" ? 1 : -1), 1);
+        state.agenda = { y: d.getFullYear(), m: d.getMonth(), day: "" };
+      } else if (b.dataset.ag === "today") {
+        const d = new Date();
+        state.agenda = { y: d.getFullYear(), m: d.getMonth(), day: "" };
+      } else if (b.dataset.ag === "clear") {
+        state.agenda = { ...a, day: "" };
+      } else return;
+      return renderAgenda();
+    }
+    const cell = e.target.closest("[data-day]");
+    if (!cell) return;
+    // Dezelfde dag opnieuw aantikken toont weer de hele maand.
+    state.agenda = { ...state.agenda, day: state.agenda.day === cell.dataset.day ? "" : cell.dataset.day };
+    renderAgenda();
+  });
   document.querySelector(".tabbar").addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b) return;
@@ -1345,7 +1489,7 @@
   });
   try {
     const saved = localStorage.getItem("followup-view");
-    if (saved && saved !== "stats") setView(saved);
+    if (saved && saved !== "stats" && saved !== "agenda") setView(saved);
   } catch (e) { /* privévenster */ }
 
   // ---------- menu (⋯) ----------

@@ -20,7 +20,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-  <link rel="stylesheet" href="styles.css?v=202611041915">
+  <link rel="stylesheet" href="styles.css?v=202611051200">
 </head>
 <body data-view="map">
   <header class="topbar">
@@ -32,6 +32,7 @@
     <div class="top-actions">
       <span class="save-state" id="saveState"></span>
       <button class="btn ghost lang" id="langBtn" title="Switch to English">English</button>
+      <button class="btn ghost desktop-only" id="agendaBtn" data-i18n="btn.agenda">Agenda</button>
       <button class="btn ghost desktop-only" id="statsBtn" data-i18n="btn.stats">Statistieken</button>
       <button class="btn primary desktop-only" id="addHospitalBtn" data-i18n="btn.addHospital">+ Ziekenhuis</button>
       <div class="menu">
@@ -93,6 +94,7 @@
 
     <aside class="fiche" id="fiche" hidden></aside>
     <section class="stats-view" id="statsView" hidden></section>
+    <section class="agenda-view" id="agendaView" hidden></section>
   </main>
 
   <nav class="tabbar" aria-label="Navigatie" data-i18n-aria="nav.aria">
@@ -103,6 +105,10 @@
     <button data-view="map" class="active">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg>
       <span data-i18n="nav.map">Kaart</span>
+    </button>
+    <button data-view="agenda">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+      <span data-i18n="nav.agenda">Agenda</span>
     </button>
     <button data-view="stats">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
@@ -131,11 +137,11 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js" integrity="sha384-rwykjmWNwVxboyFmvK9OXN0wj9hnMHA2aAHtits54DuACyCq0M2PrSNxhRb+hvXT" crossorigin="anonymous"></script>
-  <script src="config.js?v=202611041915"></script>
-  <script src="domain.js?v=202611041915"></script>
-  <script src="i18n.js?v=202611041915"></script>
-  <script src="stats.js?v=202611041915"></script>
-  <script src="storage.js?v=202611041915"></script>
-  <script src="app.js?v=202611041915"></script>
+  <script src="config.js?v=202611051200"></script>
+  <script src="domain.js?v=202611051200"></script>
+  <script src="i18n.js?v=202611051200"></script>
+  <script src="stats.js?v=202611051200"></script>
+  <script src="storage.js?v=202611051200"></script>
+  <script src="app.js?v=202611051200"></script>
 </body>
 </html>
