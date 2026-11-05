@@ -143,6 +143,22 @@
   window.addEventListener("beforeunload", (e) => {
     if (dirty) e.preventDefault();
   });
+
+  // Een tekstvak drukt alleen af wat in het kadertje past; de rest valt weg,
+  // en net in de notities staat waarom een ziekenhuis ligt zoals het ligt.
+  // Vlak voor het afdrukken rekken we het vak op tot de inhoud en daarna weer
+  // terug. Niet elke browser stuurt beforeprint, vandaar ook de mediaquery.
+  function fitTextareasForPrint(on) {
+    document.querySelectorAll("textarea").forEach((ta) => {
+      ta.style.height = on ? ta.scrollHeight + "px" : "";
+    });
+  }
+  window.addEventListener("beforeprint", () => fitTextareasForPrint(true));
+  window.addEventListener("afterprint", () => fitTextareasForPrint(false));
+  const printMedia = window.matchMedia("print");
+  if (printMedia.addEventListener) {
+    printMedia.addEventListener("change", (e) => fitTextareasForPrint(e.matches));
+  }
   function showBanner(msg, reload = false) {
     const b = $("#banner");
     b.textContent = msg;

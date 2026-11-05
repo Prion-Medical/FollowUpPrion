@@ -98,6 +98,13 @@ instead. Derived like `isOverdue()`, so nothing is stored and nothing migrates.
 `autoStatus()` and `stageStatus()` hold the rules. Manual override must always remain
 possible.
 
+**Printing.** `@media print` at the foot of `styles.css` strips the furniture —
+map, menu, tab bar, every button — and prints whichever pane is open: the
+hospital record, the statistics or the agenda, falling back to the list when
+nothing is open. A `<textarea>` only prints what fits in its box, so
+`fitTextareasForPrint()` stretches them on `beforeprint` and puts them back
+afterwards. Colour carries meaning on these pages, hence `print-color-adjust`.
+
 **CSV export** uses `;` separators, decimal commas and a BOM, because Excel on Belgian
 and Dutch locales expects that.
 

@@ -566,3 +566,71 @@ label.field textarea:focus-visible,
 }
 @keyframes sheet-up { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { dialog[open] { animation: none; } }
+
+/* ---------- afdrukken ---------- */
+/* Op papier is er geen kaart, geen menu en niets om op te klikken: wat
+   overblijft is het dossier zelf, zodat je met één blad een gesprek in kan.
+   Staat er geen ziekenhuis open, dan rolt de werklijst eruit — handig om een
+   filter als "stil gevallen" op papier af te werken. */
+@media print {
+  @page { margin: 14mm; }
+  html, body { height: auto; background: #fff; }
+  body { display: block; font-size: 10.5pt; }
+  .layout { display: block; min-height: 0; }
+
+  /* De bediening hoort op het scherm, niet op papier. */
+  .topbar, .tabbar, .banner, .toast, .login, .map-wrap, dialog,
+  .fiche-foot, .search, .filters, .btn, .icon-btn, .c-actions, .t-acts,
+  .status-pick button:not(.active) { display: none !important; }
+
+  /* Het dossier is op het scherm een kolom met een eigen schuifbalk; op
+     papier mag het gewoon doorlopen. */
+  .fiche {
+    position: static; width: auto; max-width: none; height: auto;
+    overflow: visible; border: 0; box-shadow: none; background: #fff;
+  }
+  /* De kop plakt op het scherm bovenaan; op papier zou hij over de tekst
+     kunnen vallen of zich herhalen. */
+  .fiche-head { position: static; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  /* "Locatie op kaart" is alleen een paar knoppen: zonder die knoppen blijft
+     er een kopje boven het niets staan. */
+  .field:has([data-act="place"]), .field:has([data-act="drag"]) { display: none; }
+
+  /* De lijst alleen als er niets anders openstaat. */
+  .sidebar { display: none; }
+  .layout:has(.fiche[hidden]):has(.stats-view[hidden]):has(.agenda-view[hidden]) .sidebar {
+    display: flex; width: auto; border: 0;
+  }
+  .list { overflow: visible; }
+
+  /* Invulvelden zijn op papier gewoon tekst: geen randjes, geen pijltjes.
+     Vinkjes houden hun vorm, anders staat er niet meer wát er aangevinkt is. */
+  input:not([type="checkbox"]), select, textarea {
+    border: 0 !important; padding: 0 !important; background: none !important;
+    color: var(--ink); appearance: none; -webkit-appearance: none;
+  }
+  select, textarea { font-family: inherit; font-size: inherit; }
+  textarea { height: auto; min-height: 0; overflow: visible; resize: none; }
+
+  /* Kleur draagt hier betekenis — de stip, het merkje, de soort contactmoment.
+     Zonder dit laat de browser die vlakjes bij het afdrukken gewoon weg. */
+  .dot, .badge, .tag, .type-pill, input[type="checkbox"], .status-pick button.active {
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  /* Op de statistiekpagina zegt de gekozen filter wat de cijfers betekenen;
+     de niet-gekozen knoppen zeggen op papier niets. */
+  .s-seg { border: 0; }
+  .s-seg button:not(.active) { display: none; }
+  .s-seg button.active { background: none !important; color: var(--ink) !important; padding: 0 6px; }
+
+  /* Van de drie statusknoppen blijft alleen de gekozene over, als tekst. */
+  .status-pick { display: block; }
+  .status-pick button.active {
+    border: 0 !important; background: none !important; padding: 0 !important;
+    width: auto; color: var(--ink); font-weight: 600;
+  }
+
+  /* Niets halverwege doorsnijden. */
+  .section, .contact, .timeline li, .stat { break-inside: avoid; }
+  h3 { break-after: avoid; }
+}
