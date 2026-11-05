@@ -41,6 +41,10 @@ overwritten, so a bad save cannot take the day's only copy with it.
 With `public/config.js` filled in, the app talks to Supabase instead and asks for a
 login. `supabase/schema.sql` creates the tables.
 
+Pushing to `main` deploys: GitHub Pages serves the repository root, where `index.html`
+redirects to `public/`. Browsers keep the old files until the `?v=` stamp changes, so a
+deploy that skips the stamp bump ships nothing.
+
 ## Layout
 
 | File | What it is |
@@ -93,10 +97,21 @@ every tag in `public/index.html` — they share one value.
 
 ## Privacy
 
+The repository is **public** and GitHub Pages serves it from `main` at
+<https://prion-medical.github.io/FollowUpPrion/>. Everything committed is therefore
+world-readable *and* fetchable over that URL — `data/`, `supabase/schema.sql` and
+`server.py` included. Treat a commit as a publication.
+
 `data/db.json` is gitignored and must stay that way: once real contacts are entered it
 holds names, phone numbers and e-mail addresses of identifiable clinicians. Do not
-commit it, do not paste its contents into issues or commit messages, and keep the
-repository private.
+commit it and do not paste its contents into issues or commit messages. The same goes
+for `data/seed.json`, which **is** committed: it keeps 40 hospitals with empty
+`contacts[]` and `activities[]`, and no clinician's name, phone number or e-mail
+address may be added to it. `data/backups/` is ignored for the same reason.
+
+What protects the data is the login, not the repository. Sign-up is disabled on the
+Supabase project, so only users created by hand under Authentication → Users can sign
+in; keep it that way, and keep 2FA on the accounts that can reach the dashboard.
 
 The Supabase anon/publishable key in `config.js` is safe to publish — RLS allows only
 authenticated users. Note the current policy is all-or-nothing: any signed-in user can
