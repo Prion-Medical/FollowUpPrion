@@ -152,6 +152,11 @@
   // het type contactmoment zijn vaste sleutels: iets anders vervangen we door
   // de standaardwaarde — zo komt er ook nooit opmaak of script in de data.
   // Nieuw veld toegevoegd? Vul het hier aan, anders breekt oudere data.
+
+  // Wat geen object is, is geen record: zulke rommel valt eruit voordat er
+  // genormaliseerd wordt. Anders struikelt normalize halverwege en rendert de
+  // app op halve data in plaats van de melding te laten zien.
+  const records = (v) => (Array.isArray(v) ? v.filter((x) => x && typeof x === "object") : []);
   function normalizeContact(c) {
     c.id = str(c.id) || uid();
     for (const k of ["name", "role", "phone", "email", "address", "product", "notes"]) c[k] = str(c[k]);
@@ -185,8 +190,8 @@
   function normalize(h) {
     h.id = str(h.id) || uid();
     h.name = str(h.name).trim() || "—";
-    if (!Array.isArray(h.contacts)) h.contacts = [];
-    if (!Array.isArray(h.activities)) h.activities = [];
+    h.contacts = records(h.contacts);
+    h.activities = records(h.activities);
     if (!Array.isArray(h.products)) h.products = [];
     h.contacts.forEach(normalizeContact);
     h.activities.forEach(normalizeActivity);
@@ -199,7 +204,7 @@
     h.notes = str(h.notes);
     h.nextAction = str(h.nextAction);
     h.nextActionDate = dateOrEmpty(h.nextActionDate);
-    if (!Array.isArray(h.planned)) h.planned = [];
+    h.planned = records(h.planned);
     h.planned.forEach(normalizePlanned);
     // Vroeger was er één volgende actie per ziekenhuis: tekst en datum apart,
     // en de tekst mocht er staan zonder datum. Allebei worden ze hier het
