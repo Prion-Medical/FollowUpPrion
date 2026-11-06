@@ -43,7 +43,7 @@ window.FollowUpDomain = (() => {
   const ROOM_TYPES = ["demo", "installation", "order", "cancellation"];
   const PRODUCTS = ["EndoQ", "Ainex"];
   const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "other"];
-  // De videoprocessor (de toren) staat los van de scopes — daar hangt EndoQ of
+  // De toren staat los van de scopes — daar hangt EndoQ of
   // Ainex aan, dus
   // daar valt of staat de aansluiting mee. Bij deze drie komt hij van
   // dezelfde fabrikant, vandaar dezelfde lijst; loopt dat ooit uiteen, dan

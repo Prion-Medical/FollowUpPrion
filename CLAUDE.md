@@ -74,8 +74,9 @@ and numbers are ours and safe.
 
 **Data shape.** One document: `{ version, hospitals: [...] }`. Each hospital carries
 `contacts[]`, `activities[]`, `planned[]` and a `unit` object (scope brands and notes,
-video-processor brands and notes — the processor is what EndoQ or Ainex actually
-plugs into — rooms, rooms with demo/installation, colonoscopies per year, existing
+processor brands and notes — what EndoQ or Ainex actually plugs
+into; the fields are `processorBrands` / `processorNotes` but the Dutch labels say
+"toren", which is what the team calls it — rooms, rooms with demo/installation, colonoscopies per year, existing
 AI, screening). `normalize()` fills
 in missing fields — extend it whenever you add one, so older saved data keeps working.
 
