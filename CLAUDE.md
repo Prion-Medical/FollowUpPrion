@@ -73,8 +73,10 @@ a discipline, not a guarantee — when editing a template, check it. Translated 
 and numbers are ours and safe.
 
 **Data shape.** One document: `{ version, hospitals: [...] }`. Each hospital carries
-`contacts[]`, `activities[]`, `planned[]` and a `unit` object (scope brands, rooms, rooms with
-demo/installation, colonoscopies per year, existing AI, screening). `normalize()` fills
+`contacts[]`, `activities[]`, `planned[]` and a `unit` object (scope brands and notes,
+video-processor brands and notes — the processor is what EndoQ or Ainex actually
+plugs into — rooms, rooms with demo/installation, colonoscopies per year, existing
+AI, screening). `normalize()` fills
 in missing fields — extend it whenever you add one, so older saved data keeps working.
 
 **Planned versus logged.** `activities[]` is the log of what happened, and it drives

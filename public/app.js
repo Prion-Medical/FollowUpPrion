@@ -10,7 +10,7 @@
   // zo moet een nieuwe fase of een nieuw merk maar op één plaats bij.
   const {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS, ROOM_TYPES,
-    PRODUCTS, SCOPE_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, esc,
+    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, esc,
   } = window.FollowUpDomain;
   // Scope-merken zijn eigennamen; enkel "other" is een sleutel met vertaling.
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
@@ -263,14 +263,15 @@
     h.lng = coord(h.lng, 180);
     if (h.lat == null || h.lng == null) { h.lat = null; h.lng = null; }
     if (!h.unit || typeof h.unit !== "object" || Array.isArray(h.unit)) h.unit = {};
-    h.unit.scopeBrands = Array.isArray(h.unit.scopeBrands)
-      ? h.unit.scopeBrands
-          .filter((b) => typeof b === "string")
-          // Vroeger bewaarde de app hier de getoonde tekst; nu de sleutel.
-          .map((b) => (b === "Andere / Other" ? "other" : b))
-      : [];
+    // Vroeger bewaarde de app hier de getoonde tekst; nu de sleutel.
+    const brands = (v) => (Array.isArray(v)
+      ? v.filter((b) => typeof b === "string").map((b) => (b === "Andere / Other" ? "other" : b))
+      : []);
+    h.unit.scopeBrands = brands(h.unit.scopeBrands);
+    h.unit.processorBrands = brands(h.unit.processorBrands);
     for (const k of ["rooms", "roomsDemo", "roomsInstalled", "colosPerYear"]) h.unit[k] = numOrNull(h.unit[k]);
     h.unit.scopeNotes = str(h.unit.scopeNotes);
+    h.unit.processorNotes = str(h.unit.processorNotes);
     h.unit.existingAI = str(h.unit.existingAI);
     h.unit.screening = !!h.unit.screening;
     return h;
@@ -366,7 +367,7 @@
   // ---------- filter + lijst ----------
   function matchesQuery(h, q) {
     if (!q) return true;
-    const hay = [h.name, h.address, h.unit.scopeNotes, h.unit.existingAI, h.notes,
+    const hay = [h.name, h.address, h.unit.scopeNotes, h.unit.processorNotes, h.unit.existingAI, h.notes,
       ...h.contacts.flatMap((c) => [c.name, c.role, c.address, c.email, c.department && t("dept." + c.department)])]
       .join(" ").toLowerCase();
     return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
@@ -508,6 +509,11 @@
 
   // ---------- fiche ----------
   const opt = (value, label, current) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
+  // Twee afvinklijsten met dezelfde merken: de scopes en de videoprocessors.
+  // Welke lijst
+  // een vakje bijwerkt staat in data-brand-list.
+  const brandToggles = (h, key, brands) => `<div class="toggles">${brands.map((b) =>
+    `<label><input type="checkbox" data-brand="${esc(b)}" data-brand-list="${esc(key)}" ${h.unit[key].includes(b) ? "checked" : ""}>${esc(scopeLabel(b))}</label>`).join("")}</div>`;
   const numField = (h, key, label) => `<label class="field">${esc(label)}
       <input type="number" min="0" data-unit="${key}" value="${esc(h.unit[key] ?? "")}">
     </label>`;
@@ -613,10 +619,16 @@
         <p class="muted">${esc(t("unit.unknownOk"))}</p>
         <div class="grid">
           <div class="field full"><span class="field-label">${esc(t("unit.scopeBrands"))}</span>
-            <div class="toggles">${SCOPE_BRANDS.map((b) => `<label><input type="checkbox" data-scope="${esc(b)}" ${h.unit.scopeBrands.includes(b) ? "checked" : ""}>${esc(scopeLabel(b))}</label>`).join("")}</div>
+            ${brandToggles(h, "scopeBrands", SCOPE_BRANDS)}
           </div>
           <label class="field full">${esc(t("unit.scopeNotes"))}
             <input data-unit="scopeNotes" value="${esc(h.unit.scopeNotes)}" placeholder="${esc(t("unit.scopeNotes.ph"))}">
+          </label>
+          <div class="field full"><span class="field-label">${esc(t("unit.processorBrands"))}</span>
+            ${brandToggles(h, "processorBrands", PROCESSOR_BRANDS)}
+          </div>
+          <label class="field full">${esc(t("unit.processorNotes"))}
+            <input data-unit="processorNotes" value="${esc(h.unit.processorNotes)}" placeholder="${esc(t("unit.processorNotes.ph"))}">
           </label>
           ${numField(h, "rooms", t("unit.rooms"))}
           ${numField(h, "colosPerYear", t("unit.colosPerYear"))}
@@ -690,10 +702,11 @@
       h.unit[d.unit] = el.type === "number" ? num(el.value) : el.value;
     } else if (d.unitBool) {
       h.unit[d.unitBool] = el.checked;
-    } else if (d.scope) {
-      h.unit.scopeBrands = el.checked
-        ? [...new Set([...h.unit.scopeBrands, d.scope])]
-        : h.unit.scopeBrands.filter((x) => x !== d.scope);
+    } else if (d.brand) {
+      const list = h.unit[d.brandList] || [];
+      h.unit[d.brandList] = el.checked
+        ? [...new Set([...list, d.brand])]
+        : list.filter((x) => x !== d.brand);
     } else if (d.product) {
       h.products = el.checked ? [...new Set([...h.products, d.product])] : h.products.filter((x) => x !== d.product);
     } else return;
@@ -1246,9 +1259,12 @@
         ]), "text/csv");
       } else if (kind === "units") {
         download(`units-${d}.csv`, csv([
-          [t("col.name"), t("col.country"), t("unit.scopeBrands"), t("unit.scopeNotes"), t("unit.rooms"),
+          [t("col.name"), t("col.country"), t("unit.scopeBrands"), t("unit.scopeNotes"),
+            t("unit.processorBrands"), t("unit.processorNotes"), t("unit.rooms"),
             t("unit.roomsDemo"), t("unit.roomsInstalled"), t("unit.colosPerYear"), t("unit.existingAI"), t("unit.screening")],
-          ...hs.map((h) => [h.name, h.country && t("country." + h.country), h.unit.scopeBrands.join(", "), h.unit.scopeNotes,
+          ...hs.map((h) => [h.name, h.country && t("country." + h.country),
+            h.unit.scopeBrands.map(scopeLabel).join(", "), h.unit.scopeNotes,
+            h.unit.processorBrands.map(scopeLabel).join(", "), h.unit.processorNotes,
             h.unit.rooms ?? "", h.unit.roomsDemo ?? "", h.unit.roomsInstalled ?? "", h.unit.colosPerYear ?? "",
             h.unit.existingAI, h.unit.screening ? t("col.yes") : ""]),
         ]), "text/csv");

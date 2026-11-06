@@ -15,7 +15,7 @@ window.FollowUpStats = (() => {
   const t = (k, v) => I18N.t(k, v);
 
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
-  const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, esc } = window.FollowUpDomain;
+  const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS, esc } = window.FollowUpDomain;
   const SERIES = { EndoQ: "var(--series-1)", Ainex: "var(--series-2)", "": "var(--series-none)" };
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Nog geen doelcijfers afgesproken — vul ze in de app zelf aan. De jaren
@@ -228,14 +228,18 @@ window.FollowUpStats = (() => {
   }
 
   // Welke scope-merken komen voor in de pijplijn? Bepaalt mee of EndoQ of Ainex past.
-  function scopesCard(db) {
+  // Welke merken staan er in de pijplijn — de scopes, en de videoprocessors
+  // waar EndoQ of Ainex op aangesloten moet worden.
+  function brandCard(db, title, brands, key) {
     const hs = hospitals(db);
-    const items = SCOPE_BRANDS
-      .map((b) => ({ label: scopeLabel(b), total: hs.filter((h) => h.unit.scopeBrands.includes(b)).length }))
+    const items = brands
+      .map((b) => ({ label: scopeLabel(b), total: hs.filter((h) => h.unit[key].includes(b)).length }))
       .filter((i) => i.total)
       .sort((a, b) => b.total - a.total);
-    return card(t("stats.scopes"), hbars(items, null, t("stats.noData")));
+    return card(title, hbars(items, null, t("stats.noData")));
   }
+  const scopesCard = (db) => brandCard(db, t("stats.scopes"), SCOPE_BRANDS, "scopeBrands");
+  const processorsCard = (db) => brandCard(db, t("stats.processors"), PROCESSOR_BRANDS, "processorBrands");
 
   function tableCard(db) {
     const list = hospitals(db).slice().sort((a, b) =>
@@ -304,6 +308,7 @@ window.FollowUpStats = (() => {
         ${pipelineCard(db)}
         ${countryCard(db)}
         ${scopesCard(db)}
+        ${processorsCard(db)}
         ${activityCard(db)}
         ${tableCard(db)}
       </div>`;

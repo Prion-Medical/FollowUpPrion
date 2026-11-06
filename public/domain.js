@@ -43,6 +43,12 @@ window.FollowUpDomain = (() => {
   const ROOM_TYPES = ["demo", "installation", "order", "cancellation"];
   const PRODUCTS = ["EndoQ", "Ainex"];
   const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "other"];
+  // De videoprocessor (de toren) staat los van de scopes — daar hangt EndoQ of
+  // Ainex aan, dus
+  // daar valt of staat de aansluiting mee. Bij deze drie komt hij van
+  // dezelfde fabrikant, vandaar dezelfde lijst; loopt dat ooit uiteen, dan
+  // splits je ze hier.
+  const PROCESSOR_BRANDS = SCOPE_BRANDS;
   // Diensten waar een contactpersoon toe behoort. Niet alleen de artsen
   // beslissen mee: ICT, aankoop en de biomedische dienst evengoed.
   const DEPARTMENTS = ["physician", "endoscopy", "it", "purchasing", "biomed", "admin", "other"];
@@ -53,6 +59,6 @@ window.FollowUpDomain = (() => {
 
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, esc,
+    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, esc,
   };
 })();
