@@ -69,8 +69,13 @@ window.FollowUpDomain = (() => {
   //
   // De oproeper geeft de regels zelf mee: elk scherm hangt er zijn eigen
   // data-velden aan, en die vangt het met delegatie weer op.
-  const pickRow = (attrs, label, checked, cls) =>
-    `<label class="${esc(cls || "")}"><input type="checkbox" ${attrs} ${checked ? "checked" : ""}>${esc(label)}</label>`;
+  // type "radio" maakt er een keuze van één. Die vorm gebruiken de dialogen
+  // van een contactmoment en een gepland moment: zo'n moment hoort bij één
+  // product. Dat is geen vergetelheid — de kamers van een installatie tellen
+  // mee voor het doelcijfer van dat product, en "drie kamers voor allebei" is
+  // geen getal dat ergens eerlijk op te tellen valt.
+  const pickRow = (attrs, label, checked, cls, type) =>
+    `<label class="${esc(cls || "")}"><input type="${esc(type || "checkbox")}" ${attrs} ${checked ? "checked" : ""}>${esc(label)}</label>`;
   const pickBox = (label, rows, summaryAttrs, open) =>
     `<details class="pick" ${open ? "open" : ""}><summary ${summaryAttrs || ""}>${esc(label)}</summary>
        <div class="pick-list">${rows}</div></details>`;

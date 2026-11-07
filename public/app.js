@@ -32,7 +32,10 @@
   const state = {
     db: { version: 1, hospitals: [] },
     selectedId: null,
-    filter: { status: "all", product: "all", country: "all", query: "" },
+    // Elke filter is een lijst; leeg betekent geen beperking, dezelfde
+    // betekenis als een leeg bereik op een gebruiker. derived is er één van
+    // twee vragen over de opvolging en sluit zichzelf uit.
+    filter: { statuses: [], products: [], countries: [], derived: "", query: "" },
     placing: null, // {id} wanneer we op de kaart een locatie kiezen
     dragId: null,
     // Welke maand de agenda toont, en eventueel één gekozen dag.
@@ -208,19 +211,13 @@
     // Zonder profiel valt iedereen terug op "alleen lezen". Dat is veilig, maar
     // zonder uitleg lijkt het op een storing: zeg dus wat eraan hapert.
     if (can.noProfile) showBanner(t("rights.noProfile"));
-    // De productchips staan vast in index.html en worden nooit opnieuw
-    // opgebouwd; hier kan het dus wél met JavaScript. "Actie te laat" en "stil
-    // gevallen" staan in dezelfde rij maar zijn geen product — die blijven.
+    // De productfilter biedt enkel aan wat je mag zien; renderFilters() leest
+    // myProducts(). Stond er nog iets aangevinkt dat nu buiten bereik valt,
+    // dan zou de lijst leeg blijven zonder dat je ziet waarom.
     if (can.products.length) {
-      document.querySelectorAll("#productFilters [data-product]").forEach((b) => {
-        if (PRODUCTS.includes(b.dataset.product) && !can.products.includes(b.dataset.product)) b.hidden = true;
-      });
-      // Stond de filter op een product dat nu buiten bereik valt, dan zou de
-      // lijst leeg blijven zonder dat je ziet waarom.
-      if (PRODUCTS.includes(state.filter.product) && !can.products.includes(state.filter.product)) {
-        state.filter.product = "all";
-      }
+      state.filter.products = state.filter.products.filter((p) => can.products.includes(p));
     }
+    renderFilters();
   }
   // Knoppen weghalen kan met CSS, een invulveld op slot zetten niet. Dit loopt
   // na elke render van de fiche, want dan is de opmaak net vervangen.
@@ -507,11 +504,12 @@
   // nooit met een product botsen, dat zijn EndoQ en Ainex.
   const DERIVED_FILTERS = { overdue: isOverdue, quiet: isQuiet };
   function visibleHospitals() {
-    const { status, product, country, query } = state.filter;
+    const { statuses, products, countries, derived, query } = state.filter;
     return state.db.hospitals.filter((h) =>
-      (status === "all" || h.status === status) &&
-      (product === "all" || (DERIVED_FILTERS[product] ? DERIVED_FILTERS[product](h) : h.products.includes(product))) &&
-      (country === "all" || h.country === country) &&
+      (!statuses.length || statuses.includes(h.status)) &&
+      (!products.length || products.some((p) => h.products.includes(p))) &&
+      (!countries.length || countries.includes(h.country)) &&
+      (!derived || DERIVED_FILTERS[derived](h)) &&
       matchesQuery(h, query));
   }
 
@@ -556,19 +554,51 @@
     select(li.dataset.id, true);
   });
 
-  function bindChips(containerSel, key) {
-    $(containerSel).addEventListener("click", (e) => {
-      const b = e.target.closest(".chip");
-      if (!b) return;
-      $(containerSel).querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c === b));
-      state.filter[key] = b.dataset[key];
-      renderList();
-      renderMarkers();
-    });
+  // De drie filters in de zijbalk. Ze staan hier en niet in index.html omdat
+  // de lijsten van de taal afhangen en de producten van je bereik.
+  const FILTERS = [
+    { key: "statuses",  leeg: "filter.all",          items: () => STATUSES,  label: (k) => t("status." + k + ".short") },
+    { key: "products",  leeg: "filter.allProducts",  items: myProducts,      label: (p) => p },
+    { key: "countries", leeg: "filter.allCountries", items: () => COUNTRIES, label: (c) => t("country." + c) },
+  ];
+  function filterLabel(f) {
+    const gekozen = state.filter[f.key];
+    return gekozen.length ? gekozen.map(f.label).join(", ") : t(f.leeg);
   }
-  bindChips("#statusFilters", "status");
-  bindChips("#productFilters", "product");
-  bindChips("#countryFilters", "country");
+  function renderFilters() {
+    $("#pickFilters").innerHTML = FILTERS.map((f) => pickBox(filterLabel(f),
+      f.items().map((k) => pickRow(`data-filter="${esc(f.key)}" data-value="${esc(k)}"`,
+        f.label(k), state.filter[f.key].includes(k))).join(""),
+      `data-fsum="${esc(f.key)}"`)).join("");
+    for (const b of $("#derivedFilters").querySelectorAll(".chip")) {
+      b.classList.toggle("active", b.dataset.derived === state.filter.derived);
+    }
+  }
+  // Niet hertekenen bij elk vinkje: dan klapt de uitklapper dicht. Enkel de
+  // samenvatting bijwerken en de lijst opnieuw opbouwen.
+  $("#pickFilters").addEventListener("change", (e) => {
+    const box = e.target.closest("[data-filter]");
+    if (!box) return;
+    const f = FILTERS.find((x) => x.key === box.dataset.filter);
+    const v = box.dataset.value;
+    state.filter[f.key] = e.target.checked
+      ? [...state.filter[f.key], v]
+      : state.filter[f.key].filter((x) => x !== v);
+    const sum = $(`[data-fsum="${f.key}"]`);
+    if (sum) sum.textContent = filterLabel(f);
+    renderList();
+    renderMarkers();
+  });
+  // De twee opvolgingsknoppen. Nog eens klikken zet ze weer uit; ze sluiten
+  // elkaar uit, want wie iets gepland heeft is nooit stilgevallen.
+  $("#derivedFilters").addEventListener("click", (e) => {
+    const b = e.target.closest(".chip");
+    if (!b) return;
+    state.filter.derived = state.filter.derived === b.dataset.derived ? "" : b.dataset.derived;
+    renderFilters();
+    renderList();
+    renderMarkers();
+  });
 
   // Even wachten met hertekenen: bij elke toetsaanslag alle markers van de
   // kaart halen en opnieuw zetten is zonde van het werk.
@@ -639,6 +669,19 @@
 
   // ---------- fiche ----------
   const opt = (value, label, current) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
+  // Eén product kiezen, in dezelfde uitklapper als overal elders. Radio's en
+  // geen vinkjes: een contactmoment hoort bij één product. Omdat ze allemaal
+  // name="product" dragen, komt de keuze gewoon via FormData binnen en hoeft
+  // de dialoog er verder niets voor te doen.
+  const productOne = (chosen) => pickBox(chosen || "—",
+    [pickRow(`name="product" value=""`, "—", !chosen, "", "radio"),
+     ...myProducts().map((p) => pickRow(`name="product" value="${esc(p)}"`, p, chosen === p, "", "radio"))].join(""),
+    `data-psum`);
+  // De samenvatting meteen bijwerken als er een ander product aangeklikt wordt.
+  const syncProductSummary = (form) => {
+    const sum = form.querySelector("[data-psum]");
+    if (sum) sum.textContent = form.elements.product ? (form.elements.product.value || "—") : "—";
+  };
   // Twee afvinklijsten met dezelfde merken: de scopes en de videoprocessors.
   // Welke lijst
   // een vakje bijwerkt staat in data-brand-list.
@@ -1155,9 +1198,7 @@
         <label class="field">${esc(t("dlg.a.type"))}
           <select name="type">${Object.keys(ACT_TYPES).map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
         </label>
-        <label class="field">${esc(t("dlg.a.product"))}
-          <select name="product">${["", ...myProducts()].map((p) => opt(p, p || "—", v.product)).join("")}</select>
-        </label>
+        <div class="field">${esc(t("dlg.a.product"))}${productOne(v.product)}</div>
         <label class="field">${esc(t("dlg.a.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
@@ -1207,6 +1248,7 @@
     });
     const sync = () => {
       $("#roomsField", form).hidden = !ROOM_TYPES.includes(form.elements.type.value);
+      syncProductSummary(form);
     };
     form.onchange = sync;
     sync();
@@ -1223,16 +1265,14 @@
       contactId: (h.contacts.find((c) => c.primary) || {}).id || "",
       note: "",
     };
-    openDialog(`
+    const form = openDialog(`
       <h2>${esc(p ? t("dlg.plannedEdit") : t("dlg.plannedNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
         <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
         <label class="field">${esc(t("dlg.p.type"))}
           <select name="type">${ACT_TYPE_KEYS.map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
         </label>
-        <label class="field">${esc(t("dlg.p.product"))}
-          <select name="product">${["", ...myProducts()].map((x) => opt(x, x || "—", v.product)).join("")}</select>
-        </label>
+        <div class="field">${esc(t("dlg.p.product"))}${productOne(v.product)}</div>
         <label class="field">${esc(t("dlg.p.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
@@ -1261,6 +1301,7 @@
       scheduleSave();
       renderAll();
     });
+    form.onchange = () => syncProductSummary(form);
   }
 
   // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
@@ -1670,6 +1711,9 @@
     showSaveState(saveState.key, saveState.error);
     $("#statsBtn").textContent = statsView.hidden ? t("btn.stats") : t("btn.backToMap");
     $("#agendaBtn").textContent = agendaView.hidden ? t("btn.agenda") : t("btn.backToMap");
+    // De filters dragen vertaalde labels en worden in JavaScript opgebouwd,
+    // dus data-i18n raakt er niet bij.
+    renderFilters();
     renderAll();
   });
 

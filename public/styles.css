@@ -145,6 +145,15 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.01em; }
 }
 .search input:focus { outline: none; border-color: var(--ink); background: var(--paper); }
 .filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 14px; }
+/* De drie uitklappers in de zijbalk. Ze krijgen elk een gelijk deel van de
+   breedte en breken pas als de naam echt niet past; de samenvatting zelf
+   kapt af in plaats van de rij uit elkaar te duwen. */
+.filters.picks { gap: 6px; }
+.filters.picks .pick { flex: 1 1 0; min-width: 0; }
+.filters.picks .pick > summary { min-height: 30px; padding: 4px 10px; border-radius: 100px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.filters.picks .pick > summary::after { margin-left: 4px; }
+.filters.picks .pick-list { white-space: nowrap; }
 .chip {
   display: inline-flex; align-items: center; gap: 6px; min-height: 30px;
   border: 1px solid var(--line); background: var(--paper); border-radius: 100px; padding: 3px 12px;
