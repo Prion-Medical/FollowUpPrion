@@ -10,7 +10,8 @@
   // zo moet een nieuwe fase of een nieuw merk maar op één plaats bij.
   const {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS, ROOM_TYPES,
-    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES, esc,
+    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
+    esc, pickRow, pickBox,
   } = window.FollowUpDomain;
   // Welke producten deze gebruiker mag gebruiken. Een leeg bereik betekent
   // onbeperkt, dus dan zijn het ze allemaal. De databank schermt het document
@@ -301,7 +302,14 @@
   }
   function normalizeContact(c) {
     c.id = str(c.id) || uid();
-    for (const k of ["name", "role", "phone", "email", "address", "product", "notes"]) c[k] = str(c[k]);
+    for (const k of ["name", "role", "phone", "email", "address", "notes"]) c[k] = str(c[k]);
+    // Een contactpersoon droeg één product. Dat bleek te krap: dezelfde arts is
+    // vaak het aanspreekpunt voor allebei, en met een derde product erbij wordt
+    // dat alleen maar vaker zo. Het oude veld wordt hier omgezet en verdwijnt,
+    // zoals demoDate destijds in planned[] is opgegaan.
+    if (!Array.isArray(c.products)) c.products = str(c.product) ? [str(c.product)] : [];
+    delete c.product;
+    c.products = [...new Set(c.products.filter((p) => typeof p === "string" && p))];
     // De dienst is een vaste sleutel; de functie ernaast blijft vrije tekst.
     c.department = DEPARTMENTS.includes(c.department) ? c.department : "";
     c.primary = !!c.primary;
@@ -730,7 +738,7 @@
               <button class="icon-btn" data-act="primary" data-id="${esc(c.id)}" title="${esc(t("dlg.c.primary"))}">${c.primary ? "★" : "☆"}</button>
               <button class="icon-btn" data-act="edit-contact" data-id="${esc(c.id)}" title="${esc(t("btn.edit"))}">✎</button>
             </div>
-            <div class="c-name">${esc(c.name)}${c.department ? `<span class="tag dept">${esc(t("dept." + c.department))}</span>` : ""}${c.primary ? `<span class="tag primary">${esc(t("tag.primary"))}</span>` : ""}${c.product ? `<span class="tag">${esc(c.product)}</span>` : ""}</div>
+            <div class="c-name">${esc(c.name)}${c.department ? `<span class="tag dept">${esc(t("dept." + c.department))}</span>` : ""}${c.primary ? `<span class="tag primary">${esc(t("tag.primary"))}</span>` : ""}${c.products.map((p) => `<span class="tag">${esc(p)}</span>`).join("")}</div>
             ${c.role ? `<div class="c-role">${esc(c.role)}</div>` : ""}
             ${c.phone ? `<div class="c-line">☎ <a href="tel:${esc(c.phone.replace(/[^\d+]/g, ""))}">${esc(c.phone)}</a></div>` : ""}
             ${c.email ? `<div class="c-line">✉ <a href="mailto:${esc(c.email)}">${esc(c.email)}</a></div>` : ""}
@@ -1059,14 +1067,21 @@
   function syncProducts(h, dropped) {
     for (const p of dropped) {
       if (!p || !h.products.includes(p)) continue;
-      const used = h.contacts.some((c) => c.product === p) || h.activities.some((a) => a.product === p);
+      const used = h.contacts.some((c) => c.products.includes(p)) || h.activities.some((a) => a.product === p);
       if (!used) h.products = h.products.filter((x) => x !== p);
     }
   }
 
   function contactDialog(h, c) {
-    const v = c || { name: "", department: "", role: "", phone: "", email: "", address: "", product: "", notes: "", primary: false };
-    openDialog(`
+    const v = c || { name: "", department: "", role: "", phone: "", email: "", address: "", products: [], notes: "", primary: false };
+    // Leeg betekent hier "geen product", niet "alle" — vandaar het streepje en
+    // niet het label van het beheerscherm.
+    const label = (ps) => (ps.length ? ps.join(", ") : "—");
+    // De vinkjes komen niet via FormData binnen: meerdere vakjes met dezelfde
+    // naam houden er maar één over. We lezen ze bij het opslaan uit het
+    // formulier zelf.
+    const picked = (form) => [...form.querySelectorAll("[data-cproduct]:checked")].map((x) => x.dataset.cproduct);
+    const form = openDialog(`
       <h2>${esc(c ? t("dlg.contactEdit") : t("dlg.contactNew"))}</h2>
       <div class="grid">
         <label class="field full">${esc(t("dlg.c.name"))}<input name="name" required value="${esc(v.name)}"></label>
@@ -1077,9 +1092,11 @@
         <label class="field">${esc(t("dlg.c.phone"))}<input name="phone" value="${esc(v.phone)}"></label>
         <label class="field">${esc(t("dlg.c.email"))}<input name="email" type="email" value="${esc(v.email)}"></label>
         <label class="field full">${esc(t("dlg.c.address"))}<input name="address" value="${esc(v.address)}"></label>
-        <label class="field">${esc(t("dlg.c.product"))}
-          <select name="product">${["", ...myProducts()].map((p) => opt(p, p || "—", v.product)).join("")}</select>
-        </label>
+        <div class="field">${esc(t("dlg.c.products"))}
+          ${pickBox(label(v.products),
+            myProducts().map((p) => pickRow(`data-cproduct="${esc(p)}"`, p, v.products.includes(p))).join(""),
+            `data-csum`)}
+        </div>
         <label class="field check" style="margin-top:16px"><input type="checkbox" name="primary" ${v.primary ? "checked" : ""}>${esc(t("dlg.c.primary"))}</label>
         <label class="field full">${esc(t("dlg.c.notes"))}<textarea name="notes" rows="3">${esc(v.notes)}</textarea></label>
       </div>
@@ -1092,23 +1109,35 @@
         if (!confirm(t("confirm.deleteContact", { name: c.name }))) return;
         h.contacts = h.contacts.filter((x) => x.id !== c.id);
         h.activities.forEach((a) => { if (a.contactId === c.id) a.contactId = ""; });
-        syncProducts(h, [c.product]);
+        syncProducts(h, c.products);
       } else {
         const rec = c || { id: uid() };
-        const hadProduct = c ? c.product : "";
+        const had = c ? [...c.products] : [];
+        // Buiten je bereik mag je niets afvinken wat je niet ziet: de vakjes
+        // tonen alleen myProducts(), dus houden we de rest van wat er stond.
+        const mine = myProducts();
+        const keuze = picked(form);
         Object.assign(rec, {
           name: data.name.trim(), department: data.department, role: data.role.trim(),
-          phone: data.phone.trim(), email: data.email.trim(),
-          address: data.address.trim(), product: data.product, notes: data.notes.trim(), primary: !!data.primary,
+          phone: data.phone.trim(), email: data.email.trim(), address: data.address.trim(),
+          products: [...new Set([...had.filter((p) => !mine.includes(p)), ...keuze])],
+          notes: data.notes.trim(), primary: !!data.primary,
         });
         if (rec.primary) h.contacts.forEach((x) => { if (x !== rec) x.primary = false; });
         if (!c) h.contacts.push(rec);
-        if (rec.product && !h.products.includes(rec.product)) h.products.push(rec.product);
-        if (hadProduct && hadProduct !== rec.product) syncProducts(h, [hadProduct]);
+        for (const p of rec.products) if (!h.products.includes(p)) h.products.push(p);
+        syncProducts(h, had.filter((p) => !rec.products.includes(p)));
       }
       scheduleSave();
       renderAll();
     });
+    // De samenvatting op de uitklapper meteen bijwerken, anders staat er nog
+    // het oude antwoord terwijl de vinkjes al anders staan.
+    form.onchange = (e) => {
+      if (!e.target.dataset.cproduct) return;
+      const sum = form.querySelector("[data-csum]");
+      if (sum) sum.textContent = label(picked(form));
+    };
   }
 
   function activityDialog(h, a, plan) {
@@ -1355,6 +1384,9 @@
   };
   const csv = (rows) => "﻿" + rows.map((r) => r.map(csvCell).join(";")).join("\r\n");
 
+  // Het logo brengt je terug naar de kaart, vanuit elk paneel.
+  $("#homeBtn").addEventListener("click", () => { closeFiche(); setView("map"); });
+
   $("#exportBtn").addEventListener("click", () => {
     openDialog(`
       <h2>${esc(t("dlg.export"))}</h2>
@@ -1389,7 +1421,7 @@
         download(`contacts-${d}.csv`, csv([
           [t("col.hospital"), t("col.name"), t("col.dept"), t("col.role"), t("col.phone"), t("col.email"), t("col.address"), t("col.product"), t("col.isPrimary"), t("col.notes")],
           ...hs.flatMap((h) => h.contacts.map((c) => [h.name, c.name, c.department && t("dept." + c.department), c.role,
-            c.phone, c.email, c.address, c.product, c.primary ? t("col.yes") : "", c.notes])),
+            c.phone, c.email, c.address, c.products.join(" / "), c.primary ? t("col.yes") : "", c.notes])),
         ]), "text/csv");
       } else if (kind === "activities") {
         download(`activities-${d}.csv`, csv([
@@ -1771,12 +1803,9 @@
         </div>
         <div class="u-scope">
           <span class="field-label">${esc(t("users.products"))}</span>
-          <details class="pick">
-            <summary data-usum="${esc(u.id)}">${esc(productsLabel(u.products))}</summary>
-            <div class="pick-list">
-              ${PRODUCTS.map((p) => `<label><input type="checkbox" data-uid="${esc(u.id)}" data-uproduct="${p}" ${u.products.includes(p) ? "checked" : ""}>${esc(p)}</label>`).join("")}
-            </div>
-          </details>
+          ${pickBox(productsLabel(u.products),
+            PRODUCTS.map((p) => pickRow(`data-uid="${esc(u.id)}" data-uproduct="${esc(p)}"`, p, u.products.includes(p))).join(""),
+            `data-usum="${esc(u.id)}"`)}
         </div>
       </div>`;
     usersView.innerHTML = `

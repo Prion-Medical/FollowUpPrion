@@ -100,6 +100,18 @@ new is yours; one whose content changed keeps its author and gets you as last ed
 one that did not change keeps all four values, and if it never had a stamp it does not
 get an empty one invented for it.
 
+**One product or several.** A contact moment and a planned moment carry one
+`product`; a contact carries `products[]`, because the same clinician is often the
+point of contact for both. `normalizeContact()` migrates the old single `product`
+and drops the field, the way `demoDate` was folded into `planned[]`. The database
+reads both shapes — `followup.in_scope()` branches on whether the record has a
+`products` key — and deliberately does **not** rewrite the old shape on the way out:
+that would make loading and saving return a different document and break the check
+that matters most. A contact is visible as soon as one product overlaps your scope,
+and `products` is then trimmed to your scope and merged back with the same
+`(stored − yours) ∪ (payload ∩ yours)` rule as the hospital's own ticks, so you
+cannot take a colleague's product off someone.
+
 **Planned versus logged.** `activities[]` is the log of what happened, and it drives
 status, stage, rooms and both charts. `planned[]` is the agenda and drives none of that —
 deliberately a separate array, so a planned installation can never turn a hospital green

@@ -61,8 +61,23 @@ window.FollowUpDomain = (() => {
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+  // De uitklapper met vinkjes. Staat hier omdat drie schermen hem gebruiken:
+  // het bereik van een gebruiker en de producten van een contactpersoon in
+  // app.js, en de filter op de statistiekpagina in stats.js. Een <select
+  // multiple> kan dit ook, maar die is op een telefoon niet te bedienen en
+  // toont niet wat er aanstaat zonder open te klappen.
+  //
+  // De oproeper geeft de regels zelf mee: elk scherm hangt er zijn eigen
+  // data-velden aan, en die vangt het met delegatie weer op.
+  const pickRow = (attrs, label, checked, cls) =>
+    `<label class="${esc(cls || "")}"><input type="checkbox" ${attrs} ${checked ? "checked" : ""}>${esc(label)}</label>`;
+  const pickBox = (label, rows, summaryAttrs, open) =>
+    `<details class="pick" ${open ? "open" : ""}><summary ${summaryAttrs || ""}>${esc(label)}</summary>
+       <div class="pick-list">${rows}</div></details>`;
+
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES, esc,
+    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
+    esc, pickRow, pickBox,
   };
 })();

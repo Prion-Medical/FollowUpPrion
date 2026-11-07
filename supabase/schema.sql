@@ -242,9 +242,31 @@ $$;
 -- Een regel zonder product blijft voor iedereen zichtbaar. Dat is bewust: de
 -- meeste contactmomenten van vóór deze afscherming hebben geen product, en een
 -- geschiedenis met gaten erin is erger dan een regel te veel zien.
+--
+-- Twee vormen. Een contactmoment en een gepland moment dragen één product in
+-- "product"; een contactpersoon draagt er meerdere in "products", want dezelfde
+-- arts is vaak het aanspreekpunt voor allebei. Bij een lijst volstaat één
+-- overlapping: wie Ainex mag, ziet de arts die EndoQ én Ainex doet.
 create or replace function followup.in_scope(e jsonb, allowed text[]) returns boolean
 language sql immutable set search_path = public as $$
-  select coalesce(e ->> 'product', '') = '' or coalesce(e ->> 'product', '') = any(allowed);
+  select case
+    when e ? 'products'
+      then followup.texts(e -> 'products') = '{}'::text[]
+        or followup.both_in(followup.texts(e -> 'products'), allowed) <> '{}'::text[]
+    else coalesce(e ->> 'product', '') = '' or coalesce(e ->> 'product', '') = any(allowed)
+  end;
+$$;
+
+-- (opgeslagen \ bereik) ∪ (payload ∩ bereik). Zo kan een beperkte opslag nooit
+-- het product van de collega wegnemen, en beslist de gebruiker wel volledig
+-- over het zijne. Geldt voor het ziekenhuis én voor een contactpersoon: allebei
+-- dragen een lijst producten die twee mensen samen invullen.
+create or replace function followup.merge_products(stored jsonb, incoming jsonb,
+                                                   allowed text[]) returns jsonb
+language sql immutable set search_path = public as $$
+  select to_jsonb(followup.product_sort(
+           followup.only_in(followup.texts(stored   -> 'products'), allowed)
+        || followup.both_in(followup.texts(incoming -> 'products'), allowed)));
 $$;
 
 -- Zit er in dit ziekenhuis iets van een product dat jij niet mag? Sinds elk
@@ -302,6 +324,28 @@ language sql immutable set search_path = public as $$
   ), '[]'::jsonb);
 $$;
 
+-- Contactpersonen, met hun productlijst mee afgeschermd. Dezelfde reden als bij
+-- het ziekenhuis: een Ainex-gebruiker die het EndoQ-vinkje van een arts ziet
+-- staan, leest daaruit af dat de collega met die arts bezig is, en hij zou het
+-- kunnen uitzetten ook. Zichtbaar blijft de arts wel — één overlapping volstaat.
+-- Een contactpersoon die het oude "product" nog draagt, gaat ongemoeid mee.
+-- Niet uit beleefdheid: zou hij hier omgezet worden, dan gaf laden-en-opslaan
+-- een ander document terug dan er stond, en dat is precies wat controle 8
+-- bewaakt. De omzetting hoort in normalize() in de app, zoals demoDate destijds.
+-- Hij wordt wel correct afgeschermd — in_scope() leest beide vormen.
+create or replace function followup.scope_contacts(entries jsonb, allowed text[]) returns jsonb
+language sql immutable set search_path = public as $$
+  select coalesce((
+    select jsonb_agg(case when t.e ? 'products'
+                          then t.e || jsonb_build_object('products',
+                                 to_jsonb(followup.product_sort(
+                                   followup.both_in(followup.texts(t.e -> 'products'), allowed))))
+                          else t.e end order by t.i)
+      from jsonb_array_elements(followup.arr(entries)) with ordinality t(e, i)
+     where followup.in_scope(t.e, allowed)
+  ), '[]'::jsonb);
+$$;
+
 -- h.products wordt mee afgeschermd: anders ziet een Ainex-gebruiker een
 -- EndoQ-vinkje staan dat hij niet mag aan- of uitzetten. En fix_planned()
 -- erover, zodat nextAction de nota van zijn eigen eerste geplande moment is
@@ -310,7 +354,7 @@ create or replace function followup.scope_hospital(h jsonb, allowed text[]) retu
 language sql immutable set search_path = public as $$
   select followup.fix_planned(h || jsonb_build_object(
     'products',   to_jsonb(followup.product_sort(followup.both_in(followup.texts(h -> 'products'), allowed))),
-    'contacts',   followup.scope_entries(h -> 'contacts', allowed),
+    'contacts',   followup.scope_contacts(h -> 'contacts', allowed),
     'activities', followup.scope_entries(h -> 'activities', allowed),
     'planned',    followup.scope_entries(h -> 'planned', allowed)));
 $$;
@@ -623,16 +667,28 @@ begin
   -- Binnen het zicht en meegestuurd: de versie van de gebruiker, op dezelfde
   -- plaats. Nieuw: achteraan, zoals de app zelf ook toevoegt. Binnen het zicht
   -- en niet meegestuurd: verwijderd — write_state beslist of dat mocht.
+  --
+  -- Draagt het record een productlijst — vandaag enkel een contactpersoon —
+  -- dan gaat die door dezelfde formule als bij het ziekenhuis in plaats van
+  -- rechtstreeks uit de payload te komen. We kijken naar de vorm van het
+  -- record en niet naar welke lijst het is: zo klopt het ook als er later nog
+  -- een soort bijkomt.
   return coalesce((
     with s as (select t.e, t.i from jsonb_array_elements(followup.arr(stored))   with ordinality t(e, i)),
          p as (select t.e, t.i from jsonb_array_elements(followup.arr(incoming)) with ordinality t(e, i))
     select jsonb_agg(q.e order by q.groep, q.i) from (
       select s.e, 0 as groep, s.i from s where not followup.in_scope(s.e, allowed)
       union all
-      select p.e, 0, s.i from s join p on p.e ->> 'id' = s.e ->> 'id'
+      select case when s.e ? 'products' or p.e ? 'products'
+                  then p.e || jsonb_build_object('products', followup.merge_products(s.e, p.e, allowed))
+                  else p.e end, 0, s.i
+        from s join p on p.e ->> 'id' = s.e ->> 'id'
        where followup.in_scope(s.e, allowed)
       union all
-      select p.e, 1, p.i from p
+      select case when p.e ? 'products'
+                  then p.e || jsonb_build_object('products', followup.merge_products('{}'::jsonb, p.e, allowed))
+                  else p.e end, 1, p.i
+        from p
        where not exists (select 1 from s where s.e ->> 'id' = p.e ->> 'id')
     ) q
   ), '[]'::jsonb);
@@ -652,9 +708,7 @@ create or replace function followup.merge_hospital(stored jsonb, incoming jsonb,
 language sql immutable set search_path = public as $$
   select followup.fix_rooms_demo(stored, followup.fix_planned(
     incoming || jsonb_build_object(
-      'products', to_jsonb(followup.product_sort(
-                    followup.only_in(followup.texts(stored -> 'products'), allowed)
-                    || followup.both_in(followup.texts(incoming -> 'products'), allowed))),
+      'products', followup.merge_products(stored, incoming, allowed),
       'contacts',   followup.merge_entries(stored -> 'contacts',   incoming -> 'contacts',   allowed, 'contactpersoon'),
       'activities', followup.merge_entries(stored -> 'activities', incoming -> 'activities', allowed, 'contactmoment'),
       'planned',    followup.merge_entries(stored -> 'planned',    incoming -> 'planned',    allowed, 'gepland moment'))));
@@ -726,8 +780,16 @@ begin
       raise exception 'followup:out_of_scope nieuw ziekenhuis % met een product dat je niet mag', v_h ->> 'name'
         using errcode = 'PT403', hint = 'out_of_scope';
     end if;
+    -- Ook een splinternieuw ziekenhuis gaat door merge_entries, met een lege
+    -- opgeslagen lijst. Dat kost hier niets en het past dezelfde twee regels
+    -- toe als overal elders: niets van een vreemd product erin, en een
+    -- productlijst op een contactpersoon gesnoeid op het eigen bereik.
     v_ziekenhuizen := v_ziekenhuizen || jsonb_build_array(
-      followup.fix_rooms_demo('{}'::jsonb, followup.fix_planned(v_h)));
+      followup.fix_rooms_demo('{}'::jsonb, followup.fix_planned(
+        v_h || jsonb_build_object(
+          'contacts',   followup.merge_entries('[]'::jsonb, v_h -> 'contacts',   allowed, 'contactpersoon'),
+          'activities', followup.merge_entries('[]'::jsonb, v_h -> 'activities', allowed, 'contactmoment'),
+          'planned',    followup.merge_entries('[]'::jsonb, v_h -> 'planned',    allowed, 'gepland moment')))));
   end loop;
 
   -- We vertrekken van het document in de databank en vervangen enkel wat we

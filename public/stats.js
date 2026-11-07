@@ -15,7 +15,7 @@ window.FollowUpStats = (() => {
   const t = (k, v) => I18N.t(k, v);
 
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
-  const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS, esc } = window.FollowUpDomain;
+  const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS, esc, pickRow, pickBox } = window.FollowUpDomain;
   const SERIES = { EndoQ: "var(--series-1)", Ainex: "var(--series-2)", "": "var(--series-none)" };
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Een doelcijfer aanpassen is schrijven. Zonder dat recht staat het getal er
@@ -37,7 +37,9 @@ window.FollowUpStats = (() => {
   // chart: "subs" = actieve abonnementen (EndoQ en Ainex gaan per abonnement),
   // "installs" = nieuwe installaties per maand, voor als er ooit een product
   // bijkomt dat je één keer verkoopt.
-  const view = { year: String(new Date().getFullYear()), product: "all", chart: "subs" };
+  // products leeg = geen filter, dus alles. Dezelfde betekenis als een leeg
+  // bereik op een gebruiker: niets aangevinkt beperkt niets.
+  const view = { year: String(new Date().getFullYear()), products: [], chart: "subs" };
   let tip;
 
   const fmt = (n, d = 0) => (n == null || isNaN(n) ? "—" : Number(n).toLocaleString(I18N.locale, { maximumFractionDigits: d, minimumFractionDigits: d }));
@@ -66,7 +68,7 @@ window.FollowUpStats = (() => {
       for (const a of h.activities) {
         if (types && !types.includes(a.type)) continue;
         if (!ignoreYear && view.year !== "all" && !a.date.startsWith(view.year)) continue;
-        if (view.product !== "all" && a.product !== view.product) continue;
+        if (view.products.length && !view.products.includes(a.product)) continue;
         out.push({ ...a, hospital: h });
       }
     }
@@ -75,7 +77,7 @@ window.FollowUpStats = (() => {
 
   // Ziekenhuizen, gefilterd op het gekozen product.
   function hospitals(db) {
-    return db.hospitals.filter((h) => view.product === "all" || h.products.includes(view.product));
+    return db.hospitals.filter((h) => !view.products.length || view.products.some((p) => h.products.includes(p)));
   }
 
   // ---------- bouwstenen ----------
@@ -144,7 +146,7 @@ window.FollowUpStats = (() => {
     const year = view.year === "all" ? String(new Date().getFullYear()) : view.year;
     const goals = targetsFor(db, year);
     const byYear = events.filter((a) => a.date.startsWith(year));
-    const products = view.product === "all" ? myProducts() : [view.product];
+    const products = view.products.length ? view.products : myProducts();
     return card(`${t("stats.target")} ${year}`, products.map((p) => {
       // Netto voor dat jaar: wat erbij kwam min wat er weer stopte.
       const done = Math.max(0, sum(byYear.filter((a) => a.product === p), signedRooms));
@@ -282,7 +284,9 @@ window.FollowUpStats = (() => {
   function render(db, el, onTargetsChange) {
     // Buiten bereik geraakt (een beheerder heeft je afscherming aangepast):
     // terug naar alles, anders staan er nullen voor iets wat je niet ziet.
-    if (view.product !== "all" && !myProducts().includes(view.product)) view.product = "all";
+    // Is het bereik ondertussen versmald, dan vallen de vinkjes die er niet
+    // meer bij horen weg in plaats van een lege grafiek op te leveren.
+    view.products = view.products.filter((p) => myProducts().includes(p));
     const years = new Set([String(new Date().getFullYear()), ...Object.keys(DEFAULT_TARGETS)]);
     for (const h of db.hospitals) for (const a of h.activities) years.add(a.date.slice(0, 4));
     const installs = rows(db, { types: ["installation"] });
@@ -303,7 +307,11 @@ window.FollowUpStats = (() => {
             <option value="all" ${view.year === "all" ? "selected" : ""}>${esc(t("stats.all"))}</option>
             ${[...years].sort().reverse().filter((y) => /^\d{4}$/.test(y)).map((y) => `<option ${y === view.year ? "selected" : ""}>${y}</option>`).join("")}
           </select></label>
-          <div class="s-seg">${["all", ...myProducts()].map((p) => `<button data-stat-product="${p}" class="${view.product === p ? "active" : ""}">${p === "all" ? esc(t("stats.all")) : p}</button>`).join("")}</div>
+          <label>${esc(t("stats.product"))} ${pickBox(
+            view.products.length ? view.products.join(", ") : t("stats.pickNone"),
+            pickRow(`data-stat-product="all"`, t("stats.all"), !view.products.length, "pick-all")
+              + myProducts().map((p) => pickRow(`data-stat-product="${esc(p)}"`, p, view.products.includes(p))).join(""),
+            `data-stat-sum`, view.pickOpen)}</label>
           <div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}">${esc(t(key))}</button>`).join("")}</div>
         </div>
       </div>
@@ -328,7 +336,18 @@ window.FollowUpStats = (() => {
       </div>`;
 
     el.querySelector("[data-stat=year]").onchange = (e) => { view.year = e.target.value; render(db, el, onTargetsChange); };
-    el.querySelectorAll("[data-stat-product]").forEach((b) => (b.onclick = () => { view.product = b.dataset.statProduct; render(db, el, onTargetsChange); }));
+    // "Alle" is hier het lege antwoord: aanvinken wist de losse vinkjes, en het
+    // laatste vinkje uitzetten komt op hetzelfde neer.
+    el.querySelectorAll("[data-stat-product]").forEach((b) => (b.onchange = () => {
+      const p = b.dataset.statProduct;
+      if (p === "all") view.products = [];
+      else view.products = b.checked ? [...view.products, p] : view.products.filter((x) => x !== p);
+      render(db, el, onTargetsChange);
+    }));
+    // Elke wijziging tekent de pagina opnieuw, en dan zou de uitklapper
+    // dichtklappen na elk vinkje. We onthouden of hij openstond.
+    const pick = el.querySelector(".pick");
+    if (pick) pick.ontoggle = () => { view.pickOpen = pick.open; };
     el.querySelectorAll("[data-stat-chart]").forEach((b) => (b.onclick = () => { view.chart = b.dataset.statChart; render(db, el, onTargetsChange); }));
     el.querySelectorAll("[data-target-year]").forEach((inp) => (inp.onchange = () => {
       if (!canWrite()) return;

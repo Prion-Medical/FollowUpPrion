@@ -97,7 +97,11 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.01em; }
   -webkit-backdrop-filter: saturate(140%) blur(12px);
   border-bottom: 1px solid var(--line);
 }
-.brand { display: flex; align-items: center; gap: 10px; flex: none; }
+/* Een knop, want het logo brengt je terug naar de kaart — maar hij mag er
+   niet als een knop uitzien: geen rand, geen vulling, alleen een handje. */
+.brand { display: flex; align-items: center; gap: 10px; flex: none;
+  background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
 .brand__logo { height: 28px; width: auto; display: block; }
 .brand__region {
   font-size: 10px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; color: var(--grey);
@@ -468,17 +472,23 @@ body[data-view="users"] .sidebar, body[data-view="users"] .map-wrap, body[data-v
 .u-scope small { flex: 1 1 100%; font-size: 11.5px; color: var(--muted); }
 /* De productkeuze zit in een uitklapper. Met twee producten passen de vinkjes
    nog naast elkaar, met vijf niet meer; de samenvatting op de summary zegt wat
-   er aan staat, zodat je niet hoeft open te klappen om het te zien. */
-.u-scope .pick { position: relative; flex: 1 1 auto; }
-.u-scope .pick > summary { cursor: pointer; list-style: none; padding: 7px 10px; font-size: 14px;
+   er aan staat, zodat je niet hoeft open te klappen om het te zien.
+   Staat hier los van .u-scope: dezelfde uitklapper dient voor de producten van
+   een gebruiker, die van een contactpersoon en de filter op de statistieken. */
+.u-scope .pick { flex: 1 1 auto; }
+.pick { position: relative; }
+.pick > summary { cursor: pointer; list-style: none; padding: 7px 10px; font-size: 14px;
   border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); }
-.u-scope .pick > summary::-webkit-details-marker { display: none; }
-.u-scope .pick > summary::after { content: "\25BE"; float: right; color: var(--grey); }
-.u-scope .pick[open] > summary::after { content: "\25B4"; }
-.u-scope .pick-list { position: absolute; z-index: 5; min-width: 100%; margin-top: 4px;
+.pick > summary::-webkit-details-marker { display: none; }
+.pick > summary::after { content: "\25BE"; float: right; color: var(--grey); }
+.pick[open] > summary::after { content: "\25B4"; }
+.pick-list { position: absolute; z-index: 5; min-width: 100%; margin-top: 4px;
   display: flex; flex-direction: column; gap: 8px; padding: 10px 12px;
   border: 1px solid var(--line); border-radius: var(--radius-lg);
   background: var(--paper); box-shadow: var(--shadow-float); }
+.pick-list label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; white-space: nowrap; }
+/* De scheiding tussen "alle" en de losse producten, op de statistiekpagina. */
+.pick-list .pick-all { border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 2px; }
 
 /* ---------- rechten ---------- */
 /* Wat een rol niet mag, staat niet op het scherm. Dat gebeurt hier en niet in

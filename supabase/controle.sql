@@ -24,7 +24,8 @@ with doc as (select $j${
       "contacts": [
         { "id": "c1", "name": "Dr EndoQ", "product": "EndoQ" },
         { "id": "c2", "name": "Dr Ainex", "product": "Ainex" },
-        { "id": "c3", "name": "Aankoop",  "product": "" } ],
+        { "id": "c3", "name": "Aankoop",  "product": "" },
+        { "id": "c6", "name": "Dr Allebei", "products": ["EndoQ", "Ainex"] } ],
       "activities": [
         { "id": "a1", "date": "2026-01-02", "type": "call",  "product": "EndoQ", "note": "",
           "createdBy": "U1", "createdAt": "2026-01-02", "updatedBy": "U1", "updatedAt": "2026-01-02" },
@@ -69,6 +70,15 @@ gewijzigd as (
                {"id":"p2","date":"2026-02-20","type":"visit","product":"Ainex","note":"langsgaan"}]'::jsonb),
            '{hospitals,0,planned}', '[]'::jsonb),
          '{Ainex}'::text[], false) as n
+  from mijn),
+
+-- En hier zet hij alle productvinkjes van Dr Allebei uit. Hij ziet er maar
+-- één staan, dus het EndoQ-vinkje mag daar niet mee sneuvelen: dat is niet
+-- van hem. Index 2 is c6 in zijn beeld — c1 valt weg, dus c2, c3, c6.
+strippen as (
+  select d, followup.merge_doc(d,
+           jsonb_set(s, '{hospitals,0,contacts,2,products}', '[]'::jsonb),
+         '{Ainex}'::text[], false) as n
   from mijn)
 
 select nr, controle,
@@ -81,8 +91,8 @@ from (
          (select jsonb_agg(h ->> 'id') from jsonb_array_elements(s -> 'hospitals') h) from mijn
   union all select 2, 'products is gesnoeid op het bereik',
          '["Ainex"]'::jsonb, s #> '{hospitals,0,products}' from mijn
-  union all select 3, 'contactpersonen: eigen product en die zonder product',
-         '["c2", "c3"]'::jsonb,
+  union all select 3, 'contactpersonen: eigen product, zonder product, en beide',
+         '["c2", "c3", "c6"]'::jsonb,
          (select jsonb_agg(c ->> 'id') from jsonb_array_elements(s #> '{hospitals,0,contacts}') c) from mijn
   union all select 4, 'contactmomenten: EndoQ valt weg',
          '["a2", "a3", "a5"]'::jsonb,
@@ -104,7 +114,7 @@ from (
          '["a1", "a2", "a3", "a4", "a5"]'::jsonb,
          (select jsonb_agg(a ->> 'id') from jsonb_array_elements(n #> '{hospitals,0,activities}') a) from rondgang
   union all select 10, 'rondgang: de EndoQ-contactpersoon is onaangeroerd',
-         '["c1", "c2", "c3"]'::jsonb,
+         '["c1", "c2", "c3", "c6"]'::jsonb,
          (select jsonb_agg(c ->> 'id') from jsonb_array_elements(n #> '{hospitals,0,contacts}') c) from rondgang
   union all select 11, 'rondgang: het EndoQ-ziekenhuis bestaat nog',
          '["h1", "h2", "h3", "h4"]'::jsonb,
@@ -195,6 +205,23 @@ from (
          '"langsgaan"'::jsonb, s #> '{hospitals,0,nextAction}' from mijn
   union all select 31, 'nextActionDate volgt mee, niet die van het EndoQ-moment',
          '"2026-02-20"'::jsonb, s #> '{hospitals,0,nextActionDate}' from mijn
+
+  -- --- een contactpersoon met meerdere producten ---------------------------
+  -- Dezelfde arts doet vaak EndoQ én Ainex. Hij blijft zichtbaar zodra er één
+  -- product overlapt, maar het vinkje van de collega hoort hij niet te zien en
+  -- al helemaal niet te kunnen uitzetten.
+  union all select 32, 'contactpersoon met beide producten: enkel het eigen vinkje komt door',
+         '["Ainex"]'::jsonb, s #> '{hospitals,0,contacts,2,products}' from mijn
+  union all select 33, 'de oude vorm met één product wordt bij het lezen niet omgezet',
+         to_jsonb(true), to_jsonb((s #> '{hospitals,0,contacts,0}') ? 'product') from mijn
+  union all select 34, 'rondgang: het EndoQ-vinkje van die contactpersoon blijft staan',
+         '["EndoQ", "Ainex"]'::jsonb,
+         (select c -> 'products' from jsonb_array_elements(n #> '{hospitals,0,contacts}') c
+           where c ->> 'id' = 'c6') from rondgang
+  union all select 35, 'Ainex kan het EndoQ-vinkje van een contactpersoon niet wegnemen',
+         '["EndoQ"]'::jsonb,
+         (select c -> 'products' from jsonb_array_elements(n #> '{hospitals,0,contacts}') c
+           where c ->> 'id' = 'c6') from strippen
 ) q(nr, controle, verwacht, gekregen)
 order by nr;
 
