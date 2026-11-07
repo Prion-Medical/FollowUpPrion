@@ -76,8 +76,13 @@ window.FollowUpDomain = (() => {
   // geen getal dat ergens eerlijk op te tellen valt.
   const pickRow = (attrs, label, checked, cls, type) =>
     `<label class="${esc(cls || "")}"><input type="${esc(type || "checkbox")}" ${attrs} ${checked ? "checked" : ""}>${esc(label)}</label>`;
+  // De samenvatting staat in een eigen span en niet los in de summary. Twee
+  // redenen: het pijltje ernaast is een flex-item en blijft zo op dezelfde
+  // regel staan, en de oproepers die de tekst bijwerken met textContent
+  // zouden dat pijltje anders mee overschrijven. De data-velden gaan daarom
+  // op die span, waar die oproepers ze ook zoeken.
   const pickBox = (label, rows, summaryAttrs, open) =>
-    `<details class="pick" ${open ? "open" : ""}><summary ${summaryAttrs || ""}>${esc(label)}</summary>
+    `<details class="pick" ${open ? "open" : ""}><summary><span class="pick-label" ${summaryAttrs || ""}>${esc(label)}</span></summary>
        <div class="pick-list">${rows}</div></details>`;
 
   return {
