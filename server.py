@@ -121,7 +121,13 @@ class Handler(SimpleHTTPRequestHandler):
         if not self.path.startswith("/api/"):
             self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "same-origin")
+        # "same-origin" stuurt bij een verzoek naar een andere host helemaal
+        # geen Referer mee, en OpenStreetMap weigert tegels zonder: dan staat
+        # de kaart vol "Access blocked". Hiermee krijgt die enkel de oorsprong
+        # (http://localhost:8080/), nooit het pad; onze eigen verzoeken houden
+        # de volledige verwijzing. GitHub Pages zet deze kop niet, dus daar
+        # speelde het niet.
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         super().end_headers()
 
     def log_message(self, fmt, *args):

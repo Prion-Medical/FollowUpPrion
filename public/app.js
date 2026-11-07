@@ -279,7 +279,12 @@
 
   // ---------- kaart ----------
   const map = L.map("map", { zoomControl: true }).fitBounds(REGION_BOUNDS);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  // Zonder {s}: de subdomeinen a/b/c zijn de oude vorm en openen drie
+  // verbindingen waar één volstaat. OpenStreetMap blokkeert daarop, en dan
+  // staat de kaart vol "Access blocked"-tegels. Zet je de subdomeinen terug,
+  // pas dan ook img-src in index.html aan: *.tile.openstreetmap.org en de
+  // kale hostnaam dekken elkaar niet.
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
