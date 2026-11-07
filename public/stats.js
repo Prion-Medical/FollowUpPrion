@@ -18,6 +18,17 @@ window.FollowUpStats = (() => {
   const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS, esc } = window.FollowUpDomain;
   const SERIES = { EndoQ: "var(--series-1)", Ainex: "var(--series-2)", "": "var(--series-none)" };
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
+  // Een doelcijfer aanpassen is schrijven. Zonder dat recht staat het getal er
+  // nog wel — het hoort bij de cijfers — maar op slot. storage.js is op dit
+  // punt al geladen; de vangnetten zijn er voor het geval dat ooit verschuift.
+  const canWrite = () => !!(window.FollowUpStore && window.FollowUpStore.can && window.FollowUpStore.can.write);
+  // Hetzelfde bereik als in app.js: leeg betekent alle producten. De databank
+  // stuurt de cijfers van het andere product toch niet mee, maar zonder dit
+  // stond er wel een knop en een doelcijfer van nul voor iets wat je niet ziet.
+  const myProducts = () => {
+    const can = window.FollowUpStore && window.FollowUpStore.can;
+    return can && can.products && can.products.length ? can.products : PRODUCTS;
+  };
   // Nog geen doelcijfers afgesproken — vul ze in de app zelf aan. De jaren
   // schuiven mee met de kalender: dit jaar en de vier volgende.
   const DEFAULT_TARGETS = Object.fromEntries(
@@ -133,7 +144,7 @@ window.FollowUpStats = (() => {
     const year = view.year === "all" ? String(new Date().getFullYear()) : view.year;
     const goals = targetsFor(db, year);
     const byYear = events.filter((a) => a.date.startsWith(year));
-    const products = view.product === "all" ? PRODUCTS : [view.product];
+    const products = view.product === "all" ? myProducts() : [view.product];
     return card(`${t("stats.target")} ${year}`, products.map((p) => {
       // Netto voor dat jaar: wat erbij kwam min wat er weer stopte.
       const done = Math.max(0, sum(byYear.filter((a) => a.product === p), signedRooms));
@@ -142,7 +153,7 @@ window.FollowUpStats = (() => {
       return `<div class="s-target">
         <div class="s-target-head">
           <span><i style="background:${SERIES[p]}"></i>${p}</span>
-          <span><b>${fmt(done)}</b> / <input type="number" min="0" data-target-year="${year}" data-target-product="${p}" value="${goal}" aria-label="${esc(t("stats.target"))} ${p} ${year}"> ${esc(t("stats.roomsLive").toLowerCase())}</span>
+          <span><b>${fmt(done)}</b> / <input type="number" min="0" data-target-year="${year}" data-target-product="${p}" value="${goal}" ${canWrite() ? "" : "readonly"} aria-label="${esc(t("stats.target"))} ${p} ${year}"> ${esc(t("stats.roomsLive").toLowerCase())}</span>
         </div>
         <div class="s-progress"><div style="width:${pct}%;background:${SERIES[p]}"></div></div>
         <small class="muted">${goal ? `${fmt((done / goal) * 100)}% ${esc(t("stats.reached"))}` : "—"}</small>
@@ -269,6 +280,9 @@ window.FollowUpStats = (() => {
 
   // ---------- render ----------
   function render(db, el, onTargetsChange) {
+    // Buiten bereik geraakt (een beheerder heeft je afscherming aangepast):
+    // terug naar alles, anders staan er nullen voor iets wat je niet ziet.
+    if (view.product !== "all" && !myProducts().includes(view.product)) view.product = "all";
     const years = new Set([String(new Date().getFullYear()), ...Object.keys(DEFAULT_TARGETS)]);
     for (const h of db.hospitals) for (const a of h.activities) years.add(a.date.slice(0, 4));
     const installs = rows(db, { types: ["installation"] });
@@ -289,7 +303,7 @@ window.FollowUpStats = (() => {
             <option value="all" ${view.year === "all" ? "selected" : ""}>${esc(t("stats.all"))}</option>
             ${[...years].sort().reverse().filter((y) => /^\d{4}$/.test(y)).map((y) => `<option ${y === view.year ? "selected" : ""}>${y}</option>`).join("")}
           </select></label>
-          <div class="s-seg">${["all", ...PRODUCTS].map((p) => `<button data-stat-product="${p}" class="${view.product === p ? "active" : ""}">${p === "all" ? esc(t("stats.all")) : p}</button>`).join("")}</div>
+          <div class="s-seg">${["all", ...myProducts()].map((p) => `<button data-stat-product="${p}" class="${view.product === p ? "active" : ""}">${p === "all" ? esc(t("stats.all")) : p}</button>`).join("")}</div>
           <div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}">${esc(t(key))}</button>`).join("")}</div>
         </div>
       </div>
@@ -317,6 +331,7 @@ window.FollowUpStats = (() => {
     el.querySelectorAll("[data-stat-product]").forEach((b) => (b.onclick = () => { view.product = b.dataset.statProduct; render(db, el, onTargetsChange); }));
     el.querySelectorAll("[data-stat-chart]").forEach((b) => (b.onclick = () => { view.chart = b.dataset.statChart; render(db, el, onTargetsChange); }));
     el.querySelectorAll("[data-target-year]").forEach((inp) => (inp.onchange = () => {
+      if (!canWrite()) return;
       const y = inp.dataset.targetYear;
       db.targets ||= {};
       db.targets[y] = { ...targetsFor(db, y), [inp.dataset.targetProduct]: Math.max(0, Number(inp.value) || 0) };

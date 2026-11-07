@@ -80,6 +80,26 @@ into; the fields are `processorBrands` / `processorNotes` but the Dutch labels s
 AI, screening). `normalize()` fills
 in missing fields — extend it whenever you add one, so older saved data keeps working.
 
+**Who entered it.** `activities[]` and `planned[]` each carry `createdBy`,
+`createdAt`, `updatedBy` and `updatedAt`. `createdBy` is the user's uuid from
+`app_users` (`"local"` when running on `server.py` with a `localUser` in `config.js`,
+and `""` when nobody is known). Mind the distinction: `date` is when the contact
+moment **happened**, `createdAt` is when someone **entered** it — a visit from last
+week gets typed in today. `stamp()` sets them, and it is called from exactly two
+places: `activityDialog()` and `plannedDialog()`. Records from before this existed
+have empty strings, and everywhere a name is shown, empty means show nothing — better
+no name than a made-up one. Contacts and hospitals carry no stamp.
+
+The browser fills these in so the name appears at once, but **the database overwrites
+them**: `write_state()` strips whatever the client sent and assigns the stamp itself,
+from the id that is actually signed in. It assigns rather than validates, because
+validating would need exceptions (an import restores other people's records; old
+records have no author) and a check with exceptions proves nothing. An import is the
+one carve-out: it restores a backup as it was, stamps included. A record whose id is
+new is yours; one whose content changed keeps its author and gets you as last editor;
+one that did not change keeps all four values, and if it never had a stamp it does not
+get an empty one invented for it.
+
 **Planned versus logged.** `activities[]` is the log of what happened, and it drives
 status, stage, rooms and both charts. `planned[]` is the agenda and drives none of that —
 deliberately a separate array, so a planned installation can never turn a hospital green
@@ -132,9 +152,99 @@ What protects the data is the login, not the repository. Sign-up is disabled on 
 Supabase project, so only users created by hand under Authentication → Users can sign
 in; keep it that way, and keep 2FA on the accounts that can reach the dashboard.
 
-The Supabase anon/publishable key in `config.js` is safe to publish — RLS allows only
-authenticated users. Note the current policy is all-or-nothing: any signed-in user can
-read and write everything.
+The Supabase anon/publishable key in `config.js` is safe to publish — the database
+admits only signed-in users, and a signed-in user cannot reach `app_state` at all.
+Both tables are revoked from `authenticated`; everything goes through `read_state()`
+and `write_state()`, which filter on product. What someone sees and may change is in
+their `app_users` row (see Roles below).
+
+## Roles
+
+`public.app_users` holds one row per user beside `auth.users`: a display name, a role
+and `products[]`. **`products = '{}'` means unrestricted**, not "no products" — there
+is no sensible user who may see nothing, and `viewer` already covers "look, don't
+touch".
+
+| Role | May |
+|---|---|
+| `admin` | everything, plus assigning roles |
+| `editor` | everything with the data, including deleting and importing a backup |
+| `contributor` | add and change; not delete, not import |
+| `viewer` | read, print and export only |
+
+A trigger on `auth.users` gives every new account an `app_users` row at `viewer`, so a
+user created by hand in the dashboard starts at least privilege and an admin promotes
+them in the app. The schema also promotes the oldest account to `admin` the first time
+it runs, otherwise nobody could assign anything. Creating accounts stays a dashboard
+job: that needs the service key, which must never be in a public repo.
+
+Three layers enforce this, and only one of them is real security:
+
+- **The database.** An RLS policy on `app_state` lets only `admin`, `editor` and
+  `contributor` write. A `viewer` is refused by Postgres whatever the browser does.
+- **`scheduleSave()` and `openDialog()`** in `app.js` refuse a write or a delete
+  without the right. A backstop, so no forgotten path slips through — and it can say
+  so immediately instead of after a failed save.
+- **`styles.css`,** keyed on `body[data-rights]`, hides what a role may not do.
+  Comfort, not a wall. It lives in CSS and not in JavaScript because every render
+  replaces `innerHTML`, which a CSS rule survives and a JS pass does not.
+
+All four are enforced by the database, not just by the browser. `write_state()` takes
+an inventory of every record id before and after, so it can see that something *inside*
+the document disappeared — that is what makes `contributor`'s "no delete" real. The
+same inventory excuses the one legitimate disappearance: ticking a planned moment off
+removes it and adds a contact moment **with the same id**, so `activityDialog()`
+reuses `plan.id` instead of minting a new one. Change that and a `contributor` can no
+longer work through the agenda.
+
+## The product wall
+
+`app_users.products` restricts someone to EndoQ or Ainex, and it is a wall, not a
+filter: `read_state()` strips the other product's contacts, contact moments and
+planned moments before the row leaves the database, so that data never reaches the
+browser at all.
+
+**The wall goes around the data, not around the hospital.** Every hospital stays
+visible to everyone — the whole list, the whole map. What a restricted user loses is
+the other product's records inside it, that product's tick in `products`, its column
+in the statistics and its option in every dropdown. A hospital nobody has logged
+anything against yet is simply a prospect the whole team can see.
+
+It worked the other way round at first: a hospital was visible only if its `products`
+overlapped yours. With a real dataset, where no hospital has a product assigned until
+someone logs a contact, that hid everything from everybody — and ticking both products
+on an account reads like "may see everything" while actually meaning "restricted to
+these two", which hid the lot. Visibility now depends on nothing at all.
+
+`write_state()` is the dangerous half, because a restricted user only ever holds part
+of the document. It therefore builds the new document **from what is stored** and
+replaces only the slices that user could see; it never builds from the payload. Two
+rules are worth knowing:
+
+- Hospital-level fields and `unit` are **shared** — an Ainex user correcting the
+  address shares that with the EndoQ colleague. That is collaboration, not a leak.
+  Deleting a hospital is not shared: `followup.vreemde_data()` refuses it when
+  anything inside belongs to a product you may not see. Checking `products` alone
+  would not do, since an empty `products` is a subset of every scope — and that is
+  exactly the hospital that may still hold a colleague's contact moments.
+  `products` is the exception: `(stored − yours) ∪ (payload ∩ yours)`, so you cannot
+  strip the other product and push a hospital out of a colleague's view.
+- Outside an import, at most one hospital and five records may disappear in a single
+  save. The app deletes one thing at a time behind a `confirm()`, so no real save ever
+  reaches that cap. It catches the case that no merge rule can: a user whose scope was
+  just widened sends the small document they were holding, which would otherwise count
+  as a wholesale replace.
+
+`unit.roomsDemo` and `nextAction`/`nextActionDate` are recomputed server-side after the
+merge, because the client derives them from a list it only half has. `roomsDemo` only
+when the demo activities themselves changed: the field is also typed by hand in the
+record, and recomputing on every save would wipe what someone put there.
+`unit.roomsInstalled` is not: `syncRooms()` applies a *difference*, not a sum, so it is
+already safe.
+
+Run `supabase/controle.sql` in the SQL editor after any change to these functions. It
+reports OK or FOUT per check and needs no eyeballing; the one that matters is "laden en
+opslaan verandert niets".
 
 ## Git
 
@@ -153,8 +263,16 @@ Not bugs; decisions. Reviewers will flag them, so the reasoning is recorded here
 - **One JSON document, last-write-wins** with an `updated_at` check. A conflict is
   detected and reported rather than silently lost, but two people editing at once means
   one of them redoes their work. Fine for a handful of users; it does not scale further.
-- **Blanket RLS.** Any authenticated user sees everything. Acceptable while the user
-  base is the Prion team.
+- **Two people editing at once still collide.** The conflict check is per document,
+  not per hospital, so an Ainex and an EndoQ user saving in the same second means one
+  of them redoes their work — even though they touched different records.
+- **"No importing" stops a deletion, not a rewrite.** `mode` comes from the client, so
+  a `contributor` with the developer console can send an old backup as an ordinary save:
+  if no id disappears, the inventory lets it through and every field is rolled back
+  anyway. The inventory is the real line; the import flag is about shape, not intent.
+- **Restoring a backup is a dashboard job.** `app_state_backups` is revoked from
+  `authenticated`, because it holds the full unscoped document and would have been a
+  door next to the wall.
 - **No tests.** If this changes, plain Node assertions over the pure functions
   (`normalize`, VRR-style maths, CSV writing, i18n key coverage) — not a test framework.
 - **`app.js` is large** for a single file. Splitting it is reasonable eventually, but

@@ -10,8 +10,18 @@
   // zo moet een nieuwe fase of een nieuw merk maar op één plaats bij.
   const {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS, ROOM_TYPES,
-    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, esc,
+    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES, esc,
   } = window.FollowUpDomain;
+  // Welke producten deze gebruiker mag gebruiken. Een leeg bereik betekent
+  // onbeperkt, dus dan zijn het ze allemaal. De databank schermt het document
+  // al af; dit is er zodat de app geen keuze aanbiedt die toch geweigerd wordt.
+  const myProducts = () => (store.can.products.length ? store.can.products : PRODUCTS);
+  // Welk product staat standaard in een nieuw contactmoment of een planning:
+  // dat van het ziekenhuis als er maar één is, anders het jouwe als jij er maar
+  // één mag.
+  const defaultProduct = (h) => (h.products.length === 1 ? h.products[0]
+    : (myProducts().length === 1 ? myProducts()[0] : ""));
+
   // Scope-merken zijn eigennamen; enkel "other" is een sleutel met vertaling.
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Benelux: west/zuid → oost/noord.
@@ -120,14 +130,23 @@
     el.classList.toggle("error", error);
   }
   function scheduleSave() {
+    // Vangnet achter de knoppen. Een rol zonder schrijfrecht komt hier niet
+    // door, ook niet langs een weg die we vergaten te verbergen. De databank
+    // weigert het trouwens ook — dit is er alleen om het meteen te zeggen in
+    // plaats van na een mislukte opslag.
+    if (!store.can.write) { toast(t("rights.readOnly")); return; }
     dirty = true;
     showSaveState("save.saving");
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, 400);
   }
+  // "import" geldt voor één opslag: de eerstvolgende. Daarna weer gewoon.
+  let saveMode = "save";
   async function save() {
+    const mode = saveMode;
+    saveMode = "save";
     try {
-      await store.save(state.db);
+      await store.save(state.db, mode);
       dirty = false;
       showSaveState("save.saved");
     } catch (e) {
@@ -173,6 +192,45 @@
     b.hidden = !msg;
   }
 
+  // ---------- rechten ----------
+  // Welke knoppen verdwijnen, bepaalt styles.css aan de hand van dit attribuut.
+  // Eén keer zetten is genoeg: het staat op body en overleeft dus elke render,
+  // terwijl een JS-pass na iedere innerHTML opnieuw zou moeten lopen.
+  function applyRights() {
+    const can = store.can;
+    const flags = [];
+    if (!can.write) flags.push("no-write");
+    if (!can.remove) flags.push("no-delete");
+    if (!can.importData) flags.push("no-import");
+    document.body.dataset.rights = flags.join(" ");
+    $("#usersBtn").hidden = !can.manageUsers;
+    // Zonder profiel valt iedereen terug op "alleen lezen". Dat is veilig, maar
+    // zonder uitleg lijkt het op een storing: zeg dus wat eraan hapert.
+    if (can.noProfile) showBanner(t("rights.noProfile"));
+    // De productchips staan vast in index.html en worden nooit opnieuw
+    // opgebouwd; hier kan het dus wél met JavaScript. "Actie te laat" en "stil
+    // gevallen" staan in dezelfde rij maar zijn geen product — die blijven.
+    if (can.products.length) {
+      document.querySelectorAll("#productFilters [data-product]").forEach((b) => {
+        if (PRODUCTS.includes(b.dataset.product) && !can.products.includes(b.dataset.product)) b.hidden = true;
+      });
+      // Stond de filter op een product dat nu buiten bereik valt, dan zou de
+      // lijst leeg blijven zonder dat je ziet waarom.
+      if (PRODUCTS.includes(state.filter.product) && !can.products.includes(state.filter.product)) {
+        state.filter.product = "all";
+      }
+    }
+  }
+  // Knoppen weghalen kan met CSS, een invulveld op slot zetten niet. Dit loopt
+  // na elke render van de fiche, want dan is de opmaak net vervangen.
+  function lockFields(root) {
+    if (store.can.write || !root) return;
+    root.querySelectorAll("input, select, textarea").forEach((el) => {
+      if (el.tagName === "SELECT" || el.type === "checkbox" || el.type === "radio") el.disabled = true;
+      else el.readOnly = true;
+    });
+  }
+
   // Oudere of ingevoerde data kan velden missen of een verkeerd type hebben.
   // Alles wordt hier naar de verwachte vorm gebracht, zodat de rest van de app
   // mag rekenen op strings, getallen en lijsten. Status, fase, land, sector en
@@ -184,6 +242,63 @@
   // genormaliseerd wordt. Anders struikelt normalize halverwege en rendert de
   // app op halve data in plaats van de melding te laten zien.
   const records = (v) => (Array.isArray(v) ? v.filter((x) => x && typeof x === "object") : []);
+
+  // ---------- wie heeft dit ingevoerd ----------
+  // Let op het verschil: date is wanneer het contactmoment gebeurde,
+  // createdAt is wanneer iemand het in de app heeft gezet. Dat is niet
+  // hetzelfde — een bezoek van vorige week voer je vandaag in.
+  //
+  // Oudere records hebben niets van dit alles. Die krijgen hier een lege
+  // string, en overal waar we een naam tonen betekent leeg: niets tonen. Beter
+  // geen naam dan een verzonnen naam.
+  function stampFields(rec) {
+    rec.createdBy = str(rec.createdBy);
+    rec.createdAt = dateOrEmpty(rec.createdAt);
+    rec.updatedBy = str(rec.updatedBy);
+    rec.updatedAt = dateOrEmpty(rec.updatedAt);
+    return rec;
+  }
+  function stamp(rec, isNew) {
+    const id = store.me().id;
+    if (isNew) { rec.createdBy = id; rec.createdAt = today(); }
+    rec.updatedBy = id;
+    rec.updatedAt = today();
+    return rec;
+  }
+  // Namen bij de uuid's uit app_users, één keer opgehaald bij het starten.
+  const people = new Map();
+  async function loadPeople() {
+    try {
+      for (const u of await store.users()) if (u.name) people.set(u.id, u.name);
+    } catch (e) {
+      // Geen lijst (lokaal, of het schema is nog niet uitgevoerd): dan tonen we
+      // gewoon geen namen. Dat is geen reden om de app te laten struikelen.
+    }
+  }
+  function personName(id) {
+    if (!id) return "";
+    // Jezelf kennen we ook zonder de lijst — lokaal is er zelfs geen lijst.
+    if (id === store.me().id) return store.me().name;
+    return people.get(id) || "";
+  }
+  // De regel onderaan een dialoog. Is er niets bekend, dan staat er niets.
+  function stampLine(rec) {
+    if (!rec) return "";
+    const lines = [];
+    if (rec.createdAt) {
+      const by = personName(rec.createdBy);
+      lines.push(by ? t("stamp.created", { name: by, date: fmtDate(rec.createdAt) })
+                    : t("stamp.createdOn", { date: fmtDate(rec.createdAt) }));
+    }
+    // Ook tonen als iemand anders eraan zat op dezelfde dag: we bewaren een
+    // datum en geen tijdstip, dus op de datum alleen zou dat onzichtbaar zijn.
+    if (rec.updatedAt && (rec.updatedAt !== rec.createdAt || rec.updatedBy !== rec.createdBy)) {
+      const by = personName(rec.updatedBy);
+      lines.push(by ? t("stamp.updated", { name: by, date: fmtDate(rec.updatedAt) })
+                    : t("stamp.updatedOn", { date: fmtDate(rec.updatedAt) }));
+    }
+    return lines.length ? `<p class="muted stamp">${esc(lines.join(" · "))}</p>` : "";
+  }
   function normalizeContact(c) {
     c.id = str(c.id) || uid();
     for (const k of ["name", "role", "phone", "email", "address", "product", "notes"]) c[k] = str(c[k]);
@@ -200,6 +315,7 @@
     a.contactId = str(a.contactId);
     a.note = str(a.note);
     a.rooms = ROOM_TYPES.includes(a.type) ? numOrNull(a.rooms) : null;
+    stampFields(a);
     return a;
   }
   // Een gepland moment is géén contactmoment: het staat apart en raakt de
@@ -212,6 +328,7 @@
     p.product = str(p.product);
     p.contactId = str(p.contactId);
     p.note = str(p.note);
+    stampFields(p);
     return p;
   }
   function normalize(h) {
@@ -569,7 +686,8 @@
         <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small primary" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
         ${h.planned.length ? `<ul class="timeline">${h.planned.map((p) => {
           const c = h.contacts.find((x) => x.id === p.contactId);
-          const sub = [p.product, c && c.name].filter(Boolean).join(" · ");
+          const by = personName(p.createdBy);
+          const sub = [p.product, c && c.name, by && t("by", { name: by })].filter(Boolean).join(" · ");
           return `<li class="${p.date < today() ? "late" : ""}">
             <div class="t-date">${esc(fmtDate(p.date))}<span class="t-rel">${esc(relDays(p.date))}</span></div>
             <div class="t-body">
@@ -589,7 +707,9 @@
         <h3>${esc(t("section.activities"))} <button class="btn small primary" data-act="add-activity">${esc(t("btn.addActivity"))}</button></h3>
         ${acts.length ? `<ul class="timeline">${acts.map((a) => {
           const c = h.contacts.find((x) => x.id === a.contactId);
-          const sub = [a.product, c && c.name, a.rooms ? `${a.rooms} ${t("act.rooms")}` : ""].filter(Boolean).join(" · ");
+          const by = personName(a.createdBy);
+          const sub = [a.product, c && c.name, a.rooms ? `${a.rooms} ${t("act.rooms")}` : "",
+            by && t("by", { name: by })].filter(Boolean).join(" · ");
           return `<li>
             <div class="t-date">${esc(fmtDate(a.date))}</div>
             <div class="t-body">
@@ -656,7 +776,7 @@
             <select data-field="sector">${[opt("", "—", h.sector), ...SECTORS.map((s) => opt(s, t("sector." + s), h.sector))].join("")}</select>
           </label>
           <div class="field full"><span class="field-label">${esc(t("field.products"))}</span>
-            <div class="toggles">${PRODUCTS.map((p) => `<label><input type="checkbox" data-product="${p}" ${h.products.includes(p) ? "checked" : ""}>${p}</label>`).join("")}</div>
+            <div class="toggles">${myProducts().map((p) => `<label><input type="checkbox" data-product="${p}" ${h.products.includes(p) ? "checked" : ""}>${p}</label>`).join("")}</div>
           </div>
           <label class="field full">${esc(t("field.address"))}
             <input data-field="address" value="${esc(h.address)}">
@@ -691,6 +811,7 @@
       focusOn(h);
       toast(t("map.addressSet"));
     });
+    lockFields(el);
   }
 
   // Velden in de fiche: opslaan zonder volledige herteken (focus blijft).
@@ -918,7 +1039,13 @@
     form.onsubmit = (e) => {
       const submitter = e.submitter;
       if (!submitter || submitter.value === "cancel") return;
-      if (submitter.value === "delete") { onSubmit(null, "delete"); return; }
+      // Verwijderen is een eigen recht. De knop staat al verborgen voor wie
+      // het niet heeft; dit is het vangnet erachter, net als bij scheduleSave.
+      if (submitter.value === "delete") {
+        if (!store.can.remove) { toast(t("rights.notAllowed")); return; }
+        onSubmit(null, "delete");
+        return;
+      }
       if (!form.reportValidity()) { e.preventDefault(); return; }
       if (onSubmit(Object.fromEntries(new FormData(form)), submitter.value) === KEEP_OPEN) e.preventDefault();
     };
@@ -951,7 +1078,7 @@
         <label class="field">${esc(t("dlg.c.email"))}<input name="email" type="email" value="${esc(v.email)}"></label>
         <label class="field full">${esc(t("dlg.c.address"))}<input name="address" value="${esc(v.address)}"></label>
         <label class="field">${esc(t("dlg.c.product"))}
-          <select name="product">${["", ...PRODUCTS].map((p) => opt(p, p || "—", v.product)).join("")}</select>
+          <select name="product">${["", ...myProducts()].map((p) => opt(p, p || "—", v.product)).join("")}</select>
         </label>
         <label class="field check" style="margin-top:16px"><input type="checkbox" name="primary" ${v.primary ? "checked" : ""}>${esc(t("dlg.c.primary"))}</label>
         <label class="field full">${esc(t("dlg.c.notes"))}<textarea name="notes" rows="3">${esc(v.notes)}</textarea></label>
@@ -988,7 +1115,7 @@
     const v = a || (plan ? { ...plan, rooms: "" } : {
       date: today(),
       type: h.activities.length ? "email" : "prospecting",
-      product: h.products.length === 1 ? h.products[0] : "",
+      product: defaultProduct(h),
       contactId: (h.contacts.find((c) => c.primary) || {}).id || "",
       rooms: "", note: "",
     });
@@ -1000,7 +1127,7 @@
           <select name="type">${Object.keys(ACT_TYPES).map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
         </label>
         <label class="field">${esc(t("dlg.a.product"))}
-          <select name="product">${["", ...PRODUCTS].map((p) => opt(p, p || "—", v.product)).join("")}</select>
+          <select name="product">${["", ...myProducts()].map((p) => opt(p, p || "—", v.product)).join("")}</select>
         </label>
         <label class="field">${esc(t("dlg.a.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
@@ -1008,6 +1135,7 @@
         <label class="field full" id="roomsField">${esc(t("dlg.a.rooms"))}<input type="number" min="0" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
         <label class="field full">${esc(t("dlg.a.note"))}<textarea name="note" rows="4" placeholder="${esc(t("dlg.a.note.ph"))}">${esc(v.note)}</textarea></label>
       </div>
+      ${stampLine(a)}
       <div class="actions">
         ${a ? `<button class="btn danger" value="delete" formnovalidate style="margin-right:auto">${esc(t("btn.delete"))}</button>` : ""}
         <button class="btn" value="cancel" formnovalidate>${esc(t("btn.cancel"))}</button>
@@ -1018,7 +1146,11 @@
         h.activities = h.activities.filter((x) => x.id !== a.id);
         syncRooms(h, a, null);
       } else {
-        const rec = a || { id: uid() };
+        // Komt dit uit de agenda, dan erft het contactmoment het id van het
+        // plan. De databank ziet dan dat p:<id> verdwijnt en a:<id> opduikt, en
+        // weet dat dit afvinken is en geen verwijderen. Niets verwijst naar een
+        // id van een gepland moment, dus hergebruiken kan veilig.
+        const rec = a || { id: plan ? plan.id : uid() };
         const wantsRooms = ROOM_TYPES.includes(data.type);
         // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
         const before = a ? { type: rec.type, rooms: rec.rooms } : null;
@@ -1026,6 +1158,7 @@
           date: data.date, type: data.type, product: data.product, contactId: data.contactId,
           rooms: wantsRooms ? num(data.rooms) : null, note: data.note.trim(),
         });
+        stamp(rec, !a);
         if (!a) h.activities.push(rec);
         // Ook bij een wijziging: een contactmoment dat nú een installatie of
         // een bestelling is, zet de kleur en de fase mee goed.
@@ -1057,7 +1190,7 @@
     const v = p || {
       date: today(),
       type: "visit",
-      product: h.products.length === 1 ? h.products[0] : "",
+      product: defaultProduct(h),
       contactId: (h.contacts.find((c) => c.primary) || {}).id || "",
       note: "",
     };
@@ -1069,13 +1202,14 @@
           <select name="type">${ACT_TYPE_KEYS.map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
         </label>
         <label class="field">${esc(t("dlg.p.product"))}
-          <select name="product">${["", ...PRODUCTS].map((x) => opt(x, x || "—", v.product)).join("")}</select>
+          <select name="product">${["", ...myProducts()].map((x) => opt(x, x || "—", v.product)).join("")}</select>
         </label>
         <label class="field">${esc(t("dlg.p.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
         <label class="field full">${esc(t("dlg.p.note"))}<textarea name="note" rows="3" placeholder="${esc(t("dlg.p.note.ph"))}">${esc(v.note)}</textarea></label>
       </div>
+      ${stampLine(p)}
       <div class="actions">
         ${p ? `<button class="btn danger" value="delete" formnovalidate style="margin-right:auto">${esc(t("btn.delete"))}</button>` : ""}
         <button class="btn" value="cancel" formnovalidate>${esc(t("btn.cancel"))}</button>
@@ -1090,6 +1224,7 @@
           date: data.date, type: data.type, product: data.product,
           contactId: data.contactId, note: data.note.trim(),
         });
+        stamp(rec, !p);
         if (!p) h.planned.push(rec);
         h.planned.sort((a, b) => a.date.localeCompare(b.date));
       }
@@ -1258,8 +1393,8 @@
         ]), "text/csv");
       } else if (kind === "activities") {
         download(`activities-${d}.csv`, csv([
-          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.rooms"), t("col.note")],
-          ...hs.flatMap((h) => h.activities.map((a) => [a.date, h.name, t("act." + a.type), a.product, contactName(h, a.contactId), a.rooms ?? "", a.note]))
+          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.rooms"), t("col.note"), t("col.addedBy")],
+          ...hs.flatMap((h) => h.activities.map((a) => [a.date, h.name, t("act." + a.type), a.product, contactName(h, a.contactId), a.rooms ?? "", a.note, personName(a.createdBy)]))
             .sort((a, b) => b[0].localeCompare(a[0])),
         ]), "text/csv");
       } else if (kind === "units") {
@@ -1280,7 +1415,10 @@
     });
   });
 
-  $("#importBtn").addEventListener("click", () => $("#importFile").click());
+  $("#importBtn").addEventListener("click", () => {
+    if (!store.can.importData) return toast(t("rights.notAllowed"));
+    $("#importFile").click();
+  });
   $("#importFile").addEventListener("change", async (e) => {
     const file = e.target.files[0];
     e.target.value = "";
@@ -1292,6 +1430,7 @@
       data.hospitals.forEach(normalize);
       state.db = data;
       state.selectedId = null;
+      saveMode = "import";
       scheduleSave();
       renderAll();
       fitAll();
@@ -1323,7 +1462,8 @@
 
   function agendaRow({ h, p }) {
     const c = h.contacts.find((x) => x.id === p.contactId);
-    const sub = [t("act." + p.type), p.product, c && c.name].filter(Boolean).join(" · ");
+    const by = personName(p.createdBy);
+    const sub = [t("act." + p.type), p.product, c && c.name, by && t("by", { name: by })].filter(Boolean).join(" · ");
     const when = new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" });
     return `<li class="ag-row ${p.date < today() ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
       <div class="ag-date"><b>${esc(when)}</b><span>${esc(relDays(p.date))}</span></div>
@@ -1411,6 +1551,7 @@
   function renderAll() {
     if (!statsView.hidden) window.FollowUpStats.render(state.db, statsView, scheduleSave);
     if (!agendaView.hidden) renderAgenda();
+    if (!usersView.hidden) renderUsers();
     renderKpis();
     renderList();
     renderMarkers();
@@ -1422,8 +1563,14 @@
     document.documentElement.lang = I18N.lang;
     I18N.applyStatic();
     updateLangBtn();
+    // Eerst het krapste recht, dan pas wat deze gebruiker echt mag. Zo staat er
+    // geen knop klaar zolang we niet weten wie er aanmeldt, en blijft het bij
+    // "niets mogen" als het aanmelden mislukt.
+    applyRights();
     try {
       await store.ready();
+      applyRights();
+      await loadPeople();
       const { db, empty } = await store.load();
       state.db = db;
       // Het versienummer zegt of deze app de vorm van de data nog begrijpt.
@@ -1432,6 +1579,9 @@
       if (Number(state.db.version) > DB_VERSION) showBanner(t("save.newerVersion"));
       state.db.version = Math.max(Number(state.db.version) || 1, DB_VERSION);
       state.db.hospitals.forEach(normalize);
+      // read_state geeft de rol en het bereik mee waarmee dit document is
+      // uitgelezen; is daar iets aan veranderd, dan kloppen de knoppen nu pas.
+      applyRights();
       showSaveState("save.saved");
       if (empty) offerSeed();
     } catch (e) {
@@ -1447,6 +1597,11 @@
   function offerSeed() {
     const b = $("#banner");
     b.textContent = t("seed.empty");
+    // Zonder schrijfrecht blijft het bij de melding: de knop zou toch stuiten
+    // op de grendel in scheduleSave en op de databank. Met een productbeperking
+    // net zo: write_state() laat een leeg project enkel vullen door een
+    // onbeperkte bewerker, want wie maar een deel ziet, zet maar een deel neer.
+    if (!store.can.write || store.can.products.length) { b.hidden = false; return; }
     const btn = document.createElement("button");
     btn.className = "btn small primary";
     btn.textContent = t("seed.load");
@@ -1490,10 +1645,12 @@
   // Op desktop staan lijst en kaart naast elkaar; op gsm kies je via de tabbalk.
   const statsView = $("#statsView");
   const agendaView = $("#agendaView");
+  const usersView = $("#usersView");
   function setView(view) {
     document.body.dataset.view = view;
     statsView.hidden = view !== "stats";
     agendaView.hidden = view !== "agenda";
+    usersView.hidden = view !== "users";
     $("#statsBtn").textContent = view === "stats" ? t("btn.backToMap") : t("btn.stats");
     $("#agendaBtn").textContent = view === "agenda" ? t("btn.backToMap") : t("btn.agenda");
     document.querySelectorAll(".tabbar [data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
@@ -1501,6 +1658,7 @@
     if (view === "stats") window.FollowUpStats.render(state.db, statsView, scheduleSave);
     else window.FollowUpStats.hideTip();
     if (view === "agenda") renderAgenda();
+    if (view === "users") loadUsers();
     if (view === "map") setTimeout(() => {
       map.invalidateSize();
       if (state.pendingFocus) {
@@ -1560,8 +1718,121 @@
   });
   try {
     const saved = localStorage.getItem("followup-view");
-    if (saved && saved !== "stats" && saved !== "agenda") setView(saved);
+    if (saved && !["stats", "agenda", "users"].includes(saved)) setView(saved);
   } catch (e) { /* privévenster */ }
+
+  // ---------- gebruikers ----------
+  // Wie mag wat. Alleen een beheerder komt hier: de menuknop staat verborgen
+  // voor de rest, en de rij-beveiliging weigert de wijziging van ieder ander.
+  //
+  // Nieuwe gebruikers maak je hier niet aan. Dat vraagt de service-sleutel van
+  // het Supabase-project, en die hoort niet in een publieke repo. Het scherm
+  // zegt daarom waar het wél gebeurt.
+  let users = [];
+
+  async function loadUsers() {
+    usersView.innerHTML = `<div class="u-head"><h2>${esc(t("users.title"))}</h2>
+        <p class="muted">${esc(t("users.intro"))}</p></div>
+      <p class="muted">${esc(t("save.saving"))}</p>`;
+    try {
+      // Eén plaats waar de vorm wordt rechtgezet, zodat de rest op een naam,
+      // een rol en een lijst mag rekenen.
+      users = (await store.users()).map((u) => ({
+        id: u.id,
+        name: u.name || "",
+        role: ROLES.includes(u.role) ? u.role : "viewer",
+        products: Array.isArray(u.products) ? u.products : [],
+      }));
+    } catch (e) {
+      usersView.innerHTML += `<p class="login-error">${esc(t("users.failed", { msg: e.message }))}</p>`;
+      return;
+    }
+    renderUsers();
+  }
+
+  // Niets aangevinkt betekent "alles mag". Dat zetten we met zoveel woorden op
+  // de uitklapper: een leeg vakje leest als "niets", en dat is het omgekeerde.
+  const productsLabel = (ps) => (ps.length ? ps.join(", ") : t("users.allProducts"));
+
+  function renderUsers() {
+    const meId = store.me().id;
+    const row = (u) => `
+      <div class="u-row">
+        <div class="u-who">
+          <input data-uid="${esc(u.id)}" data-ufield="name" value="${esc(u.name)}"
+                 placeholder="${esc(t("users.name"))}" aria-label="${esc(t("users.name"))}">
+          ${u.id === meId ? `<div class="u-mail">${esc(t("users.you"))}</div>` : ""}
+        </div>
+        <div class="u-role">
+          <select data-uid="${esc(u.id)}" data-ufield="role" aria-label="${esc(t("users.role"))}">
+            ${ROLES.map((r) => opt(r, t("role." + r), u.role)).join("")}
+          </select>
+          <small data-uhint="${esc(u.id)}">${esc(t("role." + u.role + ".hint"))}</small>
+        </div>
+        <div class="u-scope">
+          <span class="field-label">${esc(t("users.products"))}</span>
+          <details class="pick">
+            <summary data-usum="${esc(u.id)}">${esc(productsLabel(u.products))}</summary>
+            <div class="pick-list">
+              ${PRODUCTS.map((p) => `<label><input type="checkbox" data-uid="${esc(u.id)}" data-uproduct="${p}" ${u.products.includes(p) ? "checked" : ""}>${esc(p)}</label>`).join("")}
+            </div>
+          </details>
+        </div>
+      </div>`;
+    usersView.innerHTML = `
+      <div class="u-head">
+        <h2>${esc(t("users.title"))}</h2>
+        <p class="muted">${esc(t("users.intro"))}</p>
+      </div>
+      ${users.length
+        ? `<div class="u-list">${users.map(row).join("")}</div>`
+        : `<p class="muted">${esc(t("users.none"))}</p>`}`;
+  }
+
+  usersView.addEventListener("change", async (e) => {
+    const el = e.target.closest("[data-uid]");
+    if (!el) return;
+    const u = users.find((x) => x.id === el.dataset.uid);
+    if (!u) return;
+    // Wat het was, om terug te kunnen zetten als de databank weigert.
+    const before = { name: u.name, role: u.role, products: [...u.products] };
+    if (el.dataset.ufield === "name") u.name = el.value.trim();
+    else if (el.dataset.ufield === "role") u.role = el.value;
+    else if (el.dataset.uproduct) {
+      u.products = el.checked
+        ? [...new Set([...u.products, el.dataset.uproduct])]
+        : u.products.filter((x) => x !== el.dataset.uproduct);
+    } else return;
+    try {
+      await store.saveUser(u);
+    } catch (err) {
+      Object.assign(u, before);
+      renderUsers();
+      alert(t("users.failed", { msg: err.message }));
+      return;
+    }
+    // Bijwerken zonder hertekenen: renderUsers() bouwt het scherm opnieuw op en
+    // klapt daarmee de productkeuze dicht, midden in een reeks wijzigingen.
+    toast(t("users.saved"));
+    const sum = usersView.querySelector(`[data-usum="${u.id}"]`);
+    if (sum) sum.textContent = productsLabel(u.products);
+    const hint = usersView.querySelector(`[data-uhint="${u.id}"]`);
+    if (hint) hint.textContent = t("role." + u.role + ".hint");
+    // Je eigen rol of bereik aangepast? Dan gelden er andere rechten dan de app
+    // bij het starten heeft toegepast. Vroeger herlaadden we meteen, maar dat
+    // gooit je bij élk vinkje terug naar de kaart. Nu vraagt de balk erom en
+    // kies je zelf wanneer — met meerdere wijzigingen na elkaar één keer.
+    if (u.id === store.me().id && (before.role !== u.role || String(before.products) !== String(u.products))) {
+      showBanner(t("users.reloadNeeded"), true);
+    }
+  });
+
+  $("#usersBtn").addEventListener("click", () => {
+    if (!store.can.manageUsers) return toast(t("rights.notAllowed"));
+    state.ficheOpen = false;
+    renderFiche();
+    setView("users");
+  });
 
   // ---------- menu (⋯) ----------
   const menuList = $("#menuList");

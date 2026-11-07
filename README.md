@@ -77,18 +77,52 @@ van FollowUp Vaseo** — gebruik dus niet het project van Vaseo, maar maak een n
 2. SQL Editor → New query → plak `supabase/schema.sql` → Run. Dat script mag je
    later opnieuw uitvoeren als het verandert: het maakt niets dubbel aan.
 3. Authentication → Users → **Add user** → voeg ieder van het team toe, met
-   e-mailadres en wachtwoord.
+   e-mailadres en wachtwoord. Iedere nieuwe gebruiker begint als **meelezer**: hij
+   kan alles bekijken en afdrukken, maar niets wijzigen. De rol ken je daarna toe
+   in de app zelf (zie hieronder).
 4. **Zet registratie uit: Authentication → Sign In / Providers → Email → "Allow new
    users to sign up" af.** Niet overslaan. Elke aangemelde gebruiker ziet *alle*
-   gegevens (zo staat het in `supabase/schema.sql`), dus zolang registratie open
-   staat, kan iedereen die het adres van de app kent zelf een account maken en
-   alle contactgegevens lezen.
+   gegevens, dus zolang registratie open staat, kan iedereen die het adres van de
+   app kent zelf een account maken en alle contactgegevens lezen.
 5. Project Settings → API → neem de **Project URL** en de **anon public** sleutel
    over in `public/config.js`. Die sleutel mag publiek staan: de databank laat
    enkel aangemelde gebruikers toe.
 6. Push naar GitHub en zet Pages aan (branch `main`, map `/`).
 
 Bij de eerste keer openen is de databank leeg; de app biedt dan aan om de startlijst te laden.
+
+### Wie mag wat
+
+Het menu **⋯ → Gebruikers** toont iedereen die kan aanmelden. Daar geef je elk een
+naam — die komt in de app naast wat hij invoert — en een rol:
+
+| Rol | Mag |
+|---|---|
+| **Beheerder** | alles, en kent rollen toe |
+| **Bewerker** | alles met de gegevens, ook verwijderen en een back-up importeren |
+| **Aanvuller** | toevoegen en wijzigen, niets verwijderen en niet importeren |
+| **Meelezer** | enkel lezen, afdrukken en exporteren |
+
+Dat scherm is er alleen voor een beheerder. De eerste keer dat je
+`supabase/schema.sql` uitvoert, wordt de oudste gebruiker beheerder — anders kon
+niemand nog een rol toekennen. Gebruikers **aanmaken** doe je in het
+Supabase-dashboard, niet hier: daarvoor is een sleutel nodig die niet in een publieke
+repo thuishoort.
+
+De vinkjes **EndoQ** en **Ainex** beperken iemand tot één productlijn. Geen vinkje
+betekent: alle producten. Die beperking is echt — de ziekenhuizen, contactpersonen,
+contactmomenten en planningen van de andere productlijn komen niet in zijn browser
+terecht, ook niet via een omweg. Een ziekenhuis waar nog geen product aan hangt is
+voor zo iemand onzichtbaar; maakt hij er zelf een aan, dan krijgt het zijn product
+mee.
+
+Wat wél gedeeld blijft bij een ziekenhuis waar beide producten aan werken: de naam,
+het adres, de notities, de fase en de gegevens van de endoscopie-afdeling. Allebei
+kunnen die aanpassen — dat is samen aan één ziekenhuis werken, niet meekijken.
+
+Heb je aan deze afscherming gesleuteld, voer dan `supabase/controle.sql` uit in de
+SQL-editor. Dat script zegt per regel OK of FOUT; staat er ergens FOUT, zet de app dan
+niet online.
 
 > **Let op bij een publieke repo.** Zodra je er echte contactpersonen in zet, staan namen,
 > telefoonnummers en e-mailadressen van artsen in de git-geschiedenis. Zet de repo dan op

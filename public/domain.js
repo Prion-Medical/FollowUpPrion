@@ -54,11 +54,15 @@ window.FollowUpDomain = (() => {
   const DEPARTMENTS = ["physician", "endoscopy", "it", "purchasing", "biomed", "admin", "other"];
   const SECTORS = ["public", "private", "university"];
   const COUNTRIES = ["BE", "NL", "LU"];
+  // Rollen, van veel naar weinig rechten. In de databank staat de sleutel; wat
+  // elke rol precies mag staat in storage.js (RIGHTS) en wordt afgedwongen in
+  // supabase/schema.sql.
+  const ROLES = ["admin", "editor", "contributor", "viewer"];
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, esc,
+    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES, esc,
   };
 })();
