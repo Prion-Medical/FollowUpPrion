@@ -236,7 +236,10 @@ rules are worth knowing:
   as a wholesale replace.
 
 `unit.roomsDemo` and `nextAction`/`nextActionDate` are recomputed server-side after the
-merge, because the client derives them from a list it only half has. `roomsDemo` only
+merge, because the client derives them from a list it only half has. `nextAction` is
+recomputed on the way **out** as well: it holds the note of the first planned moment,
+and that moment may be the other product's — sending it unrecomputed would hand a
+restricted browser the text of a record the wall had just removed. `roomsDemo` only
 when the demo activities themselves changed: the field is also typed by hand in the
 record, and recomputing on every save would wipe what someone put there.
 `unit.roomsInstalled` is not: `syncRooms()` applies a *difference*, not a sum, so it is

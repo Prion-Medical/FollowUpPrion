@@ -191,6 +191,10 @@ from (
   union all select 29, 'zonder vinkje: na een rondgang staat dat contactmoment er nog',
          '["a6"]'::jsonb,
          (select jsonb_agg(a ->> 'id') from jsonb_array_elements(n #> '{hospitals,3,activities}') a) from rondgang
+  union all select 30, 'nextAction is de nota van het eigen geplande moment',
+         '"langsgaan"'::jsonb, s #> '{hospitals,0,nextAction}' from mijn
+  union all select 31, 'nextActionDate volgt mee, niet die van het EndoQ-moment',
+         '"2026-02-20"'::jsonb, s #> '{hospitals,0,nextActionDate}' from mijn
 ) q(nr, controle, verwacht, gekregen)
 order by nr;
 

@@ -262,6 +262,33 @@ language sql immutable set search_path = public as $$
 $$;
 
 
+-- nextAction en nextActionDate volgen uit planned[0]. Zou een beperkte
+-- gebruiker ze zelf schrijven, dan stond zijn volgende actie in een veld dat
+-- ook de collega van het andere product en de CSV-export lezen. Zelfde regel
+-- als syncNextAction() in de app: sorteren op datum, momenten zonder datum
+-- vallen weg, dan het eerste.
+--
+-- Draait ook bij het afschermen, en daar is het meer dan opruimen:
+-- nextAction is de nota van het eerste geplande moment, en dat kan er een
+-- van het andere product zijn. Zonder deze herberekening stuurden we die
+-- tekst mee naar een browser die het moment zelf niet mag zien.
+create or replace function followup.fix_planned(h jsonb) returns jsonb
+language sql immutable set search_path = public as $$
+  with p as (
+    select coalesce((
+      select jsonb_agg(t.e order by (t.e ->> 'date'), t.i)
+        from jsonb_array_elements(followup.arr(h -> 'planned')) with ordinality t(e, i)
+       where coalesce(t.e ->> 'date', '') <> ''
+    ), '[]'::jsonb) as lijst
+  )
+  select h || jsonb_build_object(
+           'planned',        p.lijst,
+           'nextActionDate', coalesce(p.lijst -> 0 ->> 'date', ''),
+           'nextAction',     coalesce(p.lijst -> 0 ->> 'note', ''))
+    from p;
+$$;
+
+
 -- ---------------------------------------------------------------------------
 -- 4. Afschermen bij het lezen
 -- ---------------------------------------------------------------------------
@@ -276,14 +303,16 @@ language sql immutable set search_path = public as $$
 $$;
 
 -- h.products wordt mee afgeschermd: anders ziet een Ainex-gebruiker een
--- EndoQ-vinkje staan dat hij niet mag aan- of uitzetten.
+-- EndoQ-vinkje staan dat hij niet mag aan- of uitzetten. En fix_planned()
+-- erover, zodat nextAction de nota van zijn eigen eerste geplande moment is
+-- en niet die van het moment dat we er net hebben uitgehaald.
 create or replace function followup.scope_hospital(h jsonb, allowed text[]) returns jsonb
 language sql immutable set search_path = public as $$
-  select h || jsonb_build_object(
+  select followup.fix_planned(h || jsonb_build_object(
     'products',   to_jsonb(followup.product_sort(followup.both_in(followup.texts(h -> 'products'), allowed))),
     'contacts',   followup.scope_entries(h -> 'contacts', allowed),
     'activities', followup.scope_entries(h -> 'activities', allowed),
-    'planned',    followup.scope_entries(h -> 'planned', allowed));
+    'planned',    followup.scope_entries(h -> 'planned', allowed)));
 $$;
 
 create or replace function followup.scope_targets(targets jsonb, allowed text[]) returns jsonb
@@ -414,6 +443,10 @@ end $$;
 -- voor zijn eigen helft maar niet voor het geheel, dus rekenen we het hier
 -- opnieuw uit over de volledige lijst.
 --
+-- nextAction en nextActionDate zijn de derde, maar fix_planned() staat
+-- hierboven bij de rekenhulpjes: hij draait ook bij het afschermen en moest
+-- dus vóór scope_hospital() gedefinieerd staan.
+--
 -- unit.roomsInstalled hoort hier niet bij: syncRooms() in de app past een
 -- vérschil toe en geen som, dus een Ainex-gebruiker telt zijn eigen installatie
 -- op bij het gedeelde getal en raakt dat van EndoQ niet.
@@ -460,27 +493,6 @@ language sql immutable set search_path = public as $$
        limit 1
     ), h)
   end;
-$$;
-
--- nextAction en nextActionDate volgen uit planned[0]. Zou een beperkte
--- gebruiker ze zelf schrijven, dan stond zijn volgende actie in een veld dat
--- ook de collega van het andere product en de CSV-export lezen. Zelfde regel
--- als syncNextAction() in de app: sorteren op datum, momenten zonder datum
--- vallen weg, dan het eerste.
-create or replace function followup.fix_planned(h jsonb) returns jsonb
-language sql immutable set search_path = public as $$
-  with p as (
-    select coalesce((
-      select jsonb_agg(t.e order by (t.e ->> 'date'), t.i)
-        from jsonb_array_elements(followup.arr(h -> 'planned')) with ordinality t(e, i)
-       where coalesce(t.e ->> 'date', '') <> ''
-    ), '[]'::jsonb) as lijst
-  )
-  select h || jsonb_build_object(
-           'planned',        p.lijst,
-           'nextActionDate', coalesce(p.lijst -> 0 ->> 'date', ''),
-           'nextAction',     coalesce(p.lijst -> 0 ->> 'note', ''))
-    from p;
 $$;
 
 

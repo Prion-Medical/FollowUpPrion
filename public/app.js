@@ -776,7 +776,7 @@
             <select data-field="sector">${[opt("", "—", h.sector), ...SECTORS.map((s) => opt(s, t("sector." + s), h.sector))].join("")}</select>
           </label>
           <div class="field full"><span class="field-label">${esc(t("field.products"))}</span>
-            <div class="toggles">${myProducts().map((p) => `<label><input type="checkbox" data-product="${p}" ${h.products.includes(p) ? "checked" : ""}>${p}</label>`).join("")}</div>
+            <div class="toggles">${myProducts().map((p) => `<label><input type="checkbox" data-product="${esc(p)}" ${h.products.includes(p) ? "checked" : ""}>${esc(p)}</label>`).join("")}</div>
           </div>
           <label class="field full">${esc(t("field.address"))}
             <input data-field="address" value="${esc(h.address)}">
