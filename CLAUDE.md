@@ -273,6 +273,15 @@ Run `supabase/controle.sql` in the SQL editor after any change to these function
 reports OK or FOUT per check and needs no eyeballing; the one that matters is "laden en
 opslaan verandert niets".
 
+**Re-running `schema.sql` is the step that goes wrong.** It is all `create or replace`,
+so running an *older* copy applies cleanly and silently reverts functions — a fix that
+was already live can disappear this way, and it has, repeatedly. The tell is that
+`controle.sql` fails only on its newest checks while every older one passes. So copy the
+file off disk rather than reusing a SQL editor tab (`pbcopy < supabase/schema.sql`), and
+run `supabase/versie.sql` first: it reads `pg_proc` and reports per function whether the
+database holds the current body. Add a line there whenever a function changes
+materially, or it stops guarding anything.
+
 ## Git
 
 - Repository lives in the **Prion-Medical** organisation; push as the `PrionMedical`
