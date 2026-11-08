@@ -39,11 +39,53 @@ day holding the state at that day's **first** change — deliberately not
 overwritten, so a bad save cannot take the day's only copy with it.
 
 With `public/config.js` filled in, the app talks to Supabase instead and asks for a
-login. `supabase/schema.sql` creates the tables.
+login. `supabase/schema.sql` creates the tables. There are two such projects — see
+Two databases below.
 
 Pushing to `main` deploys: GitHub Pages serves the repository root, where `index.html`
 redirects to `public/`. Browsers keep the old files until the `?v=` stamp changes, so a
 deploy that skips the stamp bump ships nothing.
+
+## Two databases
+
+There are two Supabase projects: the live one and a development one. `public/config.js`
+holds both key pairs and chooses between them by **hostname** — `localhost`,
+`127.0.0.1`, `[::1]` and a page opened as a file get development, everything else gets
+live. The choice is made at runtime, not per branch, so the published app cannot reach
+the development database, a deploy cannot carry a development key, and merging `dev`
+into `main` leaves nothing to strip. Comment the two development lines out and
+`localhost` falls back to `data/db.json` through `server.py`, which is still the
+quickest way to work on anything that is not about the database.
+
+The development project exists so that a schema change can be tried before it reaches
+anyone's work: run `schema.sql` there first, then `versie.sql`, `toegang.sql` and
+`controle.sql`, and only then the same against the live project — from disk, as ever.
+
+It holds **invented data only**: the forty hospitals from `data/seed.json` plus made-up
+clinicians on `example.com`. Never an export from the live database. That would put
+real contact details in a second database with its own user list, and the convenience
+is not worth it. Sign-up is off there too, because the project URL sits in a public
+repository. It is on the free plan, so it **pauses after a week without traffic** —
+restoring it is one click and nothing is lost.
+
+Four accounts cover every rule: an `admin`, a `viewer`, a `contributor` limited to
+Ainex and an `editor` limited to EndoQ. The last two are the point, because the product
+wall can only be judged from both sides at once. Give each one a name in `app_users`
+first: the user screen shows names and no e-mail addresses, so fresh accounts are four
+identical blank rows.
+
+Two things that cost an evening to find out:
+
+- **Part C of `controle.sql` wants a uuid in five places.** It can look itself up
+  instead: `set_config('request.jwt.claims', …, true)` does what the `set local` line
+  there does and accepts a subquery. Look the uuid up *before* switching role, since
+  `authenticated` may not read `auth.users`. Run those blocks one at a time — the first
+  failure stops the whole transaction, and three of them are supposed to fail.
+- **Seeding by writing to `app_state` directly** leaves a document that never went
+  through `write_state()`, and C2b then reports FOUT for no good reason:
+  `merge_hospital()` always writes a `planned` key and `seed.json` has none, so the
+  first save legitimately changes 32 hospitals. Push such a document through
+  `write_state()` once as an unrestricted user before trusting `controle.sql` on it.
 
 ## Layout
 
