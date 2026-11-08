@@ -152,13 +152,12 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.01em; }
 }
 .search input:focus { outline: none; border-color: var(--ink); background: var(--paper); }
 .filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 14px; }
-/* De drie uitklappers in de zijbalk. Ze krijgen elk een gelijk deel van de
-   breedte en breken pas als de naam echt niet past; de samenvatting zelf
-   kapt af in plaats van de rij uit elkaar te duwen. */
-.filters.picks { gap: 6px; }
-/* Elk zo breed als zijn tekst, en pas krimpen als het niet past. Met gelijke
-   delen hield "Alle" ruimte over terwijl "Alle producten" afgekapt werd. */
-.filters.picks .pick { flex: 0 1 auto; min-width: 0; }
+/* De drie uitklappers in de zijbalk staan onder elkaar. Naast elkaar groeide
+   hun breedte mee met wat je aanvinkt, en dan verspringt de hele rij —
+   "Verkoop, In progress" duwt de volgende naar de regel eronder. Onder elkaar
+   staat alles stil, wat je ook kiest. */
+.filters.picks { flex-direction: column; align-items: stretch; gap: 6px; }
+.filters.picks .pick { min-width: 0; }
 .filters.picks .pick > summary { min-height: 30px; padding: 4px 12px; border-radius: 100px; gap: 6px; }
 .filters.picks .pick-list { white-space: nowrap; }
 .chip {
@@ -575,6 +574,11 @@ label.field textarea:focus-visible,
   .search { padding: 12px 14px 8px; }
   .search input { height: 46px; font-size: 16px; }
   .filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px 14px; }
+  /* Op gsm blijven ze náást elkaar: drie volle regels zouden de lijst te ver
+     naar beneden duwen, en verspringen doen ze hier niet — de rij breekt niet
+     af maar schuift. */
+  .filters.picks { flex-direction: row; align-items: center; }
+  .filters.picks .pick { flex: 0 1 auto; }
   .filters::-webkit-scrollbar { display: none; }
   .chip { min-height: 36px; flex: none; font-size: 14px; }
   .list { padding: 0 6px 18px; }

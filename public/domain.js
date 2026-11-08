@@ -109,6 +109,29 @@ window.FollowUpDomain = (() => {
   const pickBox = (label, rows, summaryAttrs, open) =>
     `<details class="pick" ${open ? "open" : ""}><summary><span class="pick-label" ${summaryAttrs || ""}>${esc(label)}</span></summary>
        <div class="pick-list">${rows}</div></details>`;
+  // <details> gaat uit zichzelf nooit dicht: je moest er twee keer op klikken.
+  // Eén luisteraar op het document doet dat voor alle uitklappers samen, ook
+  // die in een dialoog en die er bij een volgende render bijkomen. Een klik ín
+  // de uitklapper telt niet mee — anders sloeg het vakje dat je net aanvinkte
+  // de uitklapper meteen weer dicht.
+  const sluitPicks = (behalve) => {
+    for (const d of document.querySelectorAll("details.pick[open]")) {
+      if (d !== behalve && !d.contains(behalve)) d.open = false;
+    }
+  };
+  // In de capture-fase, dus vóórdat de pagina op die klik reageert. De
+  // statistiekpagina tekent zichzelf opnieuw zodra je een vinkje zet; liep dit
+  // daarna, dan was het aangeklikte vakje al uit het document verdwenen en
+  // sloot de verse uitklapper zich alsnog.
+  document.addEventListener("click", (e) => sluitPicks(e.target), true);
+  // Escape sluit eerst de uitklapper en pas daarna de dialoog eronder. Zonder
+  // preventDefault zou één toets allebei doen en ben je je dialoog kwijt.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !document.querySelector("details.pick[open]")) return;
+    sluitPicks(null);
+    e.preventDefault();
+    e.stopPropagation();
+  });
 
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
