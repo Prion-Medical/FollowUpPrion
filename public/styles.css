@@ -28,8 +28,15 @@
   --accent-dark: #a85c1b;
   --accent-soft: rgba(217, 123, 42, 0.12);
 
-  --series-1: #2a78d6;   /* EndoQ */
-  --series-2: #10857f;   /* Ainex */
+  /* Kleur per product, op volgorde van PRODUCTS in domain.js. Zes staan er
+     klaar zodat een nieuw product meteen een eigen kleur heeft en niemand
+     hier iets hoeft bij te zetten. De eerste twee zijn EndoQ en Ainex. */
+  --series-1: #2a78d6;
+  --series-2: #10857f;
+  --series-3: #b4532a;
+  --series-4: #6b4fa8;
+  --series-5: #4d7c2f;
+  --series-6: #a8436b;
   --series-none: #a3a9b3;
 
   --font: "Jost", system-ui, -apple-system, "Segoe UI", sans-serif;

@@ -11,12 +11,8 @@
   const {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS, ROOM_TYPES,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
-    esc, pickRow, pickBox,
+    esc, pickRow, pickBox, myProducts,
   } = window.FollowUpDomain;
-  // Welke producten deze gebruiker mag gebruiken. Een leeg bereik betekent
-  // onbeperkt, dus dan zijn het ze allemaal. De databank schermt het document
-  // al af; dit is er zodat de app geen keuze aanbiedt die toch geweigerd wordt.
-  const myProducts = () => (store.can.products.length ? store.can.products : PRODUCTS);
   // Welk product staat standaard in een nieuw contactmoment of een planning:
   // dat van het ziekenhuis als er maar één is, anders het jouwe als jij er maar
   // één mag.

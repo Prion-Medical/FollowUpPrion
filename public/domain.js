@@ -41,7 +41,32 @@ window.FollowUpDomain = (() => {
   // er ook bij: EndoQ en Ainex gaan per abonnement, en een stopgezet abonnement
   // haalt kamers weg — zie syncRooms() in app.js.
   const ROOM_TYPES = ["demo", "installation", "order", "cancellation"];
+  // De producten die Prion verdeelt. Dit is de énige lijst: de filters, de
+  // dialogen, het beheerscherm en de statistieken lezen hem allemaal hier, en
+  // alles wat per product bestaat (kleur, doelcijfer) wordt eruit afgeleid.
+  // Komt er een derde bij, dan volstaat deze regel — plus followup.producten()
+  // in supabase/schema.sql, want de databank kan dit bestand niet lezen.
   const PRODUCTS = ["EndoQ", "Ainex"];
+  // Welke producten deze gebruiker mag gebruiken. Een leeg bereik betekent
+  // onbeperkt, dus dan zijn het ze allemaal. De databank schermt het document
+  // al af; dit is er zodat de app geen keuze aanbiedt die toch geweigerd wordt.
+  // Staat hier en niet in app.js, omdat stats.js hem evengoed nodig heeft.
+  // window.FollowUpStore wordt pas later geladen, dus we lezen hem bij elke
+  // oproep opnieuw in plaats van één keer bij het starten.
+  const myProducts = () => {
+    const can = window.FollowUpStore && window.FollowUpStore.can;
+    return can && can.products && can.products.length ? can.products : PRODUCTS;
+  };
+  // De kleur van een product in de grafieken, op volgorde van de lijst
+  // hierboven. styles.css heeft --series-1 tot en met --series-6; een zevende
+  // product valt terug op de grijze kleur van "geen product" in plaats van
+  // onzichtbaar te worden.
+  const productColor = (p) => {
+    const i = PRODUCTS.indexOf(p);
+    return i >= 0 && i < 6 ? `var(--series-${i + 1})` : "var(--series-none)";
+  };
+  // Een doelcijferrij met elk product op nul.
+  const emptyTargets = () => Object.fromEntries(PRODUCTS.map((p) => [p, 0]));
   const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "other"];
   // De toren staat los van de scopes — daar hangt EndoQ of
   // Ainex aan, dus
@@ -88,6 +113,6 @@ window.FollowUpDomain = (() => {
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
-    esc, pickRow, pickBox,
+    esc, pickRow, pickBox, myProducts, productColor, emptyTargets,
   };
 })();

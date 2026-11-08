@@ -100,6 +100,18 @@ new is yours; one whose content changed keeps its author and gets you as last ed
 one that did not change keeps all four values, and if it never had a stamp it does not
 get an empty one invented for it.
 
+**Adding a product.** `PRODUCTS` in `public/domain.js` is the only list on the
+client side: the sidebar filter, all three dialogs, the user screen and the
+statistics read it, and everything that exists per product is derived from it —
+`productColor()` maps it onto `--series-1` … `--series-6` in `styles.css`, and
+`emptyTargets()` builds the target row. `myProducts()` lives there too, so
+`app.js` and `stats.js` restrict to a user's scope the same way. The database
+needs its own copy, since it cannot read that file: `followup.producten()` in
+`supabase/schema.sql`. That one only fixes the sort order — an unknown product
+sorts last rather than being refused, so an app that already knows a new product
+does not break against a database that has not been updated yet. So: two lines,
+one per side, and a seventh product also wants a `--series-7`.
+
 **One product or several.** A contact moment and a planned moment carry one
 `product`; a contact carries `products[]`, because the same clinician is often the
 point of contact for both. `normalizeContact()` migrates the old single `product`

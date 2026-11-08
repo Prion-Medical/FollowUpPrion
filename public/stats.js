@@ -15,24 +15,17 @@ window.FollowUpStats = (() => {
   const t = (k, v) => I18N.t(k, v);
 
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
-  const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS, esc, pickRow, pickBox } = window.FollowUpDomain;
-  const SERIES = { EndoQ: "var(--series-1)", Ainex: "var(--series-2)", "": "var(--series-none)" };
+  const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS,
+          esc, pickRow, pickBox, myProducts, productColor, emptyTargets } = window.FollowUpDomain;
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Een doelcijfer aanpassen is schrijven. Zonder dat recht staat het getal er
   // nog wel — het hoort bij de cijfers — maar op slot. storage.js is op dit
   // punt al geladen; de vangnetten zijn er voor het geval dat ooit verschuift.
   const canWrite = () => !!(window.FollowUpStore && window.FollowUpStore.can && window.FollowUpStore.can.write);
-  // Hetzelfde bereik als in app.js: leeg betekent alle producten. De databank
-  // stuurt de cijfers van het andere product toch niet mee, maar zonder dit
-  // stond er wel een knop en een doelcijfer van nul voor iets wat je niet ziet.
-  const myProducts = () => {
-    const can = window.FollowUpStore && window.FollowUpStore.can;
-    return can && can.products && can.products.length ? can.products : PRODUCTS;
-  };
   // Nog geen doelcijfers afgesproken — vul ze in de app zelf aan. De jaren
   // schuiven mee met de kalender: dit jaar en de vier volgende.
   const DEFAULT_TARGETS = Object.fromEntries(
-    Array.from({ length: 5 }, (_, i) => [String(new Date().getFullYear() + i), { EndoQ: 0, Ainex: 0 }]));
+    Array.from({ length: 5 }, (_, i) => [String(new Date().getFullYear() + i), emptyTargets()]));
 
   // chart: "subs" = actieve abonnementen (EndoQ en Ainex gaan per abonnement),
   // "installs" = nieuwe installaties per maand, voor als er ooit een product
@@ -58,7 +51,7 @@ window.FollowUpStats = (() => {
   }
 
   function targetsFor(db, year) {
-    return { ...(DEFAULT_TARGETS[year] || { EndoQ: 0, Ainex: 0 }), ...((db.targets || {})[year] || {}) };
+    return { ...(DEFAULT_TARGETS[year] || emptyTargets()), ...((db.targets || {})[year] || {}) };
   }
 
   // Alle contactmomenten, plat, met ziekenhuis erbij en gefilterd op jaar + product.
@@ -86,7 +79,7 @@ window.FollowUpStats = (() => {
   }
 
   function legend(series) {
-    return `<div class="s-legend">${series.map((p) => `<span><i style="background:${SERIES[p]}"></i>${esc(productLabel(p))}</span>`).join("")}</div>`;
+    return `<div class="s-legend">${series.map((p) => `<span><i style="background:${productColor(p)}"></i>${esc(productLabel(p))}</span>`).join("")}</div>`;
   }
 
   // Verticale gestapelde staven (bv. per maand).
@@ -104,7 +97,7 @@ window.FollowUpStats = (() => {
               const tipText = [`${b.label}: ${total}`, ...series.filter((s) => b.values[s]).map((s) => `${productLabel(s)}: ${b.values[s]}`)].join("\n");
               return `<div class="s-col" data-tip="${esc(tipText)}" tabindex="0">
                 <div class="s-stack" style="height:${(total / max) * 100}%">
-                  ${series.filter((s) => b.values[s]).map((s) => `<div style="flex:${b.values[s]};background:${SERIES[s]}"></div>`).join("")}
+                  ${series.filter((s) => b.values[s]).map((s) => `<div style="flex:${b.values[s]};background:${productColor(s)}"></div>`).join("")}
                 </div>
                 <span class="s-xlabel">${esc(b.short)}</span>
               </div>`;
@@ -124,7 +117,7 @@ window.FollowUpStats = (() => {
         <span class="s-hlabel">${esc(i.label)}</span>
         <div class="s-htrack"><div class="s-hbar" style="width:${(i.total / max) * 100}%">
           ${series
-            ? series.filter((s) => i.values[s]).map((s) => `<div style="flex:${i.values[s]};background:${SERIES[s]}"></div>`).join("")
+            ? series.filter((s) => i.values[s]).map((s) => `<div style="flex:${i.values[s]};background:${productColor(s)}"></div>`).join("")
             : `<div style="flex:1;background:${i.color || "var(--series-1)"}"></div>`}
         </div></div>
         <span class="s-hval">${fmt(i.total)}</span>
@@ -154,10 +147,10 @@ window.FollowUpStats = (() => {
       const pct = goal ? Math.min(100, (done / goal) * 100) : 0;
       return `<div class="s-target">
         <div class="s-target-head">
-          <span><i style="background:${SERIES[p]}"></i>${p}</span>
-          <span><b>${fmt(done)}</b> / <input type="number" min="0" data-target-year="${year}" data-target-product="${p}" value="${goal}" ${canWrite() ? "" : "readonly"} aria-label="${esc(t("stats.target"))} ${p} ${year}"> ${esc(t("stats.roomsLive").toLowerCase())}</span>
+          <span><i style="background:${productColor(p)}"></i>${esc(p)}</span>
+          <span><b>${fmt(done)}</b> / <input type="number" min="0" data-target-year="${esc(year)}" data-target-product="${esc(p)}" value="${goal}" ${canWrite() ? "" : "readonly"} aria-label="${esc(t("stats.target"))} ${esc(p)} ${esc(year)}"> ${esc(t("stats.roomsLive").toLowerCase())}</span>
         </div>
-        <div class="s-progress"><div style="width:${pct}%;background:${SERIES[p]}"></div></div>
+        <div class="s-progress"><div style="width:${pct}%;background:${productColor(p)}"></div></div>
         <small class="muted">${goal ? `${fmt((done / goal) * 100)}% ${esc(t("stats.reached"))}` : "—"}</small>
       </div>`;
     }).join("") + `<p class="muted">${esc(t("stats.targetsSub"))}</p>`);
@@ -191,7 +184,7 @@ window.FollowUpStats = (() => {
       for (const p of Object.keys(b.values)) b.values[p] = Math.max(0, b.values[p]);
     }
     const series = seriesIn(events);
-    return card(t("stats.activeSubs"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : ["EndoQ"]), "wide");
+    return card(t("stats.activeSubs"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [PRODUCTS[0]]), "wide");
   }
 
   // Nieuwe installaties per maand. Voor EndoQ en Ainex zegt de grafiek hierboven
@@ -204,7 +197,7 @@ window.FollowUpStats = (() => {
       if (b) b.values[a.product || ""] = (b.values[a.product || ""] || 0) + rooms(a);
     }
     const series = seriesIn(installs);
-    return card(t("stats.perMonth"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : ["EndoQ"]), "wide");
+    return card(t("stats.perMonth"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [PRODUCTS[0]]), "wide");
   }
 
   function hospitalsCard(db) {

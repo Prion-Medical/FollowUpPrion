@@ -217,6 +217,20 @@ language sql immutable set search_path = public as $$
   ), '{}'::text[]);
 $$;
 
+-- De productenlijst, in dezelfde volgorde als PRODUCTS in public/domain.js.
+-- Twee plaatsen dus, en dat is niet te vermijden: de databank kan dat bestand
+-- niet lezen. Dit is wél de enige plaats aan deze kant — komt er een product
+-- bij, dan volstaat deze functie.
+--
+-- Ze bepaalt alleen de volgorde, niet wat toegelaten is. Een product dat hier
+-- niet in staat wordt niet geweigerd maar sorteert achteraan, zodat een app
+-- die al een nieuw product kent niet stukloopt op een databank die nog niet
+-- bijgewerkt is.
+create or replace function followup.producten() returns text[]
+language sql immutable set search_path = public as $$
+  select array['EndoQ', 'Ainex'];
+$$;
+
 -- De vaste volgorde uit domain.js. Die houden we aan zodat laden-en-opslaan
 -- zonder wijziging exact hetzelfde document teruggeeft; net dát maakt de
 -- belangrijkste controle mogelijk ("is er niets veranderd?"). Wat we niet
@@ -224,7 +238,7 @@ $$;
 create or replace function followup.product_sort(v text[]) returns text[]
 language sql immutable set search_path = public as $$
   select coalesce((
-    select array_agg(q.x order by coalesce(array_position(array['EndoQ', 'Ainex'], q.x), 99), q.x)
+    select array_agg(q.x order by coalesce(array_position(followup.producten(), q.x), 99), q.x)
       from (select distinct unnest(v) as x) q
   ), '{}'::text[]);
 $$;
