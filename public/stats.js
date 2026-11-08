@@ -16,7 +16,7 @@ window.FollowUpStats = (() => {
 
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
   const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS,
-          esc, pickRow, pickBox, myProducts, productColor, emptyTargets } = window.FollowUpDomain;
+          esc, pickBox, myProducts, productColor, emptyTargets } = window.FollowUpDomain;
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Een doelcijfer aanpassen is schrijven. Zonder dat recht staat het getal er
   // nog wel — het hoort bij de cijfers — maar op slot. storage.js is op dit
@@ -32,8 +32,10 @@ window.FollowUpStats = (() => {
   // bijkomt dat je één keer verkoopt.
   // products leeg = geen filter, dus alles. Dezelfde betekenis als een leeg
   // bereik op een gebruiker: niets aangevinkt beperkt niets.
-  // pickOpen onthoudt of de uitklapper openstond: elke wijziging tekent de
-  // pagina opnieuw en zou hem anders dichtklappen.
+  // pickOpen onthoudt of de uitklapper openstond. Anders dan bij de filters in
+  // de zijbalk kan deze pagina niet volstaan met de lijst bijwerken: een ander
+  // product verandert élke grafiek, dus gaat alles opnieuw door de render — en
+  // daar gaat een open uitklapper in mee. Vandaar dit ene veldje.
   const view = { year: String(new Date().getFullYear()), products: [], chart: "subs", pickOpen: false };
   let tip;
 
@@ -302,14 +304,13 @@ window.FollowUpStats = (() => {
             <option value="all" ${view.year === "all" ? "selected" : ""}>${esc(t("stats.all"))}</option>
             ${[...years].sort().reverse().filter((y) => /^\d{4}$/.test(y)).map((y) => `<option ${y === view.year ? "selected" : ""}>${y}</option>`).join("")}
           </select></label>
-          <label>${esc(t("stats.product"))} ${pickBox(
-            view.products.length ? view.products.join(", ") : t("stats.pickNone"),
-            pickRow(`data-stat-product="all"`, t("stats.all"), !view.products.length, "pick-all")
-              + myProducts().map((p) => pickRow(`data-stat-product="${esc(p)}"`, p, view.products.includes(p))).join(""),
-            // Geen data-veld op de samenvatting: anders dan bij de filters in de
-            // zijbalk tekent deze pagina zichzelf na elk vinkje volledig
-            // opnieuw, dus het label komt vanzelf goed.
-            "", view.pickOpen)}</label>
+          <label>${esc(t("stats.product"))} ${pickBox([
+            { attrs: `data-stat-product="all"`, label: t("stats.all"),
+              checked: !view.products.length, cls: "pick-all" },
+            ...myProducts().map((p) => ({
+              attrs: `data-stat-product="${esc(p)}"`, label: p, checked: view.products.includes(p),
+            })),
+          ], t("stats.all"), view.pickOpen)}</label>
           <div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}">${esc(t(key))}</button>`).join("")}</div>
         </div>
       </div>

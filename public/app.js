@@ -11,7 +11,7 @@
   const {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS, ROOM_TYPES,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
-    esc, pickRow, pickBox, myProducts,
+    esc, pickBox, syncPick, myProducts,
   } = window.FollowUpDomain;
   // Welk product staat standaard in een nieuw contactmoment of een planning:
   // dat van het ziekenhuis als er maar één is, anders het jouwe als jij er maar
@@ -495,9 +495,10 @@
       .join(" ").toLowerCase();
     return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
   }
-  // Twee knoppen in de productenrij filteren niet op een merk maar op de
-  // opvolging zelf. Ze staan daar omdat het dezelfde rij is; de namen kunnen
-  // nooit met een product botsen, dat zijn EndoQ en Ainex.
+  // De twee vragen over de opvolging. Ze filteren niet op een merk maar op het
+  // verloop, en ze hebben daarom een eigen rij en een eigen sleutel in
+  // state.filter in plaats van tussen de producten te zitten — zo is er ook
+  // geen naam die met een product kan botsen.
   const DERIVED_FILTERS = { overdue: isOverdue, quiet: isQuiet };
   function visibleHospitals() {
     const { statuses, products, countries, derived, query } = state.filter;
@@ -557,21 +558,23 @@
     { key: "products",  leeg: "filter.allProducts",  items: myProducts,      label: (p) => p },
     { key: "countries", leeg: "filter.allCountries", items: () => COUNTRIES, label: (c) => t("country." + c) },
   ];
-  function filterLabel(f) {
-    const gekozen = state.filter[f.key];
-    return gekozen.length ? gekozen.map(f.label).join(", ") : t(f.leeg);
-  }
-  function renderFilters() {
-    $("#pickFilters").innerHTML = FILTERS.map((f) => pickBox(filterLabel(f),
-      f.items().map((k) => pickRow(`data-filter="${esc(f.key)}" data-value="${esc(k)}"`,
-        f.label(k), state.filter[f.key].includes(k))).join(""),
-      `data-fsum="${esc(f.key)}"`)).join("");
+  function renderDerived() {
     for (const b of $("#derivedFilters").querySelectorAll(".chip")) {
       b.classList.toggle("active", b.dataset.derived === state.filter.derived);
     }
   }
+  function renderFilters() {
+    $("#pickFilters").innerHTML = FILTERS.map((f) => pickBox(
+      f.items().map((k) => ({
+        attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`,
+        label: f.label(k),
+        checked: state.filter[f.key].includes(k),
+      })), t(f.leeg))).join("");
+    renderDerived();
+  }
   // Niet hertekenen bij elk vinkje: dan klapt de uitklapper dicht. Enkel de
-  // samenvatting bijwerken en de lijst opnieuw opbouwen.
+  // lijst en de kaart dus; de samenvatting op de knop is het werk van de
+  // uitklapper zelf.
   $("#pickFilters").addEventListener("change", (e) => {
     const box = e.target.closest("[data-filter]");
     if (!box) return;
@@ -580,8 +583,6 @@
     state.filter[f.key] = e.target.checked
       ? [...state.filter[f.key], v]
       : state.filter[f.key].filter((x) => x !== v);
-    const sum = $(`[data-fsum="${f.key}"]`);
-    if (sum) sum.textContent = filterLabel(f);
     renderList();
     renderMarkers();
   });
@@ -591,7 +592,10 @@
     const b = e.target.closest(".chip");
     if (!b) return;
     state.filter.derived = state.filter.derived === b.dataset.derived ? "" : b.dataset.derived;
-    renderFilters();
+    // Alleen de twee knoppen omschakelen; renderFilters() zou de drie
+    // uitklappers ernaast nodeloos opnieuw opbouwen. Dat een open uitklapper
+    // hierbij dichtgaat is iets anders en blijft: je klikte ernaast.
+    renderDerived();
     renderList();
     renderMarkers();
   });
@@ -667,17 +671,16 @@
   const opt = (value, label, current) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
   // Eén product kiezen, in dezelfde uitklapper als overal elders. Radio's en
   // geen vinkjes: een contactmoment hoort bij één product. Omdat ze allemaal
-  // name="product" dragen, komt de keuze gewoon via FormData binnen en hoeft
-  // de dialoog er verder niets voor te doen.
-  const productOne = (chosen) => pickBox(chosen || "—",
-    [pickRow(`name="product" value=""`, "—", !chosen, "", "radio"),
-     ...myProducts().map((p) => pickRow(`name="product" value="${esc(p)}"`, p, chosen === p, "", "radio"))].join(""),
-    `data-psum`);
-  // De samenvatting meteen bijwerken als er een ander product aangeklikt wordt.
-  const syncProductSummary = (form) => {
-    const sum = form.querySelector("[data-psum]");
-    if (sum) sum.textContent = form.elements.product ? (form.elements.product.value || "—") : "—";
-  };
+  // name="product" dragen, komt de keuze via FormData binnen, en de
+  // samenvatting houdt de uitklapper zelf bij — de dialoog hoeft er dus
+  // helemaal niets voor te doen. Het streepje is een rij als alle andere, en
+  // daarmee ook meteen de tekst die er staat als er niets gekozen is.
+  const productOne = (chosen) => pickBox([
+    { attrs: `name="product" value=""`, label: "—", checked: !chosen, type: "radio" },
+    ...myProducts().map((p) => ({
+      attrs: `name="product" value="${esc(p)}"`, label: p, checked: chosen === p, type: "radio",
+    })),
+  ], "—");
   // Twee afvinklijsten met dezelfde merken: de scopes en de videoprocessors.
   // Welke lijst
   // een vakje bijwerkt staat in data-brand-list.
@@ -1113,9 +1116,6 @@
 
   function contactDialog(h, c) {
     const v = c || { name: "", department: "", role: "", phone: "", email: "", address: "", products: [], notes: "", primary: false };
-    // Leeg betekent hier "geen product", niet "alle" — vandaar het streepje en
-    // niet het label van het beheerscherm.
-    const label = (ps) => (ps.length ? ps.join(", ") : "—");
     // De vinkjes komen niet via FormData binnen: meerdere vakjes met dezelfde
     // naam houden er maar één over. We lezen ze bij het opslaan uit het
     // formulier zelf.
@@ -1132,9 +1132,11 @@
         <label class="field">${esc(t("dlg.c.email"))}<input name="email" type="email" value="${esc(v.email)}"></label>
         <label class="field full">${esc(t("dlg.c.address"))}<input name="address" value="${esc(v.address)}"></label>
         <div class="field">${esc(t("dlg.c.products"))}
-          ${pickBox(label(v.products),
-            myProducts().map((p) => pickRow(`data-cproduct="${esc(p)}"`, p, v.products.includes(p))).join(""),
-            `data-csum`)}
+          ${// Niets aangevinkt is hier "geen product", niet "alle" — vandaar
+            // het streepje en niet het label van het beheerscherm.
+            pickBox(myProducts().map((p) => ({
+              attrs: `data-cproduct="${esc(p)}"`, label: p, checked: v.products.includes(p),
+            })), "—")}
         </div>
         <label class="field check" style="margin-top:16px"><input type="checkbox" name="primary" ${v.primary ? "checked" : ""}>${esc(t("dlg.c.primary"))}</label>
         <label class="field full">${esc(t("dlg.c.notes"))}<textarea name="notes" rows="3">${esc(v.notes)}</textarea></label>
@@ -1170,13 +1172,6 @@
       scheduleSave();
       renderAll();
     });
-    // De samenvatting op de uitklapper meteen bijwerken, anders staat er nog
-    // het oude antwoord terwijl de vinkjes al anders staan.
-    form.onchange = (e) => {
-      if (!e.target.dataset.cproduct) return;
-      const sum = form.querySelector("[data-csum]");
-      if (sum) sum.textContent = label(picked(form));
-    };
   }
 
   function activityDialog(h, a, plan) {
@@ -1244,7 +1239,6 @@
     });
     const sync = () => {
       $("#roomsField", form).hidden = !ROOM_TYPES.includes(form.elements.type.value);
-      syncProductSummary(form);
     };
     form.onchange = sync;
     sync();
@@ -1261,7 +1255,7 @@
       contactId: (h.contacts.find((c) => c.primary) || {}).id || "",
       note: "",
     };
-    const form = openDialog(`
+    openDialog(`
       <h2>${esc(p ? t("dlg.plannedEdit") : t("dlg.plannedNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
         <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
@@ -1297,7 +1291,6 @@
       scheduleSave();
       renderAll();
     });
-    form.onchange = () => syncProductSummary(form);
   }
 
   // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
@@ -1822,10 +1815,6 @@
     renderUsers();
   }
 
-  // Niets aangevinkt betekent "alles mag". Dat zetten we met zoveel woorden op
-  // de uitklapper: een leeg vakje leest als "niets", en dat is het omgekeerde.
-  const productsLabel = (ps) => (ps.length ? ps.join(", ") : t("users.allProducts"));
-
   function renderUsers() {
     const meId = store.me().id;
     const row = (u) => `
@@ -1843,14 +1832,20 @@
         </div>
         <div class="u-scope">
           <span class="field-label">${esc(t("users.products"))}</span>
-          ${pickBox(productsLabel(u.products),
-            // "Alle producten" bovenaan is leeg bereik, en dat is iets anders
+          ${// "Alle producten" bovenaan is leeg bereik, en dat is iets anders
             // dan alle vakjes aanvinken: leeg betekent onbeperkt en neemt een
-            // produkt dat er later bijkomt vanzelf mee, terwijl {EndoQ, Ainex}
+            // product dat er later bijkomt vanzelf mee, terwijl {EndoQ, Ainex}
             // ook later precies die twee blijft — en importeren uitschakelt.
-            pickRow(`data-uid="${esc(u.id)}" data-uall="1"`, t("users.allProducts"), !u.products.length, "pick-all")
-            + PRODUCTS.map((p) => pickRow(`data-uid="${esc(u.id)}" data-uproduct="${esc(p)}"`, p, u.products.includes(p))).join(""),
-            `data-usum="${esc(u.id)}"`)}
+            // Daarom staat die rij er als rij: dan is "alle" ook meteen de
+            // tekst op de knop, zonder dat dit scherm er iets voor doet.
+            pickBox([
+              { attrs: `data-uid="${esc(u.id)}" data-uall="1"`, label: t("users.allProducts"),
+                checked: !u.products.length, cls: "pick-all" },
+              ...PRODUCTS.map((p) => ({
+                attrs: `data-uid="${esc(u.id)}" data-uproduct="${esc(p)}"`, label: p,
+                checked: u.products.includes(p),
+              })),
+            ], t("users.allProducts"))}
         </div>
       </div>`;
     usersView.innerHTML = `
@@ -1878,6 +1873,19 @@
         ? [...new Set([...u.products, el.dataset.uproduct])]
         : u.products.filter((x) => x !== el.dataset.uproduct);
     } else return;
+    // "Alle producten" en de losse vakjes sluiten elkaar uit. Meteen
+    // gelijkzetten, vóór de opslag: een vinkje dat JavaScript verzet stuurt
+    // geen change, dus de uitklapper merkt het niet en syncPick() moet erbij.
+    if (el.dataset.uall || el.dataset.uproduct) {
+      for (const b of usersView.querySelectorAll(`[data-uid="${u.id}"][data-uproduct]`)) {
+        b.checked = u.products.includes(b.dataset.uproduct);
+      }
+      const alle = usersView.querySelector(`[data-uid="${u.id}"][data-uall]`);
+      if (alle) {
+        alle.checked = !u.products.length;
+        syncPick(alle.closest("details.pick"));
+      }
+    }
     try {
       await store.saveUser(u);
     } catch (err) {
@@ -1889,15 +1897,6 @@
     // Bijwerken zonder hertekenen: renderUsers() bouwt het scherm opnieuw op en
     // klapt daarmee de productkeuze dicht, midden in een reeks wijzigingen.
     toast(t("users.saved"));
-    const sum = usersView.querySelector(`[data-usum="${u.id}"]`);
-    if (sum) sum.textContent = productsLabel(u.products);
-    // "Alle producten" en de losse vakjes sluiten elkaar uit; na een wijziging
-    // zetten we ze allemaal gelijk met wat er nu in u.products staat.
-    for (const b of usersView.querySelectorAll(`[data-uid="${u.id}"][data-uproduct]`)) {
-      b.checked = u.products.includes(b.dataset.uproduct);
-    }
-    const alle = usersView.querySelector(`[data-uid="${u.id}"][data-uall]`);
-    if (alle) alle.checked = !u.products.length;
     const hint = usersView.querySelector(`[data-uhint="${u.id}"]`);
     if (hint) hint.textContent = t("role." + u.role + ".hint");
     // Je eigen rol of bereik aangepast? Dan gelden er andere rechten dan de app

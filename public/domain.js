@@ -86,32 +86,58 @@ window.FollowUpDomain = (() => {
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  // De uitklapper met vinkjes. Staat hier omdat drie schermen hem gebruiken:
-  // het bereik van een gebruiker en de producten van een contactpersoon in
-  // app.js, en de filter op de statistiekpagina in stats.js. Een <select
-  // multiple> kan dit ook, maar die is op een telefoon niet te bedienen en
-  // toont niet wat er aanstaat zonder open te klappen.
+  // De uitklapper met vinkjes. Staat hier omdat vijf schermen hem gebruiken:
+  // de drie filters in de zijbalk, de producten van een contactpersoon, het
+  // product van een contactmoment en van een gepland moment, het bereik van
+  // een gebruiker, en de filter op de statistiekpagina. Een <select multiple>
+  // kan dit ook, maar die is op een telefoon niet te bedienen en toont niet
+  // wat er aanstaat zonder open te klappen.
   //
-  // De oproeper geeft de regels zelf mee: elk scherm hangt er zijn eigen
-  // data-velden aan, en die vangt het met delegatie weer op. attrs gaat
-  // ongefilterd de tag in — dat moet wel, het zijn attributen en geen tekst —
-  // dus elke oproeper zet er zelf esc() rond, net als bij elke andere sjabloon
-  // in dit project. Alleen vaste namen en al ontsmette waarden dus.
+  // Hij krijgt de rijen als gegevens en niet als opmaak, en daar hangt de rest
+  // aan: zo weet hij zelf wat er aanstaat en hoe elke rij heet, en houdt hij
+  // zijn eigen samenvatting bij — bij het opbouwen en bij elk vinkje. Eerst
+  // deed elk scherm dat apart, vijf keer, elk met een eigen data-veld erbij.
+  //
+  // Per rij: attrs, label, checked, en eventueel cls of type. In attrs hangt
+  // het scherm de data-velden waarmee het zijn eigen keuze weer opvangt; die
+  // gaan ongefilterd de tag in — dat moet wel, het zijn attributen en geen
+  // tekst — dus elke oproeper zet er zelf esc() rond, net als bij elke andere
+  // sjabloon in dit project. Alleen vaste namen en al ontsmette waarden dus.
+  //
   // type "radio" maakt er een keuze van één. Die vorm gebruiken de dialogen
   // van een contactmoment en een gepland moment: zo'n moment hoort bij één
   // product. Dat is geen vergetelheid — de kamers van een installatie tellen
   // mee voor het doelcijfer van dat product, en "drie kamers voor allebei" is
   // geen getal dat ergens eerlijk op te tellen valt.
-  const pickRow = (attrs, label, checked, cls, type) =>
-    `<label class="${esc(cls || "")}"><input type="${esc(type || "checkbox")}" ${attrs} ${checked ? "checked" : ""}>${esc(label)}</label>`;
+  const pickRow = (r) =>
+    `<label class="${esc(r.cls || "")}"><input type="${esc(r.type || "checkbox")}" ${r.attrs} ${r.checked ? "checked" : ""}>${esc(r.label)}</label>`;
+  // leeg is de tekst voor "niets aangevinkt". Zit er een rij "alle" in de
+  // lijst, dan komt het nooit zover: dan staat díe aan en is zíj de tekst.
+  //
   // De samenvatting staat in een eigen span en niet los in de summary. Twee
   // redenen: het pijltje ernaast is een flex-item en blijft zo op dezelfde
-  // regel staan, en de oproepers die de tekst bijwerken met textContent
-  // zouden dat pijltje anders mee overschrijven. De data-velden gaan daarom
-  // op die span, waar die oproepers ze ook zoeken.
-  const pickBox = (label, rows, summaryAttrs, open) =>
-    `<details class="pick" ${open ? "open" : ""}><summary><span class="pick-label" ${summaryAttrs || ""}>${esc(label)}</span></summary>
-       <div class="pick-list">${rows}</div></details>`;
+  // regel staan, en wie de tekst bijwerkt met textContent zou dat pijltje
+  // anders mee overschrijven.
+  // De regel zelf, op één plaats: de namen van wat aanstaat achter elkaar, en
+  // anders de lege tekst. Hij wordt twee keer toegepast — bij het opbouwen op
+  // de rijen, en daarna op de pagina — en moet dus ook maar één keer bestaan.
+  const pickSamenvatting = (namen, leeg) => (namen.length ? namen.join(", ") : leeg);
+  const pickBox = (rows, leeg, open) =>
+    `<details class="pick" data-pick-empty="${esc(leeg)}" ${open ? "open" : ""}><summary><span class="pick-label">${
+      esc(pickSamenvatting(rows.filter((r) => r.checked).map((r) => r.label), leeg))}</span></summary>
+       <div class="pick-list">${rows.map(pickRow).join("")}</div></details>`;
+  // Dezelfde samenvatting, nu uit de pagina gelezen in plaats van uit de
+  // gegevens: elke rij draagt zijn eigen tekst al, dus de teksten van de
+  // aangevinkte vakjes achter elkaar geven precies hetzelfde antwoord.
+  const syncPick = (box) => {
+    const sum = box.querySelector(".pick-label");
+    if (!sum) return;
+    sum.textContent = pickSamenvatting(
+      [...box.querySelectorAll(".pick-list input:checked")]
+        .map((i) => (i.closest("label") || { textContent: "" }).textContent.trim())
+        .filter(Boolean),
+      box.dataset.pickEmpty || "");
+  };
   // <details> gaat uit zichzelf nooit dicht: je moest er twee keer op klikken.
   // Eén luisteraar op het document doet dat voor alle uitklappers samen, ook
   // die in een dialoog en die er bij een volgende render bijkomen. Een klik ín
@@ -134,6 +160,15 @@ window.FollowUpDomain = (() => {
     // dit daarna, dan was het aangeklikte vakje al uit het document verdwenen
     // en sloot de verse uitklapper zich alsnog.
     document.addEventListener("click", (e) => sluitPicks(e.target), true);
+    // En hier houdt het component zijn eigen samenvatting bij. Eén luisteraar
+    // voor alle uitklappers samen, ook die in een dialoog en die er bij een
+    // volgende render bijkomen. Een scherm dat de vinkjes zelf verzet, roept
+    // syncPick() er zelf bij — die luisteraar ziet zoiets niet, want een
+    // vinkje dat JavaScript aanzet stuurt geen change.
+    document.addEventListener("change", (e) => {
+      const box = e.target.closest && e.target.closest("details.pick");
+      if (box) syncPick(box);
+    });
     // Escape sluit eerst de uitklapper en pas daarna de dialoog eronder. Zonder
     // preventDefault zou één toets allebei doen en ben je je dialoog kwijt.
     document.addEventListener("keydown", (e) => {
@@ -147,6 +182,6 @@ window.FollowUpDomain = (() => {
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
-    esc, pickRow, pickBox, myProducts, productColor, emptyTargets,
+    esc, pickBox, syncPick, myProducts, productColor, emptyTargets,
   };
 })();

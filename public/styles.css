@@ -512,7 +512,8 @@ body[data-view="users"] .sidebar, body[data-view="users"] .map-wrap, body[data-v
   border: 1px solid var(--line); border-radius: var(--radius-lg);
   background: var(--paper); box-shadow: var(--shadow-float); }
 .pick-list label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; white-space: nowrap; }
-/* De scheiding tussen "alle" en de losse producten, op de statistiekpagina. */
+/* De scheiding tussen de rij "alle" en de losse producten. Die rij staat op het
+   beheerscherm en op de statistiekpagina. */
 .pick-list .pick-all { border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 2px; }
 
 /* ---------- rechten ---------- */

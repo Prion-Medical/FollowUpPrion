@@ -351,7 +351,6 @@ window.FollowUpI18n = (() => {
       // statistieken
       "stats.year": "Jaar",
       "stats.product": "Product",
-      "stats.pickNone": "Kies",
       "stats.all": "Alle",
       "stats.noProduct": "Geen product",
       "stats.targets": "Doelen",
@@ -701,7 +700,6 @@ window.FollowUpI18n = (() => {
 
       "stats.year": "Year",
       "stats.product": "Product",
-      "stats.pickNone": "Choose",
       "stats.all": "All",
       "stats.noProduct": "No product",
       "stats.targets": "Targets",

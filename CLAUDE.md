@@ -72,6 +72,19 @@ interpolated value that could come from a user **must** be wrapped in `esc()`. T
 a discipline, not a guarantee — when editing a template, check it. Translated strings
 and numbers are ours and safe.
 
+**The dropdown.** `pickBox()` in `public/domain.js` is the one multi-select in this
+app: the three sidebar filters, a contact's products, a contact moment's and a planned
+moment's product, a user's scope and the statistics filter. It takes its rows as
+**data**, not as markup — `{ attrs, label, checked, cls?, type? }` — and that is the
+whole point: it therefore knows what is ticked and what each row is called, so it owns
+the summary on the button, both when first rendered and on every tick. Five screens
+each kept that summary themselves before, with five different data attributes. A screen
+that moves ticks itself calls `syncPick()`, because a checkbox set from JavaScript
+fires no `change`. `attrs` goes into the tag unescaped — they are attributes and not
+text — so the caller wraps its own values in `esc()`, as everywhere else here. A row
+called "all" is a row like any other, which is why "all products" is also automatically
+the text on the button. `type: "radio"` makes it a choice of one.
+
 **Data shape.** One document: `{ version, hospitals: [...] }`. Each hospital carries
 `contacts[]`, `activities[]`, `planned[]` and a `unit` object (scope brands and notes,
 processor brands and notes — what EndoQ or Ainex actually plugs
