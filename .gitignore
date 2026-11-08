@@ -7,3 +7,10 @@ data/backups/
 
 __pycache__/
 .DS_Store
+
+# Graphify: lokale tooling, niet van de app zelf — net als .claude/ hierboven.
+# De gegenereerde kennisgraaf hoort niet in een publieke repo. .graphifyignore
+# houdt data/ uit die graaf en blijft dus op schijf staan; het is instelwerk van
+# een tool naast de app en wordt daarom niet meegeleverd.
+graphify-out/
+.graphifyignore
