@@ -579,13 +579,24 @@ label.field textarea:focus-visible,
 
   .search { padding: 12px 14px 8px; }
   .search input { height: 46px; font-size: 16px; }
-  .filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px 14px; }
-  /* Op gsm blijven ze náást elkaar: drie volle regels zouden de lijst te ver
-     naar beneden duwen, en verspringen doen ze hier niet — de rij breekt niet
-     af maar schuift. */
-  .filters.picks { flex-direction: row; align-items: center; }
-  .filters.picks .pick { flex: 0 1 auto; }
-  .filters::-webkit-scrollbar { display: none; }
+  /* Alleen de afgeleide filters schuiven zijwaarts. Op .picks mag dat niet:
+     overflow maakt van de rij een knipkader, en dan valt de uitklapper
+     erbuiten — op gsm gebeurde er dan niets behalve dat het pijltje omsloeg. */
+  .filters:not(.picks) { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px 14px; }
+  .filters:not(.picks)::-webkit-scrollbar { display: none; }
+  /* Op gsm blijven de drie náást elkaar: drie volle regels zouden de lijst te
+     ver naar beneden duwen. Elk een gelijk derde, dus verspringt de rij niet
+     en loopt ze niet buiten het scherm; de tekst kort af op het pijltje. */
+  .filters.picks { position: relative; flex-direction: row; align-items: center; }
+  .filters.picks .pick { position: static; flex: 1 1 0; min-width: 0; }
+  /* De uitklapper hangt onder de hele rij in plaats van onder één pil: een
+     lijst van een derde breed zou bij de rechtse pil buiten het scherm
+     vallen. Vandaar ook position: static hierboven — dan is de rij zelf het
+     anker. De 14px is de padding van .filters, zodat het paneel onder de
+     pillen uitlijnt, en min-width terug op nul: de basisregel zet die op
+     100% van het anker, en dat is hier de hele rij — met left én right
+     erbij stak het paneel dan 28px buiten het scherm. */
+  .filters.picks .pick-list { top: 100%; left: 14px; right: 14px; min-width: 0; }
   .chip { min-height: 36px; flex: none; font-size: 14px; }
   .list { padding: 0 6px 18px; }
   .list li { padding: 14px 10px; }
