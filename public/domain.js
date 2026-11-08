@@ -93,7 +93,10 @@ window.FollowUpDomain = (() => {
   // toont niet wat er aanstaat zonder open te klappen.
   //
   // De oproeper geeft de regels zelf mee: elk scherm hangt er zijn eigen
-  // data-velden aan, en die vangt het met delegatie weer op.
+  // data-velden aan, en die vangt het met delegatie weer op. attrs gaat
+  // ongefilterd de tag in — dat moet wel, het zijn attributen en geen tekst —
+  // dus elke oproeper zet er zelf esc() rond, net als bij elke andere sjabloon
+  // in dit project. Alleen vaste namen en al ontsmette waarden dus.
   // type "radio" maakt er een keuze van één. Die vorm gebruiken de dialogen
   // van een contactmoment en een gepland moment: zo'n moment hoort bij één
   // product. Dat is geen vergetelheid — de kamers van een installatie tellen
@@ -119,19 +122,27 @@ window.FollowUpDomain = (() => {
       if (d !== behalve && !d.contains(behalve)) d.open = false;
     }
   };
-  // In de capture-fase, dus vóórdat de pagina op die klik reageert. De
-  // statistiekpagina tekent zichzelf opnieuw zodra je een vinkje zet; liep dit
-  // daarna, dan was het aangeklikte vakje al uit het document verdwenen en
-  // sloot de verse uitklapper zich alsnog.
-  document.addEventListener("click", (e) => sluitPicks(e.target), true);
-  // Escape sluit eerst de uitklapper en pas daarna de dialoog eronder. Zonder
-  // preventDefault zou één toets allebei doen en ben je je dialoog kwijt.
-  document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || !document.querySelector("details.pick[open]")) return;
-    sluitPicks(null);
-    e.preventDefault();
-    e.stopPropagation();
-  });
+  // De twee luisteraars hieronder zijn het enige in dit bestand dat de pagina
+  // aanraakt; al de rest is rekenwerk op vaste waarden. Vandaar de vraag of er
+  // wel een document is: zonder haar is domain.js buiten een browser niet meer
+  // in te lezen, en dat is net waar "Known and accepted" in CLAUDE.md op
+  // rekent — komen er ooit controles, dan zijn het node-assertions over de
+  // zuivere functies die hier staan.
+  if (typeof document !== "undefined") {
+    // In de capture-fase, dus vóórdat de pagina op die klik reageert. De
+    // statistiekpagina tekent zichzelf opnieuw zodra je een vinkje zet; liep
+    // dit daarna, dan was het aangeklikte vakje al uit het document verdwenen
+    // en sloot de verse uitklapper zich alsnog.
+    document.addEventListener("click", (e) => sluitPicks(e.target), true);
+    // Escape sluit eerst de uitklapper en pas daarna de dialoog eronder. Zonder
+    // preventDefault zou één toets allebei doen en ben je je dialoog kwijt.
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !document.querySelector("details.pick[open]")) return;
+      sluitPicks(null);
+      e.preventDefault();
+      e.stopPropagation();
+    });
+  }
 
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),

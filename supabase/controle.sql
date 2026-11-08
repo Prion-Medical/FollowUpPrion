@@ -79,6 +79,22 @@ strippen as (
   select d, followup.merge_doc(d,
            jsonb_set(s, '{hospitals,0,contacts,2,products}', '[]'::jsonb),
          '{Ainex}'::text[], false) as n
+  from mijn),
+
+-- En hier maakt hij een nieuw ziekenhuis aan met daarin meteen een
+-- contactpersoon die hij voor allebei de producten aanvinkt. Het ziekenhuis
+-- zelf mag hij aanmaken — Ainex ligt binnen zijn bereik — maar dat EndoQ-vinkje
+-- is niet van hem. Dit is de ene weg die niet van het opgeslagen document
+-- vertrekt: er ís nog niets opgeslagen om van te vertrekken. De regels moeten
+-- er dus apart gelden, en dat is precies wat hier nagekeken wordt.
+nieuwzh as (
+  select d, followup.merge_doc(d,
+           jsonb_set(s, '{hospitals}', (s -> 'hospitals') ||
+             '[{"id":"h5","name":"Nieuw AZ","products":["Ainex"],
+                "nextAction":"","nextActionDate":"","unit":{},
+                "contacts":[{"id":"c7","name":"Dr Nieuw","products":["EndoQ","Ainex"]}],
+                "activities":[],"planned":[]}]'::jsonb),
+         '{Ainex}'::text[], false) as n
   from mijn)
 
 select nr, controle,
@@ -222,6 +238,18 @@ from (
          '["EndoQ"]'::jsonb,
          (select c -> 'products' from jsonb_array_elements(n #> '{hospitals,0,contacts}') c
            where c ->> 'id' = 'c6') from strippen
+
+  -- --- een nieuw ziekenhuis van een beperkte gebruiker ----------------------
+  -- Een nieuw ziekenhuis komt niet door merge_hospital maar door een eigen tak
+  -- in merge_doc. Zonder deze twee controles is dat de enige schrijfweg die
+  -- nergens nagekeken wordt.
+  union all select 36, 'nieuw ziekenhuis van een beperkte gebruiker komt erbij, achteraan',
+         '["h1", "h2", "h3", "h4", "h5"]'::jsonb,
+         (select jsonb_agg(h ->> 'id') from jsonb_array_elements(n -> 'hospitals') h) from nieuwzh
+  union all select 37, 'een contactpersoon in dat nieuwe ziekenhuis krijgt enkel het eigen vinkje',
+         '["Ainex"]'::jsonb,
+         (select c -> 'products' from jsonb_array_elements(n #> '{hospitals,4,contacts}') c
+           where c ->> 'id' = 'c7') from nieuwzh
 ) q(nr, controle, verwacht, gekregen)
 order by nr;
 

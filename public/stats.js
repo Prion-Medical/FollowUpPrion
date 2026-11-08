@@ -32,7 +32,9 @@ window.FollowUpStats = (() => {
   // bijkomt dat je één keer verkoopt.
   // products leeg = geen filter, dus alles. Dezelfde betekenis als een leeg
   // bereik op een gebruiker: niets aangevinkt beperkt niets.
-  const view = { year: String(new Date().getFullYear()), products: [], chart: "subs" };
+  // pickOpen onthoudt of de uitklapper openstond: elke wijziging tekent de
+  // pagina opnieuw en zou hem anders dichtklappen.
+  const view = { year: String(new Date().getFullYear()), products: [], chart: "subs", pickOpen: false };
   let tip;
 
   const fmt = (n, d = 0) => (n == null || isNaN(n) ? "—" : Number(n).toLocaleString(I18N.locale, { maximumFractionDigits: d, minimumFractionDigits: d }));
@@ -184,7 +186,7 @@ window.FollowUpStats = (() => {
       for (const p of Object.keys(b.values)) b.values[p] = Math.max(0, b.values[p]);
     }
     const series = seriesIn(events);
-    return card(t("stats.activeSubs"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [PRODUCTS[0]]), "wide");
+    return card(t("stats.activeSubs"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [myProducts()[0]]), "wide");
   }
 
   // Nieuwe installaties per maand. Voor EndoQ en Ainex zegt de grafiek hierboven
@@ -197,7 +199,7 @@ window.FollowUpStats = (() => {
       if (b) b.values[a.product || ""] = (b.values[a.product || ""] || 0) + rooms(a);
     }
     const series = seriesIn(installs);
-    return card(t("stats.perMonth"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [PRODUCTS[0]]), "wide");
+    return card(t("stats.perMonth"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [myProducts()[0]]), "wide");
   }
 
   function hospitalsCard(db) {
@@ -304,7 +306,10 @@ window.FollowUpStats = (() => {
             view.products.length ? view.products.join(", ") : t("stats.pickNone"),
             pickRow(`data-stat-product="all"`, t("stats.all"), !view.products.length, "pick-all")
               + myProducts().map((p) => pickRow(`data-stat-product="${esc(p)}"`, p, view.products.includes(p))).join(""),
-            `data-stat-sum`, view.pickOpen)}</label>
+            // Geen data-veld op de samenvatting: anders dan bij de filters in de
+            // zijbalk tekent deze pagina zichzelf na elk vinkje volledig
+            // opnieuw, dus het label komt vanzelf goed.
+            "", view.pickOpen)}</label>
           <div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}">${esc(t(key))}</button>`).join("")}</div>
         </div>
       </div>

@@ -26,6 +26,15 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('scope_hospital',  'fix_planned',    'nextAction van het andere product niet meesturen'),
   ('scope_hospital',  'scope_contacts', 'de productlijst van een contactpersoon afschermen'),
   ('scope_contacts',  'both_in',        'bestaat die functie überhaupt'),
+  -- Deze is de belangrijkste van de lijst. Draait er nog een oude in_scope,
+  -- dan kijkt die enkel naar "product" en leest ze een contactpersoon met een
+  -- "products"-lijst als "heeft geen product" — en dan is die voor iedereen
+  -- zichtbaar. Dat is het ene geval waarin een stille terugval niet alleen
+  -- iets stukmaakt maar iets lekt.
+  ('in_scope',        'both_in',        'een contactpersoon met een productlijst afschermen'),
+  -- Sorteert product_sort nog met een vaste lijst in plaats van met
+  -- producten(), dan verandert een nieuw product daar niets meer aan.
+  ('product_sort',    'producten',      'de productenlijst komt uit één functie'),
   ('merge_entries',   'merge_products', 'het vinkje van de collega niet laten wegnemen'),
   ('merge_products',  'only_in',        'bestaat die functie überhaupt'),
   ('merge_hospital',  'merge_products', 'dezelfde formule voor het ziekenhuis'),

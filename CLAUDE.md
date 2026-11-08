@@ -122,7 +122,10 @@ that would make loading and saving return a different document and break the che
 that matters most. A contact is visible as soon as one product overlaps your scope,
 and `products` is then trimmed to your scope and merged back with the same
 `(stored − yours) ∪ (payload ∩ yours)` rule as the hospital's own ticks, so you
-cannot take a colleague's product off someone.
+cannot take a colleague's product off someone. Only `products` is merged that way:
+the contact's own fields — name, phone, e-mail, notes — are **shared**, exactly as
+the hospital's are. Two people looking after the same clinician edit the same
+record, and the last save wins.
 
 **Planned versus logged.** `activities[]` is the log of what happened, and it drives
 status, stage, rooms and both charts. `planned[]` is the agenda and drives none of that —
