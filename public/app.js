@@ -1844,7 +1844,12 @@
         <div class="u-scope">
           <span class="field-label">${esc(t("users.products"))}</span>
           ${pickBox(productsLabel(u.products),
-            PRODUCTS.map((p) => pickRow(`data-uid="${esc(u.id)}" data-uproduct="${esc(p)}"`, p, u.products.includes(p))).join(""),
+            // "Alle producten" bovenaan is leeg bereik, en dat is iets anders
+            // dan alle vakjes aanvinken: leeg betekent onbeperkt en neemt een
+            // produkt dat er later bijkomt vanzelf mee, terwijl {EndoQ, Ainex}
+            // ook later precies die twee blijft — en importeren uitschakelt.
+            pickRow(`data-uid="${esc(u.id)}" data-uall="1"`, t("users.allProducts"), !u.products.length, "pick-all")
+            + PRODUCTS.map((p) => pickRow(`data-uid="${esc(u.id)}" data-uproduct="${esc(p)}"`, p, u.products.includes(p))).join(""),
             `data-usum="${esc(u.id)}"`)}
         </div>
       </div>`;
@@ -1867,6 +1872,7 @@
     const before = { name: u.name, role: u.role, products: [...u.products] };
     if (el.dataset.ufield === "name") u.name = el.value.trim();
     else if (el.dataset.ufield === "role") u.role = el.value;
+    else if (el.dataset.uall) u.products = [];
     else if (el.dataset.uproduct) {
       u.products = el.checked
         ? [...new Set([...u.products, el.dataset.uproduct])]
@@ -1885,6 +1891,13 @@
     toast(t("users.saved"));
     const sum = usersView.querySelector(`[data-usum="${u.id}"]`);
     if (sum) sum.textContent = productsLabel(u.products);
+    // "Alle producten" en de losse vakjes sluiten elkaar uit; na een wijziging
+    // zetten we ze allemaal gelijk met wat er nu in u.products staat.
+    for (const b of usersView.querySelectorAll(`[data-uid="${u.id}"][data-uproduct]`)) {
+      b.checked = u.products.includes(b.dataset.uproduct);
+    }
+    const alle = usersView.querySelector(`[data-uid="${u.id}"][data-uall]`);
+    if (alle) alle.checked = !u.products.length;
     const hint = usersView.querySelector(`[data-uhint="${u.id}"]`);
     if (hint) hint.textContent = t("role." + u.role + ".hint");
     // Je eigen rol of bereik aangepast? Dan gelden er andere rechten dan de app
