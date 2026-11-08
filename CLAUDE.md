@@ -282,6 +282,13 @@ run `supabase/versie.sql` first: it reads `pg_proc` and reports per function whe
 database holds the current body. Add a line there whenever a function changes
 materially, or it stops guarding anything.
 
+`supabase/toegang.sql` is the third one, and the one to run now and then rather than
+after a change: it checks that the grants, the RLS and the roles are still what the
+schema intends — `app_state` and `app_state_backups` unreachable, no `usage` on
+`followup`, the two RPCs executable, every account with a row, at least one admin. It
+cannot see whether sign-up is disabled or whether 2FA is on, because neither lives in
+the database; the file names both at the foot.
+
 ## Git
 
 - Repository lives in the **Prion-Medical** organisation; push as the `PrionMedical`
