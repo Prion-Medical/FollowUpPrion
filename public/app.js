@@ -687,8 +687,12 @@
       nameHit(a) - nameHit(b) || order[shown(a).status] - order[shown(b).status] || a.name.localeCompare(b.name));
     const ul = $("#list");
     ul.removeAttribute("aria-busy"); // de streepjes van het laden gaan eruit
+    // Waar staat elke rij nu? Dat moet vóór het hertekenen gemeten worden; zie
+    // settleList() hieronder.
+    const before = rowTops(ul, "li[data-id]", listKey);
     if (!items.length) {
       ul.innerHTML = `<li class="empty">${esc(t("list.empty"))}</li>`;
+      settleList(ul, before);
       return;
     }
     ul.innerHTML = items.map((h) => {
@@ -708,7 +712,42 @@
         </div>
       </li>`;
     }).join("");
+    settleList(ul, before);
   }
+  // Na een filter of een zoekterm staat de lijst er in één klap anders: rijen
+  // weg, andere ertussen, alles verspringt. Dat leest als een schok. Hier
+  // schuift een rij die blijft van haar oude plek naar haar nieuwe, en komt
+  // een rij die er nog niet stond zacht op. Rijen die verdwijnen, verdwijnen
+  // gewoon: wachten tot ze uitgefaded zijn zou het typen vertragen.
+  //
+  // Kort en klein, want dit gebeurt bij elke toetsaanslag: de afstand is
+  // afgetopt, zodat een rij van onder uit de lijst niet het hele scherm
+  // oversteekt. Alleen transform en opacity, via element.animate(): dat kan de
+  // browser buiten de hoofddraad afspelen. Een volgende hertekening meet
+  // gewoon waar de rijen op dat moment staan, ook halverwege.
+  //
+  // Dezelfde twee stappen dienen voor het logboek: eerst meten (rowTops), dan
+  // hertekenen, dan laten bezinken (settleRows). Wat een rij is en hoe ze
+  // heet, zegt de oproeper met een selector en een sleutel.
+  const LIST_MOVE = { duration: 340, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" };
+  const rowTops = (root, sel, key) =>
+    new Map([...root.querySelectorAll(sel)].map((el) => [key(el), el.getBoundingClientRect().top]));
+  function settleRows(root, sel, key, before, bottom) {
+    if (!root.animate || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    for (const el of root.querySelectorAll(sel)) {
+      const top = el.getBoundingClientRect().top;
+      if (top > bottom) break; // wat onder de rand valt, ziet niemand
+      const was = before.get(key(el));
+      if (was === undefined) {
+        el.animate([{ opacity: 0 }, { opacity: 1 }], LIST_MOVE);
+      } else if (Math.abs(was - top) > 1) {
+        const d = Math.max(-64, Math.min(64, was - top));
+        el.animate([{ transform: `translateY(${d}px)` }, { transform: "none" }], LIST_MOVE);
+      }
+    }
+  }
+  const listKey = (li) => li.dataset.id;
+  const settleList = (ul, before) => settleRows(ul, "li", listKey, before, ul.getBoundingClientRect().bottom);
   $("#list").addEventListener("click", (e) => {
     const li = e.target.closest("li[data-id]");
     if (li) select(li.dataset.id, true);
@@ -2039,7 +2078,14 @@
     const body = $("#logBody", agendaView);
     if (!body) return;
     const items = logItems();
-    if (!items.length) { body.innerHTML = `<p class="muted">${esc(t("log.empty"))}</p>`; return; }
+    // Zoals in de lijst van ziekenhuizen: een rij die blijft schuift naar haar
+    // nieuwe plek, een nieuwe komt zacht op. De weekkopjes doen mee, anders
+    // springen zij terwijl de rijen eronder glijden.
+    const LOG_ROWS = "h3.ag-h, li.ag-row, p.muted";
+    const logKey = (el) => el.dataset.aid || "kop:" + el.textContent;
+    const before = rowTops(body, LOG_ROWS, logKey);
+    const settle = () => settleRows(body, LOG_ROWS, logKey, before, window.innerHeight);
+    if (!items.length) { body.innerHTML = `<p class="muted">${esc(t("log.empty"))}</p>`; settle(); return; }
     const counts = {};
     for (const { a } of items) counts[a.type] = (counts[a.type] || 0) + 1;
     const perType = Object.entries(counts).sort((x, y) => y[1] - x[1]).map(([k, n]) => `${n} ${t("act." + k).toLowerCase()}`).join(" · ");
@@ -2059,6 +2105,7 @@
       </div>`).join("")}
       ${items.length > visible.length ? `<p class="log-more"><span class="muted">${esc(t("log.shown", { n: visible.length, total: items.length }))}</span>
         <button class="btn small" data-log-more>${esc(t("log.more"))}</button></p>` : ""}`;
+    settle();
   }
   function renderLog() {
     const L = state.log;
