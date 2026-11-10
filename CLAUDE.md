@@ -93,12 +93,14 @@ Two things that cost an evening to find out:
 
 | File | What it is |
 |---|---|
-| `public/domain.js` | Fixed values both app.js and stats.js need, plus `esc()` |
+| `public/domain.js` | Fixed values both app.js and stats.js need, plus `esc()` and `pickBox()` |
+| `public/ui.js` | What the page does without knowing about hospitals: icons, `leave()`, `ask()`, row motion, the sliding switch, the select list |
 | `public/app.js` | The whole app: map, list, record, agenda, dialogs, export/import (~1,500 lines) |
 | `public/i18n.js` | NL/EN dictionaries and `t()` |
 | `public/stats.js` | Statistics page, charts as plain HTML |
 | `public/storage.js` | Two backends: local `server.py`, or Supabase with login |
-| `public/styles.css` | Prion Medical house style — ink/paper/Jost, amber accent `#d97b2a` |
+| `public/theme.js` | Light, dark or system: sets `data-theme` on `<html>` before anything is drawn |
+| `public/styles.css` | The look: white panels on cool grey, system font, one blue accent `#2563eb`, light and dark |
 | `server.py` | Local static server + `GET`/`PUT /api/data` |
 | `data/seed.json` | 40 starter hospitals (BE/NL/LU), no contacts, approximate coordinates |
 
@@ -116,6 +118,32 @@ interpolated value that could come from a user **must** be wrapped in `esc()`. T
 a discipline, not a guarantee — when editing a template, check it. Translated strings
 and numbers are ours and safe.
 
+**The look.** `styles.css` opens with every token: surfaces, ink, one accent, the
+three status colours each as a full colour (dots, pins), an `-ink` (text) and a
+`-soft` (the ground behind it), and `--series-1` … `--series-6`. The accent is one
+value, `--accent` (light and dark each have theirs), with `--on-accent` for the text
+on top of it; hover, soft, line, ink and focus ring are derived with `color-mix()`.
+There are five
+font sizes (`--t-xs` … `--t-lg`, 11/12/13/15/18) and `--t-xl` for the figures on the
+statistics page; pick one of those rather than writing a pixel value. The phone block
+remaps the same tokens one step larger, so inputs reach 16px and iOS does not zoom.
+Dark mode is the same token names under `:root[data-theme="dark"]` inside `@media
+screen` — `screen`, so a print is always light. `public/theme.js` sets that attribute
+from the choice in the menu (system, light or dark, kept in `localStorage`); it loads
+in the `<head>` so the page does not flash white first, and it is a file of its own
+because the CSP allows no inline script. A rule that needs a different value in
+the dark gets a token, not a second rule: a rule inside that block that also exists
+further down the file loses to it. Icons are `icon("edit")` from `ui.js`, inline
+SVG in the colour of the text beside them; no glyphs from the font. Motion is short
+and all of it is switched off under `prefers-reduced-motion`. The one piece with
+JavaScript behind it is the highlight that slides between the buttons of an `.s-seg`
+(`segSlide()` in `ui.js`): the screens rebuild their `innerHTML` on the click, so
+it measures where the highlight is in the capture phase and re-creates it in the new
+markup. The movement itself is a CSS transition on `transform` with `--spring`, which
+is what makes a click halfway turn it round. The font is the
+device's own, so nothing is fetched from Google Fonts any more; the CSP still allows
+it and was left alone.
+
 **The dropdown.** `pickBox()` in `public/domain.js` is the one multi-select in this
 app: the three sidebar filters, a contact's products, a contact moment's and a planned
 moment's product, a user's scope and the statistics filter. It takes its rows as
@@ -128,6 +156,30 @@ fires no `change`. `attrs` goes into the tag unescaped — they are attributes a
 text — so the caller wraps its own values in `esc()`, as everywhere else here. A row
 called "all" is a row like any other, which is why "all products" is also automatically
 the text on the button. `type: "radio"` makes it a choice of one.
+
+**Questions and messages.** No `confirm()` or `alert()`: `ask(msg)` in `ui.js` opens
+the app's own dialog (`#ask`) and promises true or false, `tell(msg)` is the same box
+with one button. A form dialog with a delete button passes its question as the third
+argument of `openDialog()`, which asks it with the form still open underneath, so
+"Annuleer" puts you back where you were. The banner under the top bar takes a tone,
+`showBanner(msg, reload, "error" | "warn" | "info")`, and is red unless told otherwise.
+
+**Making things go away.** Anything that closes with a fade goes through
+`leave(el, after, opts)` in `ui.js`: it fades the element and only then runs `after`,
+which is what really removes it (set `hidden`, close the dialog, drop the node).
+`stay(el)` calls a leave off when the thing is reopened meanwhile. One mechanism for
+the record, the menu, the toast, both dialogs and both kinds of dropdown — no CSS
+exit rules, and no timer elsewhere that has to match a duration. It runs on a clock
+rather than on an animation event, because that event waits for the next frame and a
+window that is not being drawn never sends it.
+
+**Select lists.** A `<select>` stays a `<select>`, but with a mouse its list is drawn
+by `selShow()` in `ui.js` (`.sel-list` in `styles.css`): the system's own list
+opens over the field on a Mac and hides which field you are in. One listener on the
+document holds the native list back and shows ours under the field, or above it; a
+choice sets the select's value and fires an ordinary `change`, so no screen had to be
+converted and a new select joins in by existing. On a touch screen nothing is
+intercepted and the device shows its own picker.
 
 **Data shape.** One document: `{ version, hospitals: [...] }`. Each hospital carries
 `contacts[]`, `activities[]`, `planned[]` and a `unit` object (scope brands and notes,
@@ -364,7 +416,7 @@ rules are worth knowing:
   `products` is the exception: `(stored − yours) ∪ (payload ∩ yours)`, so you cannot
   strip the other product and push a hospital out of a colleague's view.
 - Outside an import, at most one hospital and five records may disappear in a single
-  save. The app deletes one thing at a time behind a `confirm()`, so no real save ever
+  save. The app deletes one thing at a time behind a confirmation, so no real save ever
   reaches that cap. It catches the case that no merge rule can: a user whose scope was
   just widened sends the small document they were holding, which would otherwise count
   as a wholesale replace.

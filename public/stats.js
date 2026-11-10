@@ -96,6 +96,8 @@ window.FollowUpStats = (() => {
   function columns(buckets, series) {
     const max = niceMax(Math.max(1, ...buckets.map((b) => sum(series, (s) => b.values[s] || 0))));
     const ticks = [max, max / 2, 0];
+    // Lege assen zeggen niets: één zin is eerlijker dan een grafiek zonder balken.
+    if (!buckets.some((b) => sum(series, (x) => b.values[x] || 0))) return `<p class="muted s-empty">${esc(t("stats.empty"))}</p>`;
     return `
       <div class="s-cols">
         <div class="s-yaxis">${ticks.map((v) => `<span>${fmt(v)}</span>`).join("")}</div>
@@ -374,7 +376,7 @@ window.FollowUpStats = (() => {
               attrs: `data-stat-product="${esc(p)}"`, label: p, checked: view.products.includes(p),
             })),
           ], t("stats.all"), view.pickOpen)}</label>
-          ${!metSubs ? "" : `<div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}">${esc(t(key))}</button>`).join("")}</div>`}
+          ${!metSubs ? "" : `<div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}"><span>${esc(t(key))}</span></button>`).join("")}</div>`}
         </div>
       </div>
       <div class="s-tiles">

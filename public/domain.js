@@ -205,9 +205,17 @@ window.FollowUpDomain = (() => {
   // die in een dialoog en die er bij een volgende render bijkomen. Een klik ín
   // de uitklapper telt niet mee — anders sloeg het vakje dat je net aanvinkte
   // de uitklapper meteen weer dicht.
+  // Dichtklappen gaat zacht, via leave() in ui.js; dat bestand wordt na dit
+  // geladen, maar hier komen we pas bij een klik. Is het er niet (buiten een
+  // browser), dan klapt de lijst gewoon dicht.
+  const sluitPick = (d) => {
+    const ui = window.FollowUpUI, list = d.querySelector(".pick-list");
+    if (ui && list) ui.leave(list, () => { d.open = false; }, { ms: 90 });
+    else d.open = false;
+  };
   const sluitPicks = (behalve) => {
     for (const d of document.querySelectorAll("details.pick[open]")) {
-      if (d !== behalve && !d.contains(behalve)) d.open = false;
+      if (d !== behalve && !d.contains(behalve)) sluitPick(d);
     }
   };
   // De twee luisteraars hieronder zijn het enige in dit bestand dat de pagina
@@ -221,7 +229,13 @@ window.FollowUpDomain = (() => {
     // statistiekpagina tekent zichzelf opnieuw zodra je een vinkje zet; liep
     // dit daarna, dan was het aangeklikte vakje al uit het document verdwenen
     // en sloot de verse uitklapper zich alsnog.
-    document.addEventListener("click", (e) => sluitPicks(e.target), true);
+    document.addEventListener("click", (e) => {
+      sluitPicks(e.target);
+      // Een klik op de eigen knop van een open uitklapper: de browser zou hem
+      // in één klap sluiten. Dat doen we zelf, even zacht als de andere.
+      const knop = e.target.closest && e.target.closest("details.pick[open] > summary");
+      if (knop) { e.preventDefault(); sluitPick(knop.parentElement); }
+    }, true);
     // En hier houdt het component zijn eigen samenvatting bij. Eén luisteraar
     // voor alle uitklappers samen, ook die in een dialoog en die er bij een
     // volgende render bijkomen. Een scherm dat de vinkjes zelf verzet, roept
