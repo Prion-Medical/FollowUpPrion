@@ -11,7 +11,7 @@
   const {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
-    productKind, wantsQuantity, stagesFor, furthest, pipelineView,
+    CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
     esc, pickBox, syncPick, myProducts,
   } = window.FollowUpDomain;
   // Welk product staat standaard in een nieuw contactmoment of een planning:
@@ -343,6 +343,19 @@
     stampFields(p);
     return p;
   }
+  // De gegevens van een product per ingreep. Ze staan in de rij van dat
+  // product in h.pipeline en niet in een blok op het ziekenhuis zoals unit:
+  // Thyroid RFA en Fibroid RFA hebben elk hun eigen goedkeuring, prioriteit en
+  // concurrent in hetzelfde ziekenhuis, en zo vallen ze vanzelf binnen de
+  // productmuur — de databank schermt die rijen al af per product.
+  function normalizeFacts(e) {
+    e.cmm = CMM_STATES.includes(e.cmm) ? e.cmm : "";
+    e.prio = [1, 2, 3].includes(Number(e.prio)) ? Number(e.prio) : null;
+    e.doesAlready = YES_NO.includes(e.doesAlready) ? e.doesAlready : "";
+    e.currentSystem = str(e.currentSystem);
+    e.notes = str(e.notes);
+    return e;
+  }
   // De opvolging per product. Elk product dat bij het ziekenhuis aangevinkt
   // staat krijgt een eigen fase, kleur en verantwoordelijke; wat op het
   // ziekenhuis zelf staat volgt daaruit (zie pipelineView in domain.js).
@@ -363,6 +376,7 @@
       e.stage = STAGES.includes(e.stage) ? e.stage : "prospect";
       e.status = STATUSES.includes(e.status) ? e.status : "red";
       e.owner = str(e.owner);
+      if (productKind(p) === "procedure") normalizeFacts(e);
     }
     const eerste = !Object.keys(h.pipeline).length;
     for (const p of h.products) {
@@ -373,6 +387,7 @@
       // Een fase die dit product niet kent, schuift naar de dichtste die het
       // wel kent: allebei liggen ze net voor of net na de evaluatie.
       if (!stagesFor(p).includes(e.stage)) e.stage = "evaluation";
+      if (productKind(p) === "procedure") normalizeFacts(e);
       h.pipeline[p] = e;
     }
     if (h.products.length) {
@@ -429,6 +444,8 @@
     h.country = COUNTRIES.includes(h.country) ? h.country : "";
     h.sector = SECTORS.includes(h.sector) ? h.sector : "";
     h.address = str(h.address);
+    h.network = str(h.network);
+    h.sites = str(h.sites);
     h.notes = str(h.notes);
     h.nextAction = str(h.nextAction);
     h.nextActionDate = dateOrEmpty(h.nextActionDate);
@@ -573,7 +590,7 @@
   // ---------- filter + lijst ----------
   function matchesQuery(h, q) {
     if (!q) return true;
-    const hay = [h.name, h.address, h.unit.scopeNotes, h.unit.processorNotes, h.unit.existingAI, h.notes,
+    const hay = [h.name, h.address, h.network, h.sites, h.unit.scopeNotes, h.unit.processorNotes, h.unit.existingAI, h.notes,
       ...h.contacts.flatMap((c) => [c.name, c.role, c.address, c.email, c.department && t("dept." + c.department)])]
       .join(" ").toLowerCase();
     return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
@@ -920,6 +937,35 @@
           </div>`).join("") : `<p class="muted">${esc(t("empty.contacts"))}</p>`}
       </div>
 
+      ${pipe.filter((p) => productKind(p) === "procedure").map((p) => {
+        // Eén sectie per product per ingreep, zoals de endoscopie-afdeling er
+        // één is voor EndoQ en Ainex. Ze staat er alleen als het product bij
+        // dit ziekenhuis aangevinkt is en binnen je bereik valt.
+        const e = h.pipeline[p];
+        const fact = (k) => `data-fact="${k}" data-fact-product="${esc(p)}"`;
+        return `<div class="section">
+        <h3>${esc(p)}</h3>
+        <p class="muted">${esc(t("unit.unknownOk"))}</p>
+        <div class="grid">
+          <label class="field">${esc(t("rfa.cmm"))}
+            <select ${fact("cmm")}>${[opt("", "—", e.cmm), ...CMM_STATES.map((k) => opt(k, t("rfa.cmm." + k), e.cmm))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("rfa.prio"))}
+            <select ${fact("prio")}>${[opt("", "—", String(e.prio ?? "")), ...[1, 2, 3].map((n) => opt(String(n), String(n), String(e.prio ?? "")))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("rfa.doesAlready"))}
+            <select ${fact("doesAlready")}>${[opt("", "—", e.doesAlready), ...YES_NO.map((k) => opt(k, t("yn." + k), e.doesAlready))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("rfa.currentSystem"))}
+            <input ${fact("currentSystem")} value="${esc(e.currentSystem)}" placeholder="${esc(t("rfa.currentSystem.ph"))}">
+          </label>
+          <label class="field full">${esc(t("rfa.notes"))}
+            <textarea ${fact("notes")} rows="3">${esc(e.notes)}</textarea>
+          </label>
+        </div>
+      </div>`;
+      }).join("")}
+
       <div class="section">
         <h3>${esc(t("section.unit"))}</h3>
         <p class="muted">${esc(t("unit.unknownOk"))}</p>
@@ -961,6 +1007,12 @@
           </div>
           <label class="field full">${esc(t("field.address"))}
             <input data-field="address" value="${esc(h.address)}">
+          </label>
+          <label class="field">${esc(t("field.network"))}
+            <input data-field="network" value="${esc(h.network)}">
+          </label>
+          <label class="field">${esc(t("field.sites"))}
+            <input data-field="sites" value="${esc(h.sites)}">
           </label>
           <div class="field full">
             <span class="field-label">${esc(t("field.location"))}</span>
@@ -1011,6 +1063,10 @@
       syncPipeline(h);
     } else if (d.powner && h.pipeline[d.powner]) {
       h.pipeline[d.powner].owner = el.value;
+    } else if (d.fact && h.pipeline[d.factProduct]) {
+      // normalizeFacts houdt de vaste sleutels en het getal in de hand.
+      h.pipeline[d.factProduct][d.fact] = el.value;
+      normalizeFacts(h.pipeline[d.factProduct]);
     } else if (d.unit) {
       h.unit[d.unit] = el.type === "number" ? num(el.value) : el.value;
     } else if (d.unitBool) {
@@ -1627,15 +1683,21 @@
             t("col.lastContact"), t("col.demos"), t("col.installations"), t("unit.roomsInstalled"),
             t("col.demoDate"), t("col.nextAction"), t("col.nextActionDate"), t("col.primaryContact"),
             t("col.address"), t("col.createdAt"), t("col.notes"),
-            ...myProducts().flatMap((p) => [`${t("col.stage")} ${p}`, `${t("col.owner")} ${p}`])],
+            t("field.network"), t("field.sites"),
+            ...myProducts().flatMap((p) => [`${t("col.stage")} ${p}`, `${t("col.owner")} ${p}`,
+              ...(productKind(p) === "procedure" ? ["rfa.cmm", "rfa.prio", "rfa.doesAlready", "rfa.currentSystem", "rfa.notes"].map((k) => `${t(k)} ${p}`) : [])])],
           ...hs.map((h) => [h.name, h.country && t("country." + h.country), h.sector && t("sector." + h.sector),
             t("status." + h.status), t("stage." + h.stage), h.products.join(", "), lastContact(h),
             countType(h, "demo"), countType(h, "installation"), h.unit.roomsInstalled ?? "",
             demoDate(h), h.nextAction, h.nextActionDate, (h.contacts.find((c) => c.primary) || {}).name,
             h.address, h.createdAt, h.notes,
+            h.network, h.sites,
             ...myProducts().flatMap((p) => {
               const e = h.products.includes(p) && h.pipeline[p];
-              return e ? [t("stage." + e.stage), personName(e.owner)] : ["", ""];
+              const rfa = productKind(p) === "procedure";
+              if (!e) return rfa ? ["", "", "", "", "", "", ""] : ["", ""];
+              return [t("stage." + e.stage), personName(e.owner),
+                ...(rfa ? [e.cmm && t("rfa.cmm." + e.cmm), e.prio ?? "", e.doesAlready && t("yn." + e.doesAlready), e.currentSystem, e.notes] : [])];
             })]),
         ]), "text/csv");
       } else if (kind === "contacts") {

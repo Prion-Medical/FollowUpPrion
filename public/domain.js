@@ -112,6 +112,13 @@ window.FollowUpDomain = (() => {
     const entries = products.filter((p) => h.products.includes(p) && h.pipeline && h.pipeline[p]).map((p) => h.pipeline[p]);
     return entries.length ? furthest(entries) : { status: "red", stage: "prospect", owner: "" };
   };
+  // Wat je van een ziekenhuis moet weten voor een product per ingreep — de
+  // tegenhanger van de endoscopie-afdeling bij EndoQ en Ainex. CMM is het
+  // Comité Medisch Materiaal: zolang dat het product niet goedgekeurd heeft,
+  // mag het ziekenhuis niet bestellen. Sleutels, zoals overal: de tekst komt
+  // uit i18n.js.
+  const CMM_STATES = ["not_ok", "requested", "ok"];
+  const YES_NO = ["yes", "no", "unknown"];
   const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "other"];
   // De toren staat los van de scopes — daar hangt EndoQ of
   // Ainex aan, dus
@@ -236,7 +243,7 @@ window.FollowUpDomain = (() => {
 
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
+    ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
     esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
   };
 })();

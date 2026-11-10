@@ -15,7 +15,7 @@ window.FollowUpStats = (() => {
   const t = (k, v) => I18N.t(k, v);
 
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
-  const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS,
+  const { PRODUCTS, CMM_STATES, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS,
           esc, pickBox, myProducts, productColor, productKind, pipelineView, emptyTargets } = window.FollowUpDomain;
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Een doelcijfer aanpassen is schrijven. Zonder dat recht staat het getal er
@@ -228,6 +228,23 @@ window.FollowUpStats = (() => {
     return card(t("stats.orders"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [myProducts().find((p) => productKind(p) === "procedure")]), "wide");
   }
 
+  // Hoe ver staat de goedkeuring door het Comité Medisch Materiaal, voor de
+  // producten per ingreep in de keuze. Geteld per ziekenhuis en per product:
+  // een ziekenhuis met Thyroid RFA én Fibroid RFA telt twee keer, want het
+  // zijn twee aanvragen.
+  function cmmCard(db, keuze) {
+    const procedure = keuze.filter((p) => productKind(p) === "procedure");
+    const rows = hospitals(db).flatMap((h) => procedure.filter((p) => h.products.includes(p) && h.pipeline && h.pipeline[p]).map((p) => ({ p, cmm: h.pipeline[p].cmm || "" })));
+    const items = ["ok", "requested", "not_ok", ""].map((k) => {
+      const hit = rows.filter((r) => r.cmm === k);
+      const values = {};
+      for (const r of hit) values[r.p] = (values[r.p] || 0) + 1;
+      return { label: k ? t("rfa.cmm." + k) : t("rfa.cmm.unknown"), total: hit.length, values };
+    }).filter((i) => i.total);
+    const series = procedure.filter((p) => rows.some((r) => r.p === p));
+    return card(t("stats.cmm"), (series.length > 1 ? legend(series) : "") + hbars(items, series.length > 1 ? series : null, t("stats.noData")));
+  }
+
   function hospitalsCard(db) {
     const items = hospitals(db)
       .filter((h) => h.unit.roomsInstalled)
@@ -365,6 +382,7 @@ window.FollowUpStats = (() => {
       <div class="s-grid-cards">
         ${!metSubs ? "" : (view.chart === "subs" ? subscriptionsCard(subsEvents) : installationsCard(installs))}
         ${!metOrders ? "" : ordersCard(orders)}
+        ${!metOrders ? "" : cmmCard(db, keuze)}
         ${targetsCard(db, subsEvents)}
         ${!metSubs ? "" : hospitalsCard(db)}
         ${pipelineCard(db)}

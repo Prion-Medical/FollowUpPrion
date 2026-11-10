@@ -236,6 +236,14 @@ as a whole. "Overdue", "gone quiet" and "demo planned" follow the same filter th
 `inFilter()`. A contact moment moves the row of its own product; one without a product
 moves the only row there is, and nothing when there are several.
 
+**What you need to know for an RFA product** — CMM approval, priority, whether they
+already perform RFA, the current system and a note — is the counterpart of the
+endoscopy unit, and shows as a section of its own per product. It is stored in that
+product's row in `h.pipeline` (`normalizeFacts()`), not in a block on the hospital
+like `unit`: Thyroid and Fibroid each have their own approval at the same hospital,
+and a row is already inside the product wall, so these facts never reach an account
+without the product. `h.network` and `h.sites` are ordinary shared hospital fields.
+
 **Printing.** `@media print` at the foot of `styles.css` strips the furniture —
 map, menu, tab bar, every button — and prints whichever pane is open: the
 hospital record, the statistics or the agenda, falling back to the list when
