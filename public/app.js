@@ -686,6 +686,7 @@
     const items = visibleHospitals().sort((a, b) =>
       nameHit(a) - nameHit(b) || order[shown(a).status] - order[shown(b).status] || a.name.localeCompare(b.name));
     const ul = $("#list");
+    ul.removeAttribute("aria-busy"); // de streepjes van het laden gaan eruit
     if (!items.length) {
       ul.innerHTML = `<li class="empty">${esc(t("list.empty"))}</li>`;
       return;
@@ -810,6 +811,7 @@
     const demos = hs.filter(hasDemoPlanned).length;
     const late = hs.filter(isOverdue).length;
     const quiet = hs.filter(isQuiet).length;
+    $("#kpis").removeAttribute("aria-busy");
     $("#kpis").innerHTML = `
       <div class="kpi"><b><i class="dot green"></i>${n("green")}</b><span>${esc(t("status.green.short"))}</span></div>
       <div class="kpi"><b><i class="dot orange"></i>${n("orange")}</b><span>${esc(t("status.orange.short"))}</span></div>
@@ -2330,7 +2332,9 @@
   async function loadUsers() {
     usersView.innerHTML = `<div class="u-head"><h2>${esc(t("users.title"))}</h2>
         <p class="muted">${esc(t("users.intro"))}</p></div>
-      <p class="muted">${esc(t("save.saving"))}</p>`;
+      ${/* Zolang de lijst onderweg is: streepjes in de vorm van een rij. Er
+           stond hier "Opslaan…", en opgeslagen wordt er op dat moment niets. */""}
+      <div class="u-list" aria-busy="true">${'<div class="u-row skel"><b></b><span></span><span></span></div>'.repeat(4)}</div>`;
     try {
       // Eén plaats waar de vorm wordt rechtgezet, zodat de rest op een naam,
       // een rol en een lijst mag rekenen.
@@ -2341,7 +2345,10 @@
         products: Array.isArray(u.products) ? u.products : [],
       }));
     } catch (e) {
-      usersView.innerHTML += `<p class="login-error">${esc(t("users.failed", { msg: e.message }))}</p>`;
+      // De streepjes mogen niet blijven glanzen boven een foutmelding.
+      const busy = usersView.querySelector("[aria-busy]");
+      if (busy) busy.remove();
+      usersView.insertAdjacentHTML("beforeend", `<p class="login-error">${esc(t("users.failed", { msg: e.message }))}</p>`);
       return;
     }
     renderUsers();

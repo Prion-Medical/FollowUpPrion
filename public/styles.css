@@ -355,6 +355,35 @@ p.muted { margin: 0 0 8px; }
 .dot.orange { background: var(--orange); }
 .dot.red { background: var(--red); }
 
+/* ---------- laden ---------- */
+/* Zolang de ziekenhuizen onderweg zijn, staan er grijze streepjes in de vorm
+   van een rij: een stip, de naam, de regel eronder. Zo staat de indeling er
+   meteen en verspringt er niets wanneer de echte lijst komt. De streepjes
+   staan in index.html; renderList() en renderKpis() vervangen ze.
+   De glans is één band die over het geheel schuift, niet één per streepje:
+   dat is één laag voor de browser, en ze beweegt met transform. Wie beweging
+   uit heeft staan, ziet alleen de streepjes. */
+.list .skel { cursor: default; pointer-events: none; }
+.list .skel > div { display: block; }
+.skel i { width: 8px; height: 8px; margin-top: 6px; flex: none; border-radius: 50%; background: var(--press); }
+.skel b, .skel span, .skel-kpi { display: block; height: 10px; border-radius: 5px; background: var(--press); }
+.skel b { width: 62%; margin: 4px 0 10px; }
+.skel span { width: 44%; margin-bottom: 26px; }
+.skel:nth-child(3n) b { width: 48%; }
+.skel:nth-child(3n + 1) b { width: 74%; }
+.skel:nth-child(2n) span { width: 56%; }
+.skel-kpi { width: 86px; align-self: center; }
+/* Het gebruikersscherm: een naam en de twee keuzevelden ernaast. */
+.u-row.skel b { flex: 1 1 200px; max-width: 180px; margin: 0; }
+.u-row.skel span { flex: 0 0 210px; width: auto; height: var(--ctl); margin: 0; border-radius: var(--radius); }
+.u-row.skel span + span { flex-basis: 240px; }
+[aria-busy="true"] { position: relative; overflow: hidden; }
+[aria-busy="true"]::after {
+  content: ""; position: absolute; inset: 0; width: 60%; pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--panel) 70%, transparent), transparent);
+  transform: translateX(-100%); animation: shimmer 1.4s linear infinite;
+}
+
 /* ---------- kaart ---------- */
 .map-wrap { flex: 1; position: relative; min-width: 0; }
 #map { position: absolute; inset: 0; background: var(--bg); }
@@ -1069,6 +1098,7 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
 
 /* ---------- beweging ---------- */
 @keyframes fade-in { from { opacity: 0; } }
+@keyframes shimmer { to { transform: translateX(170%); } }
 @keyframes pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
 @keyframes slide-in { from { opacity: 0; transform: translateX(16px); } }
 @keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
