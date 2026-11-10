@@ -1,7 +1,9 @@
 # FollowUp Prion — working notes
 
 Sales follow-up for **EndoQ** (ScopeWatch) and **Ainex** (ENAD), two AI-assisted
-colonoscopy systems Prion Medical distributes in the **Benelux**. A map of hospitals,
+colonoscopy systems Prion Medical distributes in the **Benelux**, and since November
+2026 also for **Thyroid RFA** and **Fibroid RFA**, which are sold per procedure
+rather than per subscription. A map of hospitals,
 a record per hospital with contacts, contact moments and endoscopy-unit details, and a
 statistics page. Bilingual Dutch / English.
 
@@ -167,6 +169,22 @@ sorts last rather than being refused, so an app that already knows a new product
 does not break against a database that has not been updated yet. So: two lines,
 one per side, and a seventh product also wants a `--series-7`.
 
+**Two kinds of product.** `productKind()` in `public/domain.js` says how a product is
+sold: `"subscription"` (EndoQ, Ainex: per room, counted in rooms and active
+subscriptions) or `"procedure"` (Thyroid RFA, Fibroid RFA: used up per procedure, no
+installation, counted in units ordered). Anything not listed is a subscription, so an
+unknown product behaves as everything did before. `PRODUCTS` deliberately stays a list
+of names — the name is what is stored on every record and in every scope — and what a
+product *is* hangs beside it. Three things follow from the kind and should keep doing
+so instead of naming products: `wantsQuantity()` (the one number on a contact moment
+is rooms for a subscription product and units for a procedure product, and there only
+on an order), `stagesFor()` (one shared list of stages, of which a procedure product
+skips "demo installed" and a subscription product skips "purchase started"), and the
+statistics page, which shows subscriptions, rooms and towers for the one kind and
+orders per month for the other. `syncRooms()` ignores procedure products. Units
+ordered is a sales figure per hospital per month — never a record per patient or per
+procedure.
+
 **One product or several.** A contact moment and a planned moment carry one
 `product`; a contact carries `products[]`, because the same clinician is often the
 point of contact for both. `normalizeContact()` migrates the old single `product`
@@ -202,6 +220,21 @@ instead. Derived like `isOverdue()`, so nothing is stored and nothing migrates.
 **Status and stage.** Red → orange on first contact; green on installation or order.
 `autoStatus()` and `stageStatus()` hold the rules. Manual override must always remain
 possible.
+
+**Follow-up per product.** `h.pipeline` holds one row per product:
+`{ stage, status, owner }`, where `owner` is a uuid from `app_users`. A hospital can
+be an EndoQ customer and a Thyroid RFA prospect at once. `h.status` and `h.stage` on
+the hospital are **derived** from it — the product that is furthest along, colour
+first, then stage (`furthest()` in `domain.js`) — exactly as `nextAction` is derived
+from `planned[]`; do not write to them while a product is ticked. Only a hospital with
+no product ticked keeps a status and stage of its own. `syncPipeline()` keeps all this
+in step and is called wherever `h.products` or a row changes. A row is never deleted
+when its tick goes: it is ignored while unticked and comes back with the tick.
+`pipelineView(h, products)` is what the map, the list, the counters and the statistics
+show: with a product filter, the furthest of *those* products; without, the hospital
+as a whole. "Overdue", "gone quiet" and "demo planned" follow the same filter through
+`inFilter()`. A contact moment moves the row of its own product; one without a product
+moves the only row there is, and nothing when there are several.
 
 **Printing.** `@media print` at the foot of `styles.css` strips the furniture —
 map, menu, tab bar, every button — and prints whichever pane is open: the
@@ -326,6 +359,24 @@ when the demo activities themselves changed: the field is also typed by hand in 
 record, and recomputing on every save would wipe what someone put there.
 `unit.roomsInstalled` is not: `syncRooms()` applies a *difference*, not a sum, so it is
 already safe.
+
+`pipeline` sits inside the wall like a contact moment. `scope_hospital()` passes only
+the rows within scope and recomputes the hospital's status and stage on what is left
+(`fix_overall()`), so that "green, customer" does not give away how far the other
+product is. `merge_hospital()` keeps the colleague's rows as stored and recomputes on
+the full set, because a restricted browser computed the whole from the half it could
+see. `followup.fases()` is the database's copy of `STAGES`, as `producten()` is of
+`PRODUCTS`. A restricted user gets no hospital-level status or stage controls at all:
+where a colleague's product is attached the database would discard the click.
+
+Going from one stage per hospital to a row per product is done **in the database, for
+every product at once** (`followup.opvolging_aanvullen()`): once on the stored
+document at the foot of `schema.sql`, and again in `read_state()` and `write_state()`
+for an old document that still turns up. Leaving it to the app is what goes wrong — a
+restricted user's app knows one product, creates one row, and the colleague then finds
+a hospital "with follow-up" in which his product is missing. Run `schema.sql` on the
+live project at the moment the new app is deployed, not days before: the previous app
+writes `h.status` directly and the new one would overrule it from `pipeline`.
 
 Run `supabase/controle.sql` in the SQL editor after any change to these functions. It
 reports OK or FOUT per check and needs no eyeballing; the one that matters is "laden en
