@@ -174,6 +174,10 @@ window.FollowUpI18n = (() => {
       "btn.addContact": "+ Contact",
 
       "empty.activities": "Nog geen contactmomenten. Voeg prospectie, e-mail, bezoek, demo, installatie… toe.",
+
+      "acts.showAll": "Toon alle {n} contactmomenten",
+
+      "acts.showLess": "Toon minder",
       "empty.planned": "Nog niets gepland.",
       "empty.contacts": "Nog geen contactpersonen.",
 
@@ -569,6 +573,10 @@ window.FollowUpI18n = (() => {
       "btn.addContact": "+ Contact",
 
       "empty.activities": "No contact moments yet. Add prospecting, e-mail, visit, demo, installation…",
+
+      "acts.showAll": "Show all {n} contact moments",
+
+      "acts.showLess": "Show fewer",
       "empty.planned": "Nothing planned yet.",
       "empty.contacts": "No contacts yet.",
 

@@ -301,6 +301,11 @@ label.field.check input[type="checkbox"] { width: auto; }
 .timeline { list-style: none; margin: 0; padding: 0; }
 .timeline li { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .timeline li:last-child { border-bottom: 0; }
+/* De fiche toont de recentste contactmomenten; de rest staat er wel maar is
+   verborgen tot je de lijst openklapt. Verbergen en niet weglaten, zodat een
+   afdruk ze allemaal kan tonen (zie @media print). */
+.timeline.capped li.extra { display: none; }
+.more-acts { margin-top: 10px; }
 .timeline .t-date { font-size: 12px; color: var(--grey); width: 78px; flex: none; padding-top: 2px; font-weight: 500; }
 .timeline .t-body { flex: 1; min-width: 0; }
 .timeline .t-type { font-weight: 600; }
@@ -754,5 +759,8 @@ label.field textarea:focus-visible,
 
   /* Niets halverwege doorsnijden. */
   .section, .contact, .timeline li, .stat { break-inside: avoid; }
+  /* Op papier altijd alle contactmomenten: vijf regels en een knop die je niet
+     kunt aanklikken zijn minder dan de lange lijst. */
+  .timeline.capped li.extra { display: flex; }
   h3 { break-after: avoid; }
 }
