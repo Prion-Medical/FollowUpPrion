@@ -9,8 +9,9 @@
   // Vaste waarden en esc() staan in domain.js: stats.js heeft ze ook nodig, en
   // zo moet een nieuwe fase of een nieuw merk maar op één plaats bij.
   const {
-    DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS, ROOM_TYPES,
-    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
+    DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
+    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
+    CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
     esc, pickBox, syncPick, myProducts,
   } = window.FollowUpDomain;
   // Welk product staat standaard in een nieuw contactmoment of een planning:
@@ -31,7 +32,7 @@
     // Elke filter is een lijst; leeg betekent geen beperking, dezelfde
     // betekenis als een leeg bereik op een gebruiker. derived is er één van
     // twee vragen over de opvolging en sluit zichzelf uit.
-    filter: { statuses: [], products: [], countries: [], derived: "", query: "" },
+    filter: { statuses: [], products: [], countries: [], owners: [], derived: "", query: "" },
     placing: null, // {id} wanneer we op de kaart een locatie kiezen
     dragId: null,
     // Welke maand de agenda toont, en eventueel één gekozen dag.
@@ -68,8 +69,17 @@
   function countType(h, type) {
     return h.activities.filter((a) => a.type === type).length;
   }
+  // Hoort dit contactmoment of geplande moment bij de producten waarop
+  // gefilterd is? Zonder filter alles; een record zonder product hoort overal
+  // bij, zoals het ook voor iedereen zichtbaar is.
+  const inFilter = (r) => !state.filter.products.length || !r.product || state.filter.products.includes(r.product);
+  // "Te laat", "stil gevallen" en "demo gepland" volgen de productfilter, net
+  // als de kleur: wie op Thyroid RFA filtert wil niet de achterstallige actie
+  // van EndoQ zien. planned staat op datum, dus het eerste dat past is de
+  // volgende actie — zonder filter is dat gewoon nextActionDate.
   function isOverdue(h) {
-    return !!h.nextActionDate && h.nextActionDate < today();
+    const p = h.planned.find(inFilter);
+    return !!p && p.date < today();
   }
   // Stil gevallen: er is contact geweest, er staat niets gepland en het laatste
   // contactmoment is lang geleden. Zo'n ziekenhuis glipt door alle andere
@@ -78,8 +88,8 @@
   // nergens in de agenda op. Precies het ziekenhuis dat je wil terugvinden.
   const QUIET_DAYS = 90;
   function isQuiet(h) {
-    if (h.planned.length) return false;
-    const lc = lastContact(h);
+    if (h.planned.some(inFilter)) return false;
+    const lc = h.activities.filter(inFilter).reduce((max, a) => (a.date > max ? a.date : max), "");
     return !!lc && daysAgo(lc) >= QUIET_DAYS;
   }
   // Een datum als YYYY-MM-DD uit de losse delen. Niet via toISOString(): die
@@ -97,7 +107,7 @@
   // staat het gewoon in de agenda, zodat de teller en de agenda hetzelfde zien.
   function hasDemoPlanned(h) {
     const d = today();
-    return h.planned.some((p) => p.type === "demo" && p.date >= d);
+    return h.planned.some((p) => p.type === "demo" && p.date >= d && inFilter(p));
   }
   function relDays(d) {
     if (!d) return "";
@@ -305,6 +315,7 @@
     c.products = [...new Set(c.products.filter((p) => typeof p === "string" && p))];
     // De dienst is een vaste sleutel; de functie ernaast blijft vrije tekst.
     c.department = DEPARTMENTS.includes(c.department) ? c.department : "";
+    c.language = LANGUAGES.includes(c.language) ? c.language : "";
     c.primary = !!c.primary;
     return c;
   }
@@ -315,7 +326,7 @@
     a.product = str(a.product);
     a.contactId = str(a.contactId);
     a.note = str(a.note);
-    a.rooms = ROOM_TYPES.includes(a.type) ? numOrNull(a.rooms) : null;
+    a.rooms = wantsQuantity(a.type, a.product) ? numOrNull(a.rooms) : null;
     stampFields(a);
     return a;
   }
@@ -332,6 +343,92 @@
     stampFields(p);
     return p;
   }
+  // De gegevens van een product per ingreep. Ze staan in de rij van dat
+  // product in h.pipeline en niet in een blok op het ziekenhuis zoals unit:
+  // Thyroid RFA en Fibroid RFA hebben elk hun eigen goedkeuring, prioriteit en
+  // concurrent in hetzelfde ziekenhuis, en zo vallen ze vanzelf binnen de
+  // productmuur — de databank schermt die rijen al af per product.
+  function normalizeFacts(e) {
+    e.cmm = CMM_STATES.includes(e.cmm) ? e.cmm : "";
+    e.prio = [1, 2, 3].includes(Number(e.prio)) ? Number(e.prio) : null;
+    e.doesAlready = YES_NO.includes(e.doesAlready) ? e.doesAlready : "";
+    e.currentSystem = str(e.currentSystem);
+    e.notes = str(e.notes);
+    return e;
+  }
+  // De opvolging per product. Elk product dat bij het ziekenhuis aangevinkt
+  // staat krijgt een eigen fase, kleur en verantwoordelijke; wat op het
+  // ziekenhuis zelf staat volgt daaruit (zie pipelineView in domain.js).
+  //
+  // Vroeger was er één fase per ziekenhuis. Die wordt hier de fase van elk
+  // product dat er toen aangevinkt stond — de app wist niet beter, en twee
+  // keer dezelfde fase is juister dan één van de twee op prospect zetten. Een
+  // product dat er láter bijkomt begint vooraan: prospect, of eerste contact
+  // als er al een contactmoment voor bestaat.
+  //
+  // Een rij verdwijnt hier nooit, ook niet als het vinkje weggaat. Wie
+  // afgeschermd is krijgt h.products gesnoeid op zijn eigen bereik, en zou
+  // anders de opvolging van een collega wissen bij de eerste opslag.
+  function syncPipeline(h) {
+    if (!h.pipeline || typeof h.pipeline !== "object" || Array.isArray(h.pipeline)) h.pipeline = {};
+    for (const [p, e] of Object.entries(h.pipeline)) {
+      if (!e || typeof e !== "object") { delete h.pipeline[p]; continue; }
+      e.stage = STAGES.includes(e.stage) ? e.stage : "prospect";
+      e.status = STATUSES.includes(e.status) ? e.status : "red";
+      e.owner = str(e.owner);
+      if (productKind(p) === "procedure") normalizeFacts(e);
+    }
+    const eerste = !Object.keys(h.pipeline).length;
+    for (const p of h.products) {
+      if (h.pipeline[p]) continue;
+      const contacted = h.activities.some((a) => a.product === p);
+      const e = eerste ? { stage: h.stage, status: h.status, owner: "" }
+        : { stage: contacted ? "first_contact" : "prospect", status: contacted ? "orange" : "red", owner: "" };
+      // Een fase die dit product niet kent, schuift naar de dichtste die het
+      // wel kent: allebei liggen ze net voor of net na de evaluatie.
+      if (!stagesFor(p).includes(e.stage)) e.stage = "evaluation";
+      if (productKind(p) === "procedure") normalizeFacts(e);
+      h.pipeline[p] = e;
+    }
+    if (h.products.length) {
+      const f = furthest(h.products.map((p) => h.pipeline[p]));
+      h.status = f.status;
+      h.stage = f.stage;
+    } else if (!stagesFor("").includes(h.stage)) {
+      // Zonder product geldt de keuzelijst van het ziekenhuis zelf, en die
+      // kent niet elke fase.
+      h.stage = "evaluation";
+    }
+  }
+  // Het laatste product is afgevinkt. De kleur en de fase op het ziekenhuis
+  // waren die van dat product; ze laten staan zou zeggen dat een ziekenhuis
+  // zonder product klant is. Terug naar wat de contactmomenten zeggen. Wat er
+  // per product stond blijft bewaard en komt terug als het vinkje terugkomt.
+  function zonderProduct(h) {
+    if (h.products.length) return;
+    const contacted = h.activities.length > 0;
+    h.status = contacted ? "orange" : "red";
+    h.stage = contacted ? "first_contact" : "prospect";
+  }
+  // Wat de kaart, de lijst en de tellers van een ziekenhuis tonen: het volgt
+  // de productfilter in de zijbalk.
+  const shown = (h) => pipelineView(h, state.filter.products);
+  // Wie verantwoordelijk kan zijn: iedereen met een account, op naam. Eén
+  // lijst voor de keuzelijst in de fiche en voor de filter in de zijbalk.
+  function owners() {
+    const list = new Map(people);
+    const me = store.me();
+    if (me.id && me.name) list.set(me.id, me.name);
+    return [...list].sort((a, b) => a[1].localeCompare(b[1]));
+  }
+  // Een id dat we niet (meer) kennen blijft als keuze staan, anders wist een
+  // opslag het.
+  function ownerOptions(current) {
+    const list = owners();
+    if (current && !list.some(([id]) => id === current)) list.push([current, "?"]);
+    return [opt("", "—", current), ...list.map(([id, name]) => opt(id, name, current))].join("");
+  }
+
   function normalize(h) {
     h.id = str(h.id) || uid();
     h.name = str(h.name).trim() || "—";
@@ -343,9 +440,12 @@
     h.products = h.products.filter((p) => typeof p === "string");
     h.status = STATUSES.includes(h.status) ? h.status : "red";
     h.stage = STAGES.includes(h.stage) ? h.stage : "prospect";
+    syncPipeline(h);
     h.country = COUNTRIES.includes(h.country) ? h.country : "";
     h.sector = SECTORS.includes(h.sector) ? h.sector : "";
     h.address = str(h.address);
+    h.network = str(h.network);
+    h.sites = str(h.sites);
     h.notes = str(h.notes);
     h.nextAction = str(h.nextAction);
     h.nextActionDate = dateOrEmpty(h.nextActionDate);
@@ -408,7 +508,7 @@
   }).addTo(map);
 
   function pinIcon(h) {
-    const cls = ["pin", h.status, h.id === state.selectedId ? "selected" : "", h.id === state.dragId ? "dragging" : ""].join(" ");
+    const cls = ["pin", shown(h).status, h.id === state.selectedId ? "selected" : "", h.id === state.dragId ? "dragging" : ""].join(" ");
     return L.divIcon({ className: "", html: `<div class="${esc(cls)}"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] });
   }
 
@@ -490,7 +590,7 @@
   // ---------- filter + lijst ----------
   function matchesQuery(h, q) {
     if (!q) return true;
-    const hay = [h.name, h.address, h.unit.scopeNotes, h.unit.processorNotes, h.unit.existingAI, h.notes,
+    const hay = [h.name, h.address, h.network, h.sites, h.unit.scopeNotes, h.unit.processorNotes, h.unit.existingAI, h.notes,
       ...h.contacts.flatMap((c) => [c.name, c.role, c.address, c.email, c.department && t("dept." + c.department)])]
       .join(" ").toLowerCase();
     return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
@@ -500,12 +600,26 @@
   // state.filter in plaats van tussen de producten te zitten — zo is er ook
   // geen naam die met een product kan botsen.
   const DERIVED_FILTERS = { overdue: isOverdue, quiet: isQuiet };
-  function visibleHospitals() {
-    const { statuses, products, countries, derived, query } = state.filter;
+  // De verantwoordelijken van een ziekenhuis, voor de producten waarop
+  // gefilterd is — of voor al zijn producten als er geen productfilter staat.
+  const ownersOf = (h) => h.products
+    .filter((p) => (!state.filter.products.length || state.filter.products.includes(p)) && h.pipeline[p])
+    .map((p) => h.pipeline[p].owner).filter(Boolean);
+  // Waar je naar kijkt: product, land en verantwoordelijke. Dat is ook waar de
+  // tellers bovenaan over gaan. De andere filters (kleur, te laat, stil
+  // gevallen, de zoekbalk) zoeken daarbinnen — telden de tellers die ook mee,
+  // dan stond er bij een filter op groen gewoon overal nul naast.
+  function scopedHospitals() {
+    const { products, countries, owners } = state.filter;
     return state.db.hospitals.filter((h) =>
-      (!statuses.length || statuses.includes(h.status)) &&
       (!products.length || products.some((p) => h.products.includes(p))) &&
       (!countries.length || countries.includes(h.country)) &&
+      (!owners.length || ownersOf(h).some((o) => owners.includes(o))));
+  }
+  function visibleHospitals() {
+    const { statuses, derived, query } = state.filter;
+    return scopedHospitals().filter((h) =>
+      (!statuses.length || statuses.includes(shown(h).status)) &&
       (!derived || DERIVED_FILTERS[derived](h)) &&
       matchesQuery(h, query));
   }
@@ -515,7 +629,7 @@
     const q = state.filter.query.toLowerCase();
     const nameHit = (h) => (q && h.name.toLowerCase().includes(q) ? 0 : 1);
     const items = visibleHospitals().sort((a, b) =>
-      nameHit(a) - nameHit(b) || order[a.status] - order[b.status] || a.name.localeCompare(b.name));
+      nameHit(a) - nameHit(b) || order[shown(a).status] - order[shown(b).status] || a.name.localeCompare(b.name));
     const ul = $("#list");
     if (!items.length) {
       ul.innerHTML = `<li class="empty">${esc(t("list.empty"))}</li>`;
@@ -524,13 +638,13 @@
     ul.innerHTML = items.map((h) => {
       const lc = lastContact(h);
       const primary = h.contacts.find((c) => c.primary);
-      const bits = [t("stage." + h.stage)];
+      const bits = [t("stage." + shown(h).stage)];
       if (h.country) bits.push(t("country." + h.country + ".short"));
       if (h.unit.roomsInstalled) bits.push(`${h.unit.roomsInstalled}× ${t("stats.roomsLive").toLowerCase()}`);
       if (lc) bits.push(t("rel.last") + " " + relDays(lc));
       const chosen = h.id === state.selectedId;
       return `<li data-id="${esc(h.id)}" class="${chosen ? "selected" : ""}" tabindex="0"${chosen ? ' aria-current="true"' : ""}>
-        <i class="dot ${esc(h.status)}"></i>
+        <i class="dot ${esc(shown(h).status)}"></i>
         <div>
           <div class="name">${esc(h.name)}${isOverdue(h) ? `<span class="badge">${esc(t("badge.overdue"))}</span>` : ""}${isQuiet(h) ? `<span class="badge quiet">${esc(t("badge.quiet"))}</span>` : ""}${h.lat == null ? `<span class="badge neutral">${esc(t("map.noLocation"))}</span>` : ""}</div>
           <div class="meta">${esc(bits.join(" · "))}</div>
@@ -557,6 +671,10 @@
     { key: "statuses",  leeg: "filter.all",          items: () => STATUSES,  label: (k) => t("status." + k + ".short") },
     { key: "products",  leeg: "filter.allProducts",  items: myProducts,      label: (p) => p },
     { key: "countries", leeg: "filter.allCountries", items: () => COUNTRIES, label: (c) => t("country." + c) },
+    // Wie verantwoordelijk is. De lijst is die van de keuzelijst in de fiche:
+    // iedereen met een account. Zonder namen (lokaal, zonder localUser) is er
+    // niets om op te filteren en staat de uitklapper er niet.
+    { key: "owners",    leeg: "filter.allOwners",    items: () => owners().map(([id]) => id), label: (id) => personName(id) },
   ];
   function renderDerived() {
     for (const b of $("#derivedFilters").querySelectorAll(".chip")) {
@@ -564,7 +682,7 @@
     }
   }
   function renderFilters() {
-    $("#pickFilters").innerHTML = FILTERS.map((f) => pickBox(
+    $("#pickFilters").innerHTML = FILTERS.filter((f) => f.items().length).map((f) => pickBox(
       f.items().map((k) => ({
         attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`,
         label: f.label(k),
@@ -585,6 +703,7 @@
       : state.filter[f.key].filter((x) => x !== v);
     renderList();
     renderMarkers();
+    renderKpis();
   });
   // De twee opvolgingsknoppen. Nog eens klikken zet ze weer uit; ze sluiten
   // elkaar uit, want wie iets gepland heeft is nooit stilgevallen.
@@ -624,8 +743,12 @@
   });
 
   function renderKpis() {
-    const hs = state.db.hospitals;
-    const n = (s) => hs.filter((h) => h.status === s).length;
+    // De tellers volgen product, land en verantwoordelijke (zie
+    // scopedHospitals), met de kleur van het gefilterde product.
+    const hs = scopedHospitals();
+    const n = (s) => hs.filter((h) => shown(h).status === s).length;
+    // Kamers zeggen niets als er enkel op producten per ingreep gefilterd is.
+    const kamers = !state.filter.products.length || state.filter.products.some((p) => productKind(p) === "subscription");
     const sum = (f) => hs.reduce((s, h) => s + (f(h) || 0), 0);
     const demos = hs.filter(hasDemoPlanned).length;
     const late = hs.filter(isOverdue).length;
@@ -635,8 +758,8 @@
       <div class="kpi"><b style="color:var(--orange)">${n("orange")}</b><span>${esc(t("status.orange.short"))}</span></div>
       <div class="kpi"><b style="color:var(--red)">${n("red")}</b><span>${esc(t("status.red.short"))}</span></div>
       <div class="kpi"><b>${demos}</b><span>${esc(t("kpi.demosPlanned"))}</span></div>
-      <div class="kpi"><b>${sum((h) => h.unit.roomsDemo)}</b><span>${esc(t("kpi.roomsDemo"))}</span></div>
-      <div class="kpi"><b>${sum((h) => h.unit.roomsInstalled)}</b><span>${esc(t("kpi.roomsInstalled"))}</span></div>
+      ${kamers ? `<div class="kpi"><b>${sum((h) => h.unit.roomsDemo)}</b><span>${esc(t("kpi.roomsDemo"))}</span></div>
+      <div class="kpi"><b>${sum((h) => h.unit.roomsInstalled)}</b><span>${esc(t("kpi.roomsInstalled"))}</span></div>` : ""}
       <div class="kpi"><b style="${late ? "color:var(--red)" : ""}">${late}</b><span>${esc(t("kpi.overdue"))}</span></div>
       <div class="kpi"><b style="${quiet ? "color:var(--orange)" : ""}">${quiet}</b><span>${esc(t("kpi.quiet"))}</span></div>`;
   }
@@ -700,18 +823,27 @@
     const contacts = [...h.contacts].sort((a, b) => (b.primary - a.primary) || a.name.localeCompare(b.name));
     const acts = [...h.activities].sort((a, b) => b.date.localeCompare(a.date));
     const late = isOverdue(h);
+    // De producten waarvoor hier een opvolging te tonen valt: wat aangevinkt
+    // staat, binnen je eigen bereik. Is dat er geen, dan blijft de ene fase en
+    // de ene kleur van het ziekenhuis zelf staan, zoals vroeger.
+    const pipe = myProducts().filter((p) => h.products.includes(p) && h.pipeline[p]);
+    // Wie afgeschermd is, beslist enkel over zijn eigen product. De losse
+    // kleur en fase van het ziekenhuis krijgt hij niet te bedienen: hangt er
+    // een product van een collega aan, dan rekent de databank die zelf uit en
+    // ging zijn klik verloren zonder dat hij het zag.
+    const beperkt = store.can.products.length > 0;
 
     el.innerHTML = `
       <div class="fiche-head">
         <div class="row">
-          <i class="dot ${esc(h.status)}" style="width:14px;height:14px"></i>
+          <i class="dot ${esc(shown(h).status)}" style="width:14px;height:14px"></i>
           <input class="fiche-title" data-field="name" value="${esc(h.name)}" aria-label="${esc(t("fiche.name"))}">
           <button class="icon-btn show-on-map" data-act="show-map" title="${esc(t("map.showOnMap"))}" aria-label="${esc(t("map.showOnMap"))}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg></button>
           <button class="icon-btn" data-act="close" title="${esc(t("btn.close"))}" aria-label="${esc(t("btn.close"))}">✕</button>
         </div>
-        <div class="status-pick">
+        ${pipe.length || beperkt ? "" : `<div class="status-pick">
           ${STATUSES.map((k) => `<button class="${k} ${h.status === k ? "active" : ""}" data-status="${k}" title="${esc(t("status." + k))}"><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</button>`).join("")}
-        </div>
+        </div>`}
       </div>
 
       <div class="section">
@@ -725,11 +857,27 @@
 
       <div class="section">
         <h3>${esc(t("section.followup"))}</h3>
-        <div class="grid">
+        ${pipe.length ? pipe.map((p) => {
+          const e = h.pipeline[p];
+          return `<div class="pipe">
+            <div class="pipe-name"><i class="dot ${esc(e.status)}"></i><b>${esc(p)}</b><span class="muted">${esc(t("status." + e.status + ".short"))}</span></div>
+            <div class="status-pick">
+              ${STATUSES.map((k) => `<button class="${k} ${e.status === k ? "active" : ""}" data-status="${k}" data-pproduct="${esc(p)}" title="${esc(t("status." + k))}"><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</button>`).join("")}
+            </div>
+            <div class="grid">
+              <label class="field">${esc(t("field.stage"))}
+                <select data-pstage="${esc(p)}">${stagesFor(p).map((s) => opt(s, t("stage." + s), e.stage)).join("")}</select>
+              </label>
+              <label class="field">${esc(t("field.owner"))}
+                <select data-powner="${esc(p)}">${ownerOptions(e.owner)}</select>
+              </label>
+            </div>
+          </div>`;
+        }).join("") : beperkt ? `<p class="muted">${esc(t("fiche.tickProduct"))}</p>` : `<div class="grid">
           <label class="field">${esc(t("field.stage"))}
-            <select data-field="stage">${STAGES.map((s) => opt(s, t("stage." + s), h.stage)).join("")}</select>
+            <select data-field="stage">${stagesFor("").map((s) => opt(s, t("stage." + s), h.stage)).join("")}</select>
           </label>
-        </div>
+        </div>`}
       </div>
 
       <div class="section">
@@ -758,7 +906,7 @@
         ${acts.length ? `<ul class="timeline">${acts.map((a) => {
           const c = h.contacts.find((x) => x.id === a.contactId);
           const by = personName(a.createdBy);
-          const sub = [a.product, c && c.name, a.rooms ? `${a.rooms} ${t("act.rooms")}` : "",
+          const sub = [a.product, c && c.name, a.rooms ? `${a.rooms} ${t(productKind(a.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
             by && t("by", { name: by })].filter(Boolean).join(" · ");
           return `<li>
             <div class="t-date">${esc(fmtDate(a.date))}</div>
@@ -780,7 +928,7 @@
               <button class="icon-btn" data-act="primary" data-id="${esc(c.id)}" title="${esc(t("dlg.c.primary"))}">${c.primary ? "★" : "☆"}</button>
               <button class="icon-btn" data-act="edit-contact" data-id="${esc(c.id)}" title="${esc(t("btn.edit"))}">✎</button>
             </div>
-            <div class="c-name">${esc(c.name)}${c.department ? `<span class="tag dept">${esc(t("dept." + c.department))}</span>` : ""}${c.primary ? `<span class="tag primary">${esc(t("tag.primary"))}</span>` : ""}${c.products.map((p) => `<span class="tag">${esc(p)}</span>`).join("")}</div>
+            <div class="c-name">${esc(c.name)}${c.department ? `<span class="tag dept">${esc(t("dept." + c.department))}</span>` : ""}${c.primary ? `<span class="tag primary">${esc(t("tag.primary"))}</span>` : ""}${c.language ? `<span class="tag dept">${esc(c.language)}</span>` : ""}${c.products.map((p) => `<span class="tag">${esc(p)}</span>`).join("")}</div>
             ${c.role ? `<div class="c-role">${esc(c.role)}</div>` : ""}
             ${c.phone ? `<div class="c-line">☎ <a href="tel:${esc(c.phone.replace(/[^\d+]/g, ""))}">${esc(c.phone)}</a></div>` : ""}
             ${c.email ? `<div class="c-line">✉ <a href="mailto:${esc(c.email)}">${esc(c.email)}</a></div>` : ""}
@@ -788,6 +936,35 @@
             ${c.notes ? `<div class="c-line muted">ⓘ ${esc(c.notes)}</div>` : ""}
           </div>`).join("") : `<p class="muted">${esc(t("empty.contacts"))}</p>`}
       </div>
+
+      ${pipe.filter((p) => productKind(p) === "procedure").map((p) => {
+        // Eén sectie per product per ingreep, zoals de endoscopie-afdeling er
+        // één is voor EndoQ en Ainex. Ze staat er alleen als het product bij
+        // dit ziekenhuis aangevinkt is en binnen je bereik valt.
+        const e = h.pipeline[p];
+        const fact = (k) => `data-fact="${k}" data-fact-product="${esc(p)}"`;
+        return `<div class="section">
+        <h3>${esc(p)}</h3>
+        <p class="muted">${esc(t("unit.unknownOk"))}</p>
+        <div class="grid">
+          <label class="field">${esc(t("rfa.cmm"))}
+            <select ${fact("cmm")}>${[opt("", "—", e.cmm), ...CMM_STATES.map((k) => opt(k, t("rfa.cmm." + k), e.cmm))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("rfa.prio"))}
+            <select ${fact("prio")}>${[opt("", "—", String(e.prio ?? "")), ...[1, 2, 3].map((n) => opt(String(n), String(n), String(e.prio ?? "")))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("rfa.doesAlready"))}
+            <select ${fact("doesAlready")}>${[opt("", "—", e.doesAlready), ...YES_NO.map((k) => opt(k, t("yn." + k), e.doesAlready))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("rfa.currentSystem"))}
+            <input ${fact("currentSystem")} value="${esc(e.currentSystem)}" placeholder="${esc(t("rfa.currentSystem.ph"))}">
+          </label>
+          <label class="field full">${esc(t("rfa.notes"))}
+            <textarea ${fact("notes")} rows="3">${esc(e.notes)}</textarea>
+          </label>
+        </div>
+      </div>`;
+      }).join("")}
 
       <div class="section">
         <h3>${esc(t("section.unit"))}</h3>
@@ -831,6 +1008,12 @@
           <label class="field full">${esc(t("field.address"))}
             <input data-field="address" value="${esc(h.address)}">
           </label>
+          <label class="field">${esc(t("field.network"))}
+            <input data-field="network" value="${esc(h.network)}">
+          </label>
+          <label class="field">${esc(t("field.sites"))}
+            <input data-field="sites" value="${esc(h.sites)}">
+          </label>
           <div class="field full">
             <span class="field-label">${esc(t("field.location"))}</span>
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:3px">
@@ -873,7 +1056,17 @@
     if (d.field) {
       h[d.field] = el.value;
       if (d.field === "name" && !el.value.trim()) { h.name = "—"; el.value = h.name; }
-      if (d.field === "stage") stageStatus(h);
+      if (d.field === "stage") stageStatus(h, h.activities.length > 0);
+    } else if (d.pstage && h.pipeline[d.pstage]) {
+      h.pipeline[d.pstage].stage = el.value;
+      stageStatus(h.pipeline[d.pstage], h.activities.some((a) => a.product === d.pstage));
+      syncPipeline(h);
+    } else if (d.powner && h.pipeline[d.powner]) {
+      h.pipeline[d.powner].owner = el.value;
+    } else if (d.fact && h.pipeline[d.factProduct]) {
+      // normalizeFacts houdt de vaste sleutels en het getal in de hand.
+      h.pipeline[d.factProduct][d.fact] = el.value;
+      normalizeFacts(h.pipeline[d.factProduct]);
     } else if (d.unit) {
       h.unit[d.unit] = el.type === "number" ? num(el.value) : el.value;
     } else if (d.unitBool) {
@@ -885,18 +1078,20 @@
         : list.filter((x) => x !== d.brand);
     } else if (d.product) {
       h.products = el.checked ? [...new Set([...h.products, d.product])] : h.products.filter((x) => x !== d.product);
+      if (!el.checked) zonderProduct(h);
+      syncPipeline(h);
     } else return;
     scheduleSave();
     renderList();
     renderKpis();
-    if (["name", "stage", "country"].includes(d.field)) { renderFiche(); renderMarkers(); }
+    if (["name", "stage", "country"].includes(d.field) || d.pstage || d.product) { renderFiche(); renderMarkers(); }
   });
 
   $("#fiche").addEventListener("click", (e) => {
     const h = sel();
     if (!h) return;
     const sb = e.target.closest("[data-status]");
-    if (sb) { setStatus(h, sb.dataset.status); return; }
+    if (sb) { setStatus(h, sb.dataset.status, sb.dataset.pproduct); return; }
     const b = e.target.closest("[data-act]");
     if (!b) return;
     const id = b.dataset.id;
@@ -941,9 +1136,13 @@
     }
   });
 
-  function setStatus(h, status) {
-    if (h.status === status) return;
-    h.status = status;
+  // Met een product: de kleur van dat product. Zonder: die van het ziekenhuis
+  // zelf, voor een ziekenhuis waar nog geen product aan hangt.
+  function setStatus(h, status, product) {
+    const x = (product && h.pipeline[product]) || h;
+    if (x.status === status) return;
+    x.status = status;
+    syncPipeline(h);
     scheduleSave();
     renderAll();
   }
@@ -1107,15 +1306,24 @@
   // contactpersoon of een contactmoment het nog gebruikt. Zo blijft het niet
   // eeuwig in de filters staan.
   function syncProducts(h, dropped) {
+    const had = h.products.length;
     for (const p of dropped) {
       if (!p || !h.products.includes(p)) continue;
-      const used = h.contacts.some((c) => c.products.includes(p)) || h.activities.some((a) => a.product === p);
+      // Ook wie het product opvolgt, gebruikt het: een fase, een kleur of
+      // een verantwoordelijke is werk dat niet mag verdwijnen omdat de laatste
+      // contactpersoon wegging.
+      const e = h.pipeline[p];
+      const followed = !!e && (!!e.owner || e.status !== "red" || e.stage !== "prospect");
+      const used = followed || h.contacts.some((c) => c.products.includes(p)) || h.activities.some((a) => a.product === p);
       if (!used) h.products = h.products.filter((x) => x !== p);
     }
+    // Enkel als hier het laatste product wegviel — een ziekenhuis dat er al
+    // geen had, houdt de kleur die iemand het met de hand gaf.
+    if (had) zonderProduct(h);
   }
 
   function contactDialog(h, c) {
-    const v = c || { name: "", department: "", role: "", phone: "", email: "", address: "", products: [], notes: "", primary: false };
+    const v = c || { name: "", department: "", role: "", language: "", phone: "", email: "", address: "", products: [], notes: "", primary: false };
     // De vinkjes komen niet via FormData binnen: meerdere vakjes met dezelfde
     // naam houden er maar één over. We lezen ze bij het opslaan uit het
     // formulier zelf.
@@ -1138,6 +1346,9 @@
               attrs: `data-cproduct="${esc(p)}"`, label: p, checked: v.products.includes(p),
             })), "—")}
         </div>
+        <label class="field">${esc(t("dlg.c.language"))}
+          <select name="language">${[opt("", "—", v.language), ...LANGUAGES.map((l) => opt(l, l, v.language))].join("")}</select>
+        </label>
         <label class="field check" style="margin-top:16px"><input type="checkbox" name="primary" ${v.primary ? "checked" : ""}>${esc(t("dlg.c.primary"))}</label>
         <label class="field full">${esc(t("dlg.c.notes"))}<textarea name="notes" rows="3">${esc(v.notes)}</textarea></label>
       </div>
@@ -1159,7 +1370,7 @@
         const mine = myProducts();
         const keuze = picked(form);
         Object.assign(rec, {
-          name: data.name.trim(), department: data.department, role: data.role.trim(),
+          name: data.name.trim(), department: data.department, role: data.role.trim(), language: data.language,
           phone: data.phone.trim(), email: data.email.trim(), address: data.address.trim(),
           products: [...new Set([...had.filter((p) => !mine.includes(p)), ...keuze])],
           notes: data.notes.trim(), primary: !!data.primary,
@@ -1169,6 +1380,7 @@
         for (const p of rec.products) if (!h.products.includes(p)) h.products.push(p);
         syncProducts(h, had.filter((p) => !rec.products.includes(p)));
       }
+      syncPipeline(h);
       scheduleSave();
       renderAll();
     });
@@ -1193,7 +1405,7 @@
         <label class="field">${esc(t("dlg.a.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
-        <label class="field full" id="roomsField">${esc(t("dlg.a.rooms"))}<input type="number" min="0" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
+        <label class="field full" id="roomsField"><span id="roomsLabel">${esc(t("dlg.a.rooms"))}</span><input type="number" min="0" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
         <label class="field full">${esc(t("dlg.a.note"))}<textarea name="note" rows="4" placeholder="${esc(t("dlg.a.note.ph"))}">${esc(v.note)}</textarea></label>
       </div>
       ${stampLine(a)}
@@ -1212,15 +1424,19 @@
         // weet dat dit afvinken is en geen verwijderen. Niets verwijst naar een
         // id van een gepland moment, dus hergebruiken kan veilig.
         const rec = a || { id: plan ? plan.id : uid() };
-        const wantsRooms = ROOM_TYPES.includes(data.type);
+        const wantsRooms = wantsQuantity(data.type, data.product);
         // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
-        const before = a ? { type: rec.type, rooms: rec.rooms } : null;
+        const before = a ? { type: rec.type, rooms: rec.rooms, product: rec.product } : null;
         Object.assign(rec, {
           date: data.date, type: data.type, product: data.product, contactId: data.contactId,
           rooms: wantsRooms ? num(data.rooms) : null, note: data.note.trim(),
         });
         stamp(rec, !a);
         if (!a) h.activities.push(rec);
+        // Een contactmoment voor een product zet dat product bij het
+        // ziekenhuis: anders is er geen opvolging om bij te werken.
+        if (rec.product && !h.products.includes(rec.product)) h.products.push(rec.product);
+        syncPipeline(h);
         // Ook bij een wijziging: een contactmoment dat nú een installatie of
         // een bestelling is, zet de kleur en de fase mee goed.
         if (!a || before.type !== rec.type) autoStatus(h, rec);
@@ -1237,8 +1453,13 @@
       scheduleSave();
       renderAll();
     });
+    // Het aantal hangt af van soort én product: kamers bij een abonnement,
+    // bestelde stuks bij een product per ingreep. Het veld is hetzelfde, het
+    // opschrift volgt het product.
     const sync = () => {
-      $("#roomsField", form).hidden = !ROOM_TYPES.includes(form.elements.type.value);
+      const product = form.elements.product.value;
+      $("#roomsField", form).hidden = !wantsQuantity(form.elements.type.value, product);
+      $("#roomsLabel", form).textContent = t(productKind(product) === "procedure" ? "dlg.a.quantity" : "dlg.a.rooms");
     };
     form.onchange = sync;
     sync();
@@ -1294,26 +1515,44 @@
   }
 
   // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
-  function stageStatus(h) {
-    const before = h.status;
-    if (h.stage === "customer") h.status = "green";
-    else if (h.stage === "prospect") h.status = h.activities.length ? h.status : "red";
-    else if (h.stage !== "not_interested" && h.status !== "green") h.status = "orange";
-    if (h.status !== before) toast(h.status === "green" ? t("status.toGreen") : t("status.toOrange"));
+  // x is waar de fase en de kleur staan: de opvolging van één product, of het
+  // ziekenhuis zelf zolang er geen product aan hangt.
+  function stageStatus(x, contacted) {
+    const before = x.status;
+    if (x.stage === "customer") x.status = "green";
+    else if (x.stage === "prospect") x.status = contacted ? x.status : "red";
+    else if (x.stage !== "not_interested" && x.status !== "green") x.status = "orange";
+    if (x.status !== before) toast(x.status === "green" ? t("status.toGreen") : t("status.toOrange"));
   }
 
   // Kleur automatisch mee laten evolueren; manueel aanpassen blijft altijd mogelijk.
+  // Een contactmoment hoort bij één product, dus het is de opvolging van dát
+  // product die meebeweegt — een bestelling voor het ene maakt het andere niet
+  // groen.
   function autoStatus(h, act) {
-    if ((act.type === "installation" || act.type === "order") && h.status !== "green") {
-      h.status = "green";
-      if (PRE_SALE.includes(h.stage)) h.stage = "customer";
+    // Zonder product op het contactmoment: hangt er precies één product aan
+    // het ziekenhuis, dan is het dat. Hangen er meer aan, dan valt niet te
+    // raden welk — en dan blijft alles staan, liever dan het verkeerde product
+    // groen te maken. Hangt er geen aan, dan is het het ziekenhuis zelf.
+    const rows = myProducts().filter((p) => h.products.includes(p) && h.pipeline[p]);
+    const x = (act.product && h.pipeline[act.product])
+      || (rows.length === 1 ? h.pipeline[rows[0]] : rows.length ? null : h);
+    if (!x) return;
+    if ((act.type === "installation" || act.type === "order") && x.status !== "green") {
+      x.status = "green";
+      if (PRE_SALE.includes(x.stage)) x.stage = "customer";
       toast(t("status.toGreen"));
-    } else if (h.status === "red") {
-      h.status = "orange";
-      if (h.stage === "prospect") h.stage = "first_contact";
+    } else if (x.status === "red") {
+      x.status = "orange";
+      if (x.stage === "prospect") x.stage = "first_contact";
       toast(t("status.toOrange"));
     }
-    if (act.type === "demo" && ["prospect", "first_contact", "meeting", "demo_planned"].includes(h.stage)) h.stage = "demo_installed";
+    // Na een demo: geïnstalleerd bij een product per abonnement, in evaluatie
+    // bij een product per ingreep, waar niets geïnstalleerd wordt.
+    if (act.type === "demo" && ["prospect", "first_contact", "meeting", "demo_planned"].includes(x.stage)) {
+      x.stage = productKind(act.product) === "procedure" ? "evaluation" : "demo_installed";
+    }
+    syncPipeline(h);
   }
 
   // Kamers van de afdeling bijwerken na een demo, installatie of stopzetting.
@@ -1325,8 +1564,11 @@
   // Een demo overschrijft wél: dat is de huidige toestand, geen optelsom — we
   // nemen het aantal van de laatste demo waarvoor een aantal is ingevuld.
   function syncRooms(h, before, after) {
+    // Alleen voor een product per abonnement: het aantal bij een RFA-bestelling
+    // zijn stuks, geen kamers, en hoort dus niet bij de afdeling opgeteld.
+    const perKamer = (a) => !!a && productKind(a.product) === "subscription";
     const installed = (a) => {
-      if (!a || !a.rooms) return 0;
+      if (!perKamer(a) || !a.rooms) return 0;
       if (a.type === "installation") return a.rooms;
       if (a.type === "cancellation") return -a.rooms;
       return 0;
@@ -1335,8 +1577,8 @@
     if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
       h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);
     }
-    if ((before && before.type === "demo") || (after && after.type === "demo")) {
-      const demos = h.activities.filter((a) => a.type === "demo" && a.rooms);
+    if ((perKamer(before) && before.type === "demo") || (perKamer(after) && after.type === "demo")) {
+      const demos = h.activities.filter((a) => a.type === "demo" && a.rooms && perKamer(a));
       if (demos.length) h.unit.roomsDemo = demos.sort((a, b) => b.date.localeCompare(a.date))[0].rooms;
     }
   }
@@ -1440,22 +1682,33 @@
           [t("col.name"), t("col.country"), t("col.sector"), t("col.status"), t("col.stage"), t("col.products"),
             t("col.lastContact"), t("col.demos"), t("col.installations"), t("unit.roomsInstalled"),
             t("col.demoDate"), t("col.nextAction"), t("col.nextActionDate"), t("col.primaryContact"),
-            t("col.address"), t("col.createdAt"), t("col.notes")],
+            t("col.address"), t("col.createdAt"), t("col.notes"),
+            t("field.network"), t("field.sites"),
+            ...myProducts().flatMap((p) => [`${t("col.stage")} ${p}`, `${t("col.owner")} ${p}`,
+              ...(productKind(p) === "procedure" ? ["rfa.cmm", "rfa.prio", "rfa.doesAlready", "rfa.currentSystem", "rfa.notes"].map((k) => `${t(k)} ${p}`) : [])])],
           ...hs.map((h) => [h.name, h.country && t("country." + h.country), h.sector && t("sector." + h.sector),
             t("status." + h.status), t("stage." + h.stage), h.products.join(", "), lastContact(h),
             countType(h, "demo"), countType(h, "installation"), h.unit.roomsInstalled ?? "",
             demoDate(h), h.nextAction, h.nextActionDate, (h.contacts.find((c) => c.primary) || {}).name,
-            h.address, h.createdAt, h.notes]),
+            h.address, h.createdAt, h.notes,
+            h.network, h.sites,
+            ...myProducts().flatMap((p) => {
+              const e = h.products.includes(p) && h.pipeline[p];
+              const rfa = productKind(p) === "procedure";
+              if (!e) return rfa ? ["", "", "", "", "", "", ""] : ["", ""];
+              return [t("stage." + e.stage), personName(e.owner),
+                ...(rfa ? [e.cmm && t("rfa.cmm." + e.cmm), e.prio ?? "", e.doesAlready && t("yn." + e.doesAlready), e.currentSystem, e.notes] : [])];
+            })]),
         ]), "text/csv");
       } else if (kind === "contacts") {
         download(`contacts-${d}.csv`, csv([
-          [t("col.hospital"), t("col.name"), t("col.dept"), t("col.role"), t("col.phone"), t("col.email"), t("col.address"), t("col.product"), t("col.isPrimary"), t("col.notes")],
+          [t("col.hospital"), t("col.name"), t("col.dept"), t("col.role"), t("col.phone"), t("col.email"), t("col.language"), t("col.address"), t("col.product"), t("col.isPrimary"), t("col.notes")],
           ...hs.flatMap((h) => h.contacts.map((c) => [h.name, c.name, c.department && t("dept." + c.department), c.role,
-            c.phone, c.email, c.address, c.products.join(" / "), c.primary ? t("col.yes") : "", c.notes])),
+            c.phone, c.email, c.language, c.address, c.products.join(" / "), c.primary ? t("col.yes") : "", c.notes])),
         ]), "text/csv");
       } else if (kind === "activities") {
         download(`activities-${d}.csv`, csv([
-          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.rooms"), t("col.note"), t("col.addedBy")],
+          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.quantity"), t("col.note"), t("col.addedBy")],
           ...hs.flatMap((h) => h.activities.map((a) => [a.date, h.name, t("act." + a.type), a.product, contactName(h, a.contactId), a.rooms ?? "", a.note, personName(a.createdBy)]))
             .sort((a, b) => b[0].localeCompare(a[0])),
         ]), "text/csv");
@@ -1633,6 +1886,8 @@
       await store.ready();
       applyRights();
       await loadPeople();
+      // Nu pas zijn de namen er: de filter op verantwoordelijke heeft ze nodig.
+      renderFilters();
       const { db, empty } = await store.load();
       state.db = db;
       // Het versienummer zegt of deze app de vorm van de data nog begrijpt.

@@ -19,10 +19,10 @@ window.FollowUpDomain = (() => {
   // In de databank staat de sleutel, niet de vertaalde tekst.
   const STAGES = [
     "prospect", "first_contact", "meeting", "demo_planned", "demo_installed",
-    "evaluation", "customer", "on_hold", "not_interested",
+    "evaluation", "purchasing", "customer", "on_hold", "not_interested",
   ];
   // Fases vóór de verkoop: een installatie of bestelling maakt er "customer" van.
-  const PRE_SALE = ["prospect", "first_contact", "meeting", "demo_planned", "demo_installed", "evaluation"];
+  const PRE_SALE = ["prospect", "first_contact", "meeting", "demo_planned", "demo_installed", "evaluation", "purchasing"];
   const ACT_TYPES = {
     prospecting: "#7b61ff",
     email: "#3a8dde",
@@ -46,7 +46,27 @@ window.FollowUpDomain = (() => {
   // alles wat per product bestaat (kleur, doelcijfer) wordt eruit afgeleid.
   // Komt er een derde bij, dan volstaat deze regel — plus followup.producten()
   // in supabase/schema.sql, want de databank kan dit bestand niet lezen.
-  const PRODUCTS = ["EndoQ", "Ainex"];
+  const PRODUCTS = ["EndoQ", "Ainex", "Thyroid RFA", "Fibroid RFA"];
+  // Niet elk product wordt op dezelfde manier verkocht. EndoQ en Ainex gaan
+  // per abonnement, per kamer: daar tel je kamers en actieve abonnementen. De
+  // RFA-producten worden per ingreep verbruikt — er is geen installatie en
+  // geen abonnement, er worden elektroden besteld. Wat hier niet in staat is
+  // een abonnement: zo gedraagt een product dat de app nog niet kent zich
+  // zoals alles zich tot nu toe gedroeg.
+  // De lijst hierboven blijft een lijst van namen, en dat is met opzet: die
+  // naam is wat er in de databank staat, bij elk contactmoment en in elk
+  // bereik. Wat een product ís, hangt er hier naast.
+  const PRODUCT_KINDS = { "Thyroid RFA": "procedure", "Fibroid RFA": "procedure" };
+  const productKind = (p) => PRODUCT_KINDS[p] || "subscription";
+  // Bij welk contactmoment hoort een aantal? Een contactmoment draagt één
+  // getal, en wat het telt hangt af van het product: kamers bij een product
+  // per abonnement (demo, installatie, bestelling, stopzetting), bestelde
+  // stuks bij een product per ingreep — en dan alleen bij een bestelling,
+  // want een demo of een installatie in kamers bestaat daar niet. Dat blijft
+  // een verkoopcijfer per ziekenhuis: wat er besteld is, nooit wie er
+  // behandeld is.
+  const wantsQuantity = (type, product) =>
+    (productKind(product) === "procedure" ? type === "order" : ROOM_TYPES.includes(type));
   // Welke producten deze gebruiker mag gebruiken. Een leeg bereik betekent
   // onbeperkt, dus dan zijn het ze allemaal. De databank schermt het document
   // al af; dit is er zodat de app geen keuze aanbiedt die toch geweigerd wordt.
@@ -67,6 +87,38 @@ window.FollowUpDomain = (() => {
   };
   // Een doelcijferrij met elk product op nul.
   const emptyTargets = () => Object.fromEntries(PRODUCTS.map((p) => [p, 0]));
+  // Eén lijst van fases voor alle producten — zo blijven de pijplijn en de
+  // filters in één taal spreken — maar niet elk product doorloopt ze
+  // allemaal. Een RFA-product wordt niet geïnstalleerd, en moet wél langs het
+  // Comité Medisch Materiaal voor het besteld mag worden: vandaar "purchasing"
+  // daar, en "demo_installed" hier. Blijkt EndoQ of Ainex die stap ook te
+  // hebben, dan volstaat het de filter hieronder weg te halen.
+  const stagesFor = (p) => STAGES.filter((s) => s !== (productKind(p) === "procedure" ? "demo_installed" : "purchasing"));
+  // De opvolging staat per product in h.pipeline: { fase, kleur, wie }. Wat er
+  // op het ziekenhuis zelf staat (h.status, h.stage) is daarvan afgeleid: het
+  // product dat het verst staat. "Verst" is eerst de kleur, dan de fase; on
+  // hold en niet geïnteresseerd staan achter prospect, zodat een afgehaakt
+  // product een lopend dossier nooit verbergt.
+  const STATUS_RANK = { green: 2, orange: 1, red: 0 };
+  const stageRank = (st) => (st === "on_hold" || st === "not_interested" ? -1 : STAGES.indexOf(st));
+  const furthest = (entries) => entries.reduce((best, e) =>
+    ((STATUS_RANK[e.status] - STATUS_RANK[best.status]) || (stageRank(e.stage) - stageRank(best.stage))) > 0 ? e : best);
+  // Wat je van een ziekenhuis toont, gegeven de producten waarop gefilterd is.
+  // Geen filter: het geheel, zoals het op het ziekenhuis staat. Wel een filter:
+  // het verste van díe producten — en is er voor geen van die producten iets,
+  // dan is het ziekenhuis daarvoor gewoon nog een prospect.
+  const pipelineView = (h, products) => {
+    if (!products || !products.length) return h;
+    const entries = products.filter((p) => h.products.includes(p) && h.pipeline && h.pipeline[p]).map((p) => h.pipeline[p]);
+    return entries.length ? furthest(entries) : { status: "red", stage: "prospect", owner: "" };
+  };
+  // Wat je van een ziekenhuis moet weten voor een product per ingreep — de
+  // tegenhanger van de endoscopie-afdeling bij EndoQ en Ainex. CMM is het
+  // Comité Medisch Materiaal: zolang dat het product niet goedgekeurd heeft,
+  // mag het ziekenhuis niet bestellen. Sleutels, zoals overal: de tekst komt
+  // uit i18n.js.
+  const CMM_STATES = ["not_ok", "requested", "ok"];
+  const YES_NO = ["yes", "no", "unknown"];
   const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "other"];
   // De toren staat los van de scopes — daar hangt EndoQ of
   // Ainex aan, dus
@@ -76,8 +128,18 @@ window.FollowUpDomain = (() => {
   const PROCESSOR_BRANDS = SCOPE_BRANDS;
   // Diensten waar een contactpersoon toe behoort. Niet alleen de artsen
   // beslissen mee: ICT, aankoop en de biomedische dienst evengoed.
-  const DEPARTMENTS = ["physician", "endoscopy", "it", "purchasing", "biomed", "admin", "other"];
+  // De volgorde is die van de keuzelijst: eerst de artsen per discipline, dan
+  // de diensten eromheen. "physician" is de gastro-enteroloog — de sleutel is
+  // ouder dan de RFA-producten en blijft zo heten, anders verliezen bestaande
+  // contactpersonen hun dienst.
+  const DEPARTMENTS = [
+    "physician", "endoscopy", "radiology", "endocrinology", "nuclear", "ent", "surgery", "gynaecology",
+    "pharmacy", "it", "purchasing", "biomed", "admin", "secretariat", "other",
+  ];
   const SECTORS = ["public", "private", "university"];
+  // De taal waarin je een contactpersoon aanspreekt. Codes, geen vertaalde
+  // namen: ze zijn in beide talen van de app gelijk.
+  const LANGUAGES = ["NL", "FR", "DE", "EN"];
   const COUNTRIES = ["BE", "NL", "LU"];
   // Rollen, van veel naar weinig rechten. In de databank staat de sleutel; wat
   // elke rol precies mag staat in storage.js (RIGHTS) en wordt afgedwongen in
@@ -181,7 +243,7 @@ window.FollowUpDomain = (() => {
 
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
-    esc, pickBox, syncPick, myProducts, productColor, emptyTargets,
+    ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
+    esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
   };
 })();

@@ -228,7 +228,7 @@ $$;
 -- bijgewerkt is.
 create or replace function followup.producten() returns text[]
 language sql immutable set search_path = public as $$
-  select array['EndoQ', 'Ainex'];
+  select array['EndoQ', 'Ainex', 'Thyroid RFA', 'Fibroid RFA'];
 $$;
 
 -- De vaste volgorde uit domain.js. Die houden we aan zodat laden-en-opslaan
@@ -294,7 +294,96 @@ language sql immutable set search_path = public as $$
     select 1
       from unnest(array['contacts', 'activities', 'planned']) as k(lijst),
            jsonb_array_elements(followup.arr(h -> k.lijst)) t(e)
-     where not followup.in_scope(t.e, allowed));
+     where not followup.in_scope(t.e, allowed))
+  -- De opvolging van een product dat jij niet mag is evengoed werk van een
+  -- collega: een fase, een kleur, een verantwoordelijke.
+  or exists (
+    select 1 from jsonb_object_keys(followup.obj(h -> 'pipeline')) k(product)
+     where k.product <> all(allowed));
+$$;
+
+-- ---------------------------------------------------------------------------
+-- De opvolging per product
+-- ---------------------------------------------------------------------------
+-- h.pipeline is een object met per product een fase, een kleur en een
+-- verantwoordelijke. Het valt binnen de muur zoals een contactmoment: wie
+-- enkel Ainex mag, krijgt enkel de Ainex-rij en beslist enkel over die rij.
+--
+-- h.status en h.stage op het ziekenhuis zelf zijn daarvan afgeleid — het
+-- product dat het verst staat — en dus net als nextAction iets wat we zelf
+-- uitrekenen, bij het lezen én bij het schrijven. Bij het lezen omdat "groen,
+-- klant" anders verklapt hoe ver het andere product staat. Bij het schrijven
+-- omdat een afgeschermde browser dat geheel uitrekent op de helft die hij
+-- ziet.
+--
+-- Een document zonder pipeline blijft onaangeroerd: geen sleutel erbij, geen
+-- kleur herrekend. Anders gaf laden en opslaan een ander document terug.
+
+-- De fases, in dezelfde volgorde als STAGES in public/domain.js. Net als
+-- producten(): twee plaatsen, omdat de databank dat bestand niet kan lezen.
+create or replace function followup.fases() returns text[]
+language sql immutable set search_path = public as $$
+  select array['prospect', 'first_contact', 'meeting', 'demo_planned', 'demo_installed',
+               'evaluation', 'purchasing', 'customer', 'on_hold', 'not_interested'];
+$$;
+
+create or replace function followup.scope_pipeline(p jsonb, allowed text[]) returns jsonb
+language sql immutable set search_path = public as $$
+  select coalesce((
+    select jsonb_object_agg(k.key, k.value)
+      from jsonb_each(followup.obj(p)) k
+     where k.key = any(allowed)
+  ), '{}'::jsonb);
+$$;
+
+-- Dezelfde formule als bij de vinkjes: (opgeslagen \ bereik) ∪ (payload ∩ bereik).
+create or replace function followup.merge_pipeline(stored jsonb, incoming jsonb,
+                                                   allowed text[]) returns jsonb
+language sql immutable set search_path = public as $$
+  select coalesce((
+           select jsonb_object_agg(k.key, k.value)
+             from jsonb_each(followup.obj(stored)) k
+            where k.key <> all(allowed)), '{}'::jsonb)
+      || followup.scope_pipeline(incoming, allowed);
+$$;
+
+-- Hangt de kleur van dit ziekenhuis aan een opvolging per product? Dan is ze
+-- afgeleid, en mogen we ze niet doorgeven aan wie die producten niet ziet.
+create or replace function followup.heeft_opvolging(h jsonb) returns boolean
+language sql immutable set search_path = public as $$
+  select exists (
+    select 1 from unnest(followup.texts(h -> 'products')) p(x)
+     where jsonb_typeof(h -> 'pipeline' -> p.x) = 'object');
+$$;
+
+-- status en stage van het ziekenhuis: die van het product dat het verst
+-- staat. Zelfde regel als furthest() in domain.js — eerst de kleur, dan de
+-- fase, en on hold of niet geïnteresseerd achter prospect. Alleen de
+-- producten die aangevinkt staan tellen mee.
+--
+-- Is er voor geen enkel aangevinkt product een opvolging, dan hangt het van
+-- "afgeleid" af: was de kleur afgeleid van wat we net hebben weggehaald, dan
+-- wordt het "nog geen contact"; anders is het de losse kleur van een
+-- ziekenhuis waar nog geen product aan hangt, en die blijft staan.
+create or replace function followup.fix_overall(h jsonb, afgeleid boolean) returns jsonb
+language sql immutable set search_path = public as $$
+  select case
+    when b.e is not null then h || jsonb_build_object(
+           'status', coalesce(b.e -> 'status', '"red"'::jsonb),
+           'stage',  coalesce(b.e -> 'stage',  '"prospect"'::jsonb))
+    when afgeleid then h || '{"status": "red", "stage": "prospect"}'::jsonb
+    else h end
+  from (select 1) een
+  left join lateral (
+    select h -> 'pipeline' -> p.x as e
+      from unnest(followup.texts(h -> 'products')) with ordinality p(x, i)
+     where jsonb_typeof(h -> 'pipeline' -> p.x) = 'object'
+     order by coalesce(array_position(array['red', 'orange', 'green'], h -> 'pipeline' -> p.x ->> 'status'), 1) desc,
+              case when h -> 'pipeline' -> p.x ->> 'stage' in ('on_hold', 'not_interested') then -1
+                   else coalesce(array_position(followup.fases(), h -> 'pipeline' -> p.x ->> 'stage'), 1) end desc,
+              p.i
+     limit 1
+  ) b on true;
 $$;
 
 
@@ -366,11 +455,17 @@ $$;
 -- en niet die van het moment dat we er net hebben uitgehaald.
 create or replace function followup.scope_hospital(h jsonb, allowed text[]) returns jsonb
 language sql immutable set search_path = public as $$
-  select followup.fix_planned(h || jsonb_build_object(
+  select followup.fix_overall(followup.fix_planned(h || jsonb_build_object(
     'products',   to_jsonb(followup.product_sort(followup.both_in(followup.texts(h -> 'products'), allowed))),
     'contacts',   followup.scope_contacts(h -> 'contacts', allowed),
     'activities', followup.scope_entries(h -> 'activities', allowed),
-    'planned',    followup.scope_entries(h -> 'planned', allowed)));
+    'planned',    followup.scope_entries(h -> 'planned', allowed))
+    -- De opvolging van de andere producten gaat niet mee, en de kleur van het
+    -- ziekenhuis wordt herrekend op wat overblijft.
+    || case when h ? 'pipeline'
+            then jsonb_build_object('pipeline', followup.scope_pipeline(h -> 'pipeline', allowed))
+            else '{}'::jsonb end),
+    followup.heeft_opvolging(h));
 $$;
 
 create or replace function followup.scope_targets(targets jsonb, allowed text[]) returns jsonb
@@ -720,12 +815,19 @@ end $$;
 create or replace function followup.merge_hospital(stored jsonb, incoming jsonb,
                                                    allowed text[]) returns jsonb
 language sql immutable set search_path = public as $$
-  select followup.fix_rooms_demo(stored, followup.fix_planned(
+  select followup.fix_overall(followup.fix_rooms_demo(stored, followup.fix_planned(
     incoming || jsonb_build_object(
       'products', followup.merge_products(stored, incoming, allowed),
       'contacts',   followup.merge_entries(stored -> 'contacts',   incoming -> 'contacts',   allowed, 'contactpersoon'),
       'activities', followup.merge_entries(stored -> 'activities', incoming -> 'activities', allowed, 'contactmoment'),
-      'planned',    followup.merge_entries(stored -> 'planned',    incoming -> 'planned',    allowed, 'gepland moment'))));
+      'planned',    followup.merge_entries(stored -> 'planned',    incoming -> 'planned',    allowed, 'gepland moment'))
+    -- De opvolging per product: de rij van de collega blijft zoals ze
+    -- opgeslagen stond. Daarna de kleur van het ziekenhuis opnieuw, nu op het
+    -- volledige lijstje — de browser kende er maar een deel van.
+    || case when (stored ? 'pipeline') or (incoming ? 'pipeline')
+            then jsonb_build_object('pipeline',
+                   followup.merge_pipeline(stored -> 'pipeline', incoming -> 'pipeline', allowed))
+            else '{}'::jsonb end)), false);
 $$;
 
 create or replace function followup.merge_targets(stored jsonb, incoming jsonb,
@@ -803,7 +905,10 @@ begin
         v_h || jsonb_build_object(
           'contacts',   followup.merge_entries('[]'::jsonb, v_h -> 'contacts',   allowed, 'contactpersoon'),
           'activities', followup.merge_entries('[]'::jsonb, v_h -> 'activities', allowed, 'contactmoment'),
-          'planned',    followup.merge_entries('[]'::jsonb, v_h -> 'planned',    allowed, 'gepland moment')))));
+          'planned',    followup.merge_entries('[]'::jsonb, v_h -> 'planned',    allowed, 'gepland moment'))
+        || case when v_h ? 'pipeline'
+                then jsonb_build_object('pipeline', followup.scope_pipeline(v_h -> 'pipeline', allowed))
+                else '{}'::jsonb end)));
   end loop;
 
   -- We vertrekken van het document in de databank en vervangen enkel wat we
@@ -828,6 +933,42 @@ begin
 end $$;
 
 
+-- Van één fase per ziekenhuis naar een fase per product. Een ziekenhuis van
+-- vóór de opvolging per product heeft producten aangevinkt en nog geen enkele
+-- rij in pipeline; dan krijgt élk aangevinkt product de fase en de kleur die
+-- het ziekenhuis had. Dezelfde regel als syncPipeline() in de app, maar hier,
+-- en dat is het punt: de app van een afgeschermde gebruiker kent alleen zijn
+-- eigen product. Liet je de omzetting aan haar over, dan maakte ze één rij
+-- aan, en vond de collega daarna een ziekenhuis "met opvolging" waarin zijn
+-- product ontbrak — klant werd weer eerste contact.
+--
+-- Daarom gebeurt het hier voor alle producten tegelijk, op drie plaatsen:
+-- onderaan dit bestand één keer op het opgeslagen document, en in read_state
+-- en write_state voor het geval er toch nog een oud document binnenkomt (een
+-- back-up van vroeger, een browser met de vorige versie van de app). Op een
+-- omgezet document doet dit niets, dus laden en opslaan blijft hetzelfde
+-- document teruggeven.
+create or replace function followup.opvolging_aanvullen(doc jsonb) returns jsonb
+language sql immutable set search_path = public as $$
+  select case
+    when jsonb_typeof(doc -> 'hospitals') is distinct from 'array' then doc
+    else doc || jsonb_build_object('hospitals', coalesce((
+      select jsonb_agg(case
+               when followup.obj(t.e -> 'pipeline') = '{}'::jsonb
+                    and cardinality(followup.texts(t.e -> 'products')) > 0
+               then t.e || jsonb_build_object('pipeline', (
+                      select jsonb_object_agg(p.x, jsonb_build_object(
+                               'stage',  coalesce(t.e ->> 'stage',  'prospect'),
+                               'status', coalesce(t.e ->> 'status', 'red'),
+                               'owner',  ''))
+                        from unnest(followup.texts(t.e -> 'products')) p(x)))
+               else t.e end order by t.i)
+        from jsonb_array_elements(doc -> 'hospitals') with ordinality t(e, i)
+    ), '[]'::jsonb))
+  end;
+$$;
+
+
 -- ---------------------------------------------------------------------------
 -- 10. Lezen en schrijven: het enige dat de app nog ziet
 -- ---------------------------------------------------------------------------
@@ -839,7 +980,7 @@ end $$;
 create or replace function public.read_state() returns jsonb
 language sql stable security definer set search_path = public as $$
   select jsonb_build_object(
-           'data',       followup.scope_doc(s.data, p.products),
+           'data',       followup.scope_doc(followup.opvolging_aanvullen(s.data), p.products),
            'updated_at', to_jsonb(s.updated_at),
            'role',       to_jsonb(followup.my_role()),
            'products',   to_jsonb(p.products))
@@ -951,8 +1092,13 @@ begin
     -- document. De controles hieronder blijven wél gelden.
     v_nieuw := payload;
   else
-    v_nieuw := followup.merge_doc(v_stored, payload, v_bereik, v_rol in ('admin', 'editor'));
+    -- Samenvoegen met het omgezette document: zo staat de rij van de collega
+    -- er al vóór deze gebruiker de zijne erbij zet.
+    v_nieuw := followup.merge_doc(followup.opvolging_aanvullen(v_stored), payload, v_bereik, v_rol in ('admin', 'editor'));
   end if;
+  -- En wat een onbeperkte gebruiker stuurt vanuit een app die de opvolging per
+  -- product nog niet kent. Op een omgezet document verandert dit niets.
+  v_nieuw := followup.opvolging_aanvullen(v_nieuw);
 
   -- De stempel zet de databank, niet de browser. Bij een import niet: die zet
   -- een back-up terug zoals hij was, inclusief wie wat ooit invoerde.
@@ -1074,3 +1220,17 @@ drop function if exists public.may_write();
 revoke all on schema followup from anon, authenticated;
 
 revoke all on public.app_state, public.app_state_backups, public.app_users from anon;
+
+
+-- ---------------------------------------------------------------------------
+-- Eenmalig: het opgeslagen document omzetten naar een fase per product
+-- ---------------------------------------------------------------------------
+-- Zie followup.opvolging_aanvullen() hierboven. Staat alles al om, dan raakt
+-- dit geen rij aan — het mag dus bij elke uitvoering van dit bestand opnieuw
+-- lopen. De trigger bewaart zoals altijd de toestand van vóór de wijziging in
+-- app_state_backups. updated_at blijft staan: wie de app open heeft, krijgt
+-- geen conflictmelding voor een wijziging die hij niet kan zien.
+update public.app_state
+   set data = followup.opvolging_aanvullen(data)
+ where id = 'main'
+   and data is distinct from followup.opvolging_aanvullen(data);
