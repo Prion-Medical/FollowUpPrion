@@ -618,6 +618,16 @@ label.field textarea:focus-visible,
      100% van het anker, en dat is hier de hele rij — met left én right
      erbij stak het paneel dan 28px buiten het scherm. */
   .filters.picks .pick-list { top: 100%; left: 14px; right: 14px; min-width: 0; }
+  /* Dezelfde ingreep voor de keuzes boven het logboek: op een telefoon staan
+     ze met twee naast elkaar, en een lijst onder de rechtse viel anders
+     buiten het scherm. Het blok zelf is het anker, de lijst is zo breed als
+     het blok. */
+  .log-filters { position: relative; }
+  .log-filters label { flex: 1 1 45%; min-width: 0; }
+  .log-filters .pick { position: static; flex: 1 1 auto; min-width: 0; }
+  .log-filters .pick-list { top: 100%; left: 0; right: 0; min-width: 0; }
+  .log-filters input[type="search"] { flex: 1 1 100%; }
+  .log-filters select { flex: 1 1 auto; min-width: 0; }
   .chip { min-height: 36px; flex: none; font-size: 14px; }
   .list { padding: 0 6px 18px; }
   .list li { padding: 14px 10px; }

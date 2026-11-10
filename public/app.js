@@ -422,6 +422,28 @@
   // Wat de kaart, de lijst en de tellers van een ziekenhuis tonen: het volgt
   // de productfilter in de zijbalk.
   const shown = (h) => pipelineView(h, state.filter.products);
+  // De regel onder een contactmoment of een gepland moment: product,
+  // contactpersoon, aantal, en wie het invoerde. De fiche, de agenda en het
+  // logboek tonen alle drie dezelfde; met type erbij waar de soort niet al
+  // apart boven de regel staat. Een gepland moment heeft geen aantal, dus dat
+  // valt daar vanzelf weg.
+  function momentLine(h, r, withType) {
+    const c = h.contacts.find((x) => x.id === r.contactId);
+    const by = personName(r.createdBy);
+    return [withType && t("act." + r.type), r.product, c && c.name,
+      r.rooms ? `${r.rooms} ${t(productKind(r.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
+      by && t("by", { name: by })].filter(Boolean).join(" · ");
+  }
+  // De contactmomenten als CSV, recentste eerst: voor de export van alles en
+  // voor "CSV van deze keuze" in het logboek.
+  function activitiesCsv(items) {
+    return csv([
+      [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.quantity"), t("col.note"), t("col.addedBy")],
+      ...[...items].sort((x, y) => y.a.date.localeCompare(x.a.date))
+        .map(({ h, a }) => [a.date, h.name, t("act." + a.type), a.product,
+          (h.contacts.find((c) => c.id === a.contactId) || {}).name, a.rooms ?? "", a.note, personName(a.createdBy)]),
+    ]);
+  }
   // Zoveel contactmomenten toont de fiche standaard, de recentste eerst. Wie
   // ze allemaal wil zien klapt de lijst open. Dit gaat enkel over tonen:
   // activities[] blijft volledig, en daar rekenen de kleur, de fase en de
@@ -616,7 +638,10 @@
   // ---------- filter + lijst ----------
   function matchesQuery(h, q) {
     if (!q) return true;
-    const hay = [h.name, h.address, h.network, h.sites, h.unit.scopeNotes, h.unit.processorNotes, h.unit.existingAI, h.notes,
+    // De nota's van de endoscopie-afdeling alleen voor wie die afdeling ook te
+    // zien krijgt: anders vind je een ziekenhuis op tekst die nergens staat.
+    const unit = endoAccount() ? [h.unit.scopeNotes, h.unit.processorNotes, h.unit.existingAI] : [];
+    const hay = [h.name, h.address, h.network, h.sites, ...unit, h.notes,
       ...h.contacts.flatMap((c) => [c.name, c.role, c.address, c.email, c.department && t("dept." + c.department)])]
       .join(" ").toLowerCase();
     return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
@@ -934,10 +959,7 @@
       <div class="section">
         <h3>${esc(t("section.activities"))} <button class="btn small primary" data-act="add-activity">${esc(t("btn.addActivity"))}</button></h3>
         ${acts.length ? `<ul class="timeline ${state.actsOpen === h.id ? "" : "capped"}">${acts.map((a, i) => {
-          const c = h.contacts.find((x) => x.id === a.contactId);
-          const by = personName(a.createdBy);
-          const sub = [a.product, c && c.name, a.rooms ? `${a.rooms} ${t(productKind(a.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
-            by && t("by", { name: by })].filter(Boolean).join(" · ");
+          const sub = momentLine(h, a, false);
           return `<li${i >= ACT_CAP ? ' class="extra"' : ""}>
             <div class="t-date">${esc(fmtDate(a.date))}</div>
             <div class="t-body">
@@ -1128,10 +1150,7 @@
     const sb = e.target.closest("[data-status]");
     if (sb) { setStatus(h, sb.dataset.status, sb.dataset.pproduct); return; }
     if (e.target.closest("[data-log-open]")) {
-      // Het logboek, beperkt tot dit ziekenhuis en over de hele periode.
-      state.log = { ...state.log, hospitalId: h.id, period: "all", limit: LOG_STEP };
-      state.agenda = { ...state.agenda, tab: "log" };
-      return setView("agenda");
+      return openLogFor(h);
     }
     if (e.target.closest("[data-acts-toggle]")) {
       state.actsOpen = state.actsOpen === h.id ? null : h.id;
@@ -1359,7 +1378,8 @@
       // een verantwoordelijke is werk dat niet mag verdwijnen omdat de laatste
       // contactpersoon wegging.
       const e = h.pipeline[p];
-      const followed = !!e && (!!e.owner || e.status !== "red" || e.stage !== "prospect");
+      const followed = !!e && (!!e.owner || e.status !== "red" || e.stage !== "prospect"
+        || !!(e.cmm || e.prio || e.doesAlready || e.currentSystem || e.notes));
       const used = followed || h.contacts.some((c) => c.products.includes(p)) || h.activities.some((a) => a.product === p);
       if (!used) h.products = h.products.filter((x) => x !== p);
     }
@@ -1719,14 +1739,13 @@
       <div class="actions"><button class="btn" value="cancel">${esc(t("btn.close"))}</button></div>`, (data, kind) => {
       const hs = state.db.hospitals;
       const d = today();
-      const contactName = (h, id) => (h.contacts.find((c) => c.id === id) || {}).name;
       // De kolom "Demo gepland op" bestaat nog; de datum komt uit het eerste
       // geplande demomoment dat nog moet komen.
       const demoDate = (h) => ((h.planned.find((p) => p.type === "demo" && p.date >= d) || {}).date) || "";
       if (kind === "hospitals") {
         download(`hospitals-${d}.csv`, csv([
           [t("col.name"), t("col.country"), t("col.sector"), t("col.status"), t("col.stage"), t("col.products"),
-            t("col.lastContact"), t("col.demos"), t("col.installations"), t("unit.roomsInstalled"),
+            t("col.lastContact"), t("col.demos"), ...(endoAccount() ? [t("col.installations"), t("unit.roomsInstalled")] : []),
             t("col.demoDate"), t("col.nextAction"), t("col.nextActionDate"), t("col.primaryContact"),
             t("col.address"), t("col.createdAt"), t("col.notes"),
             t("field.network"), t("field.sites"),
@@ -1734,7 +1753,7 @@
               ...(productKind(p) === "procedure" ? ["rfa.cmm", "rfa.prio", "rfa.doesAlready", "rfa.currentSystem", "rfa.notes"].map((k) => `${t(k)} ${p}`) : [])])],
           ...hs.map((h) => [h.name, h.country && t("country." + h.country), h.sector && t("sector." + h.sector),
             t("status." + h.status), t("stage." + h.stage), h.products.join(", "), lastContact(h),
-            countType(h, "demo"), countType(h, "installation"), h.unit.roomsInstalled ?? "",
+            countType(h, "demo"), ...(endoAccount() ? [countType(h, "installation"), h.unit.roomsInstalled ?? ""] : []),
             demoDate(h), h.nextAction, h.nextActionDate, (h.contacts.find((c) => c.primary) || {}).name,
             h.address, h.createdAt, h.notes,
             h.network, h.sites,
@@ -1753,11 +1772,7 @@
             c.phone, c.email, c.language, c.address, c.products.join(" / "), c.primary ? t("col.yes") : "", c.notes])),
         ]), "text/csv");
       } else if (kind === "activities") {
-        download(`activities-${d}.csv`, csv([
-          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.quantity"), t("col.note"), t("col.addedBy")],
-          ...hs.flatMap((h) => h.activities.map((a) => [a.date, h.name, t("act." + a.type), a.product, contactName(h, a.contactId), a.rooms ?? "", a.note, personName(a.createdBy)]))
-            .sort((a, b) => b[0].localeCompare(a[0])),
-        ]), "text/csv");
+        download(`activities-${d}.csv`, activitiesCsv(hs.flatMap((h) => h.activities.map((a) => ({ h, a })))), "text/csv");
       } else if (kind === "units") {
         download(`units-${d}.csv`, csv([
           [t("col.name"), t("col.country"), t("unit.scopeBrands"), t("unit.scopeNotes"),
@@ -1822,9 +1837,7 @@
   }
 
   function agendaRow({ h, p }) {
-    const c = h.contacts.find((x) => x.id === p.contactId);
-    const by = personName(p.createdBy);
-    const sub = [t("act." + p.type), p.product, c && c.name, by && t("by", { name: by })].filter(Boolean).join(" · ");
+    const sub = momentLine(h, p, true);
     const when = new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" });
     return `<li class="ag-row ${p.date < today() ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
       <div class="ag-date"><b>${esc(when)}</b><span>${esc(relDays(p.date))}</span></div>
@@ -1942,37 +1955,62 @@
     const thu = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 3);
     const n = Math.floor(Math.round((thu - new Date(thu.getFullYear(), 0, 1)) / 86400000) / 7) + 1;
     const short = (x) => x.toLocaleDateString(I18N.locale, { day: "numeric", month: "short" });
-    return { key: ymd(mon.getFullYear(), mon.getMonth(), mon.getDate()), label: `${t("log.week", { n })} · ${short(mon)} – ${short(sun)}` };
+    // Het jaar erbij zodra het niet het lopende is: over "alles" staat week 45
+    // er anders twee keer, zonder dat je ziet van wanneer.
+    const year = thu.getFullYear() === new Date().getFullYear() ? "" : ` ${thu.getFullYear()}`;
+    return { key: ymd(mon.getFullYear(), mon.getMonth(), mon.getDate()), label: `${t("log.week", { n })} · ${short(mon)} – ${short(sun)}${year}` };
   }
-  // Alles wat bij de keuze past, recentste eerst. De filters van de kaart
-  // gelden voor het ziekenhuis (land, verantwoordelijke) en voor het
-  // contactmoment zelf (product); de zoekterm zoekt in het ziekenhuis én in
-  // de nota.
+  // Alles wat bij de keuze past, recentste eerst.
+  //
+  // De filters van de kaart gelden voor het ziekenhuis (land,
+  // verantwoordelijke) en voor het contactmoment zelf (product). Kom je uit
+  // een fiche, dan gelden ze niet: je vroeg om de contactmomenten van dát
+  // ziekenhuis, en de fiche toonde ze ook allemaal. Periode, soort en
+  // "ingevoerd door" blijven wel gelden — die staan er nog en zijn van hier.
+  //
+  // Zoeken gaat per contactmoment en niet per ziekenhuis: elk woord moet
+  // voorkomen in het ziekenhuis, de contactpersoon van dít moment, de soort,
+  // het product of de nota. Wie op een arts zoekt krijgt dus de momenten met
+  // die arts, niet alles van zijn ziekenhuis.
   function logItems() {
     const L = state.log;
     const from = periodStart(L.period);
-    const q = state.filter.query.toLowerCase();
+    const only = L.hospitalId && byId(L.hospitalId);
+    const words = only ? [] : state.filter.query.toLowerCase().split(/\s+/).filter(Boolean);
     const out = [];
-    for (const h of scopedHospitals()) {
-      if (L.hospitalId && h.id !== L.hospitalId) continue;
-      const hit = matchesQuery(h, q);
+    for (const h of only ? [only] : scopedHospitals()) {
+      const place = [h.name, h.address, h.network, h.sites].join(" ");
       for (const a of h.activities) {
-        if (!inFilter(a)) continue;
+        if (!only && !inFilter(a)) continue;
         if (from && a.date < from) continue;
         if (L.types.length && !L.types.includes(a.type)) continue;
         if (L.authors.length && !L.authors.includes(a.createdBy)) continue;
-        if (!hit && !a.note.toLowerCase().includes(q)) continue;
+        if (words.length) {
+          const c = h.contacts.find((x) => x.id === a.contactId);
+          const hay = [place, c && c.name, t("act." + a.type), a.product, a.note].join(" ").toLowerCase();
+          if (!words.every((w) => hay.includes(w))) continue;
+        }
         out.push({ h, a });
       }
     }
     return out.sort((x, y) => y.a.date.localeCompare(x.a.date) || x.h.name.localeCompare(y.h.name));
   }
+  // Uit een fiche gekomen: het logboek van dat ene ziekenhuis, over de hele
+  // periode. Dat is een uitstap, geen instelling — de periode van daarvoor
+  // wordt onthouden en komt terug zodra je het ziekenhuis loslaat of de
+  // agenda verlaat.
+  function openLogFor(h) {
+    if (!state.log.hospitalId) state.log.prevPeriod = state.log.period;
+    state.log = { ...state.log, hospitalId: h.id, period: "all", limit: LOG_STEP };
+    state.agenda = { ...state.agenda, tab: "log" };
+    setView("agenda");
+  }
+  function clearLogHospital() {
+    if (!state.log.hospitalId) return;
+    state.log = { ...state.log, hospitalId: "", period: state.log.prevPeriod || "quarter", limit: LOG_STEP };
+  }
   function logRow({ h, a }) {
-    const c = h.contacts.find((x) => x.id === a.contactId);
-    const by = personName(a.createdBy);
-    const sub = [t("act." + a.type), a.product, c && c.name,
-      a.rooms ? `${a.rooms} ${t(productKind(a.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
-      by && t("by", { name: by })].filter(Boolean).join(" · ");
+    const sub = momentLine(h, a, true);
     const when = new Date(a.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" });
     return `<li class="ag-row" data-hid="${esc(h.id)}" data-aid="${esc(a.id)}">
       <div class="ag-date"><b>${esc(when)}</b><span>${esc(relDays(a.date))}</span></div>
@@ -2017,7 +2055,7 @@
   function renderLog() {
     const L = state.log;
     const only = L.hospitalId && byId(L.hospitalId);
-    if (L.hospitalId && !only) L.hospitalId = "";
+    if (L.hospitalId && !only) clearLogHospital();
     const pick = (key, items, label, leeg) => pickBox(items.map((k) => ({
       attrs: `data-log-pick="${esc(key)}" data-value="${esc(k)}"`, label: label(k), checked: L[key].includes(k),
     })), leeg);
@@ -2028,26 +2066,23 @@
       </div>
       <div class="s-filters log-filters">
         <label>${esc(t("log.period"))} <select data-log-period>${LOG_PERIODS.map((p) => opt(p, t("log.period." + p), L.period)).join("")}</select></label>
-        ${FILTERS.filter((f) => f.key !== "statuses" && f.items().length).map((f) => `<label>${pickBox(f.items().map((k) => ({
+        ${only ? "" : FILTERS.filter((f) => f.key !== "statuses" && f.items().length).map((f) => `<label>${pickBox(f.items().map((k) => ({
           attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`, label: f.label(k), checked: state.filter[f.key].includes(k),
         })), t(f.leeg))}</label>`).join("")}
         <label>${pick("types", ACT_TYPE_KEYS, (k) => t("act." + k), t("log.allTypes"))}</label>
         ${owners().length ? `<label>${esc(t("log.author"))} ${pick("authors", owners().map(([id]) => id), personName, t("log.allAuthors"))}</label>` : ""}
-        <input type="search" data-log-search value="${esc(state.filter.query)}" placeholder="${esc(t("log.search"))}" aria-label="${esc(t("log.search"))}">
+        ${only ? "" : `<input type="search" data-log-search value="${esc(state.filter.query)}" placeholder="${esc(t("log.search"))}" aria-label="${esc(t("log.search"))}">`}
       </div>
       ${only ? `<p class="log-only">${esc(t("log.hospital"))}: <b>${esc(only.name)}</b> <button class="link" data-log-clear>${esc(t("log.allHospitals"))}</button></p>` : ""}
       <div id="logBody"></div>`;
     renderLogBody();
   }
-  // Dezelfde kolommen als de export van alle contactmomenten, maar enkel wat
-  // hier geselecteerd staat — álles daarvan, niet alleen wat al geladen is.
+  // Enkel wat hier geselecteerd staat — álles daarvan, niet alleen wat al
+  // geladen is.
   function exportLog() {
-    const contactName = (h, id) => (h.contacts.find((c) => c.id === id) || {}).name;
-    download(`logboek-${today()}.csv`, csv([
-      [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.quantity"), t("col.note"), t("col.addedBy")],
-      ...logItems().map(({ h, a }) => [a.date, h.name, t("act." + a.type), a.product, contactName(h, a.contactId), a.rooms ?? "", a.note, personName(a.createdBy)]),
-    ]), "text/csv");
+    download(`logboek-${today()}.csv`, activitiesCsv(logItems()), "text/csv");
   }
+
   // ---------- start ----------
   function renderAll() {
     if (!statsView.hidden) window.FollowUpStats.render(state.db, statsView, scheduleSave);
@@ -2153,6 +2188,7 @@
   const agendaView = $("#agendaView");
   const usersView = $("#usersView");
   function setView(view) {
+    if (view !== "agenda") clearLogHospital();
     document.body.dataset.view = view;
     statsView.hidden = view !== "stats";
     agendaView.hidden = view !== "agenda";
@@ -2189,7 +2225,7 @@
       return renderAgenda();
     }
     if (e.target.closest("[data-log-more]")) { state.log.limit += LOG_STEP; return renderLogBody(); }
-    if (e.target.closest("[data-log-clear]")) { state.log.hospitalId = ""; return renderAgenda(); }
+    if (e.target.closest("[data-log-clear]")) { clearLogHospital(); return renderAgenda(); }
     if (e.target.closest("[data-log-export]")) return exportLog();
     const b = e.target.closest("[data-ag]");
     if (b) {
@@ -2257,9 +2293,11 @@
     state.filter.query = e.target.value.trim();
     $("#search").value = state.filter.query;
     state.log.limit = LOG_STEP;
-    renderList();
-    renderMarkers();
     renderLogBody();
+    // De lijst en de kaart staan achter de agenda en hoeven niet bij elke
+    // letter mee: dezelfde pauze als bij het zoekveld in de zijbalk.
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { renderList(); renderMarkers(); }, 120);
   });
   document.querySelector(".tabbar").addEventListener("click", (e) => {
     const b = e.target.closest("button");
