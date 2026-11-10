@@ -39,7 +39,23 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('merge_products',  'only_in',        'bestaat die functie überhaupt'),
   ('merge_hospital',  'merge_products', 'dezelfde formule voor het ziekenhuis'),
   ('merge_doc',       'merge_entries',  'een nieuw ziekenhuis gaat door dezelfde regels'),
-  ('producten',       'Fibroid RFA',    'de productenlijst kent de RFA-producten')
+  ('producten',       'Fibroid RFA',    'de productenlijst kent de RFA-producten'),
+  -- De opvolging per product. Draait er nog een oude scope_hospital, dan gaat
+  -- de fase en de verantwoordelijke van het andere product gewoon mee naar
+  -- een browser die ze niet mag zien.
+  ('scope_hospital',  'scope_pipeline', 'de opvolging van het andere product niet meesturen'),
+  ('scope_hospital',  'fix_overall',    'de kleur van het ziekenhuis verklapt het andere product niet'),
+  ('merge_hospital',  'merge_pipeline', 'de opvolging van de collega niet laten overschrijven'),
+  ('merge_doc',       'scope_pipeline', 'een nieuw ziekenhuis krijgt geen opvolging buiten het bereik'),
+  ('vreemde_data',    'pipeline',       'een ziekenhuis met opvolging van een collega niet laten verwijderen'),
+  ('fix_overall',     'fases',          'bestaat die functie überhaupt'),
+  ('fases',           'purchasing',     'de fases aan de databankkant'),
+  -- De omzetting van één fase per ziekenhuis naar een fase per product. Zonder
+  -- deze drie maakt de eerste opslag van een afgeschermde gebruiker enkel zijn
+  -- eigen rij aan en is de fase van het andere product daarna kwijt.
+  ('opvolging_aanvullen', 'pipeline',       'bestaat die functie überhaupt'),
+  ('read_state',      'opvolging_aanvullen', 'een oud document wordt omgezet vóór het afgeschermd wordt'),
+  ('write_state',     'opvolging_aanvullen', 'een oud document wordt omgezet vóór het samengevoegd wordt')
 )
 select v.functie,
        v.waarvoor,
@@ -49,7 +65,7 @@ select v.functie,
   from verwacht v
   left join pg_proc p
     on p.proname = v.functie
-   and p.pronamespace = 'followup'::regnamespace
+   and p.pronamespace in ('followup'::regnamespace, 'public'::regnamespace)
  order by v.functie, v.moet_bevatten;
 
 -- Alles "nieuw"? Dan draait de databank deze schema.sql en kan controle.sql
