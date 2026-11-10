@@ -172,6 +172,11 @@
 }
 
 * { box-sizing: border-box; }
+/* Het ene beeld waarin licht en donker wisselen (zie theme.js): geen
+   overgangen, zodat de pagina in één keer omslaat. Het plaatje van de
+   schakelaar is uitgezonderd, want dat glijdt net op dat moment naar de
+   nieuwe keuze en beweegt alleen met transform. */
+.theme-flip *:not(.seg-pill), .theme-flip *::before, .theme-flip *::after { transition: none !important; }
 [hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; }
 body {

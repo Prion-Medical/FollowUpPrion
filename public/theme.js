@@ -19,7 +19,17 @@ window.FollowUpTheme = (() => {
   let choice = read();
   const apply = () => {
     const theme = choice === "system" ? (dark.matches ? "dark" : "light") : choice;
-    document.documentElement.dataset.theme = theme;
+    const root = document.documentElement;
+    // Wisselt de kleur terwijl de pagina er al staat, dan veranderen alle
+    // kleuren tegelijk. Elk element met een overgang op zijn kleur zou dan
+    // 120 ms lang meebewegen: honderden kleine animaties en zeven beelden lang
+    // de hele pagina opnieuw tekenen. Voor dat ene moment staan de overgangen
+    // dus uit (.theme-flip in styles.css) en verspringt alles in één keer.
+    if (root.dataset.theme && root.dataset.theme !== theme) {
+      root.classList.add("theme-flip");
+      requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("theme-flip")));
+    }
+    root.dataset.theme = theme;
     // De kleur van de balk van de browser of het toestel volgt het paneel.
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.content = theme === "dark" ? "#16181d" : "#ffffff";

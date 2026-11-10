@@ -734,9 +734,16 @@
     new Map([...root.querySelectorAll(sel)].map((el) => [key(el), el.getBoundingClientRect().top]));
   function settleRows(root, sel, key, before, bottom) {
     if (!root.animate || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    // Eerst alles meten, dan pas iets in beweging zetten. Door elkaar zou
+    // elke meting de browser dwingen de stijl van de rij ervoor opnieuw uit
+    // te rekenen: één keer per rij, bij elke toetsaanslag.
+    const seen = [];
     for (const el of root.querySelectorAll(sel)) {
       const top = el.getBoundingClientRect().top;
       if (top > bottom) break; // wat onder de rand valt, ziet niemand
+      seen.push([el, top]);
+    }
+    for (const [el, top] of seen) {
       const was = before.get(key(el));
       if (was === undefined) {
         el.animate([{ opacity: 0 }, { opacity: 1 }], LIST_MOVE);
