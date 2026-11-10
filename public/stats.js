@@ -16,7 +16,7 @@ window.FollowUpStats = (() => {
 
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
   const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS,
-          esc, pickBox, myProducts, productColor, emptyTargets } = window.FollowUpDomain;
+          esc, pickBox, myProducts, productColor, productKind, emptyTargets } = window.FollowUpDomain;
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Een doelcijfer aanpassen is schrijven. Zonder dat recht staat het getal er
   // nog wel — het hoort bij de cijfers — maar op slot. storage.js is op dit
@@ -43,6 +43,9 @@ window.FollowUpStats = (() => {
   const rooms = (a) => Number(a.rooms) || 1;   // een installatie zonder aantal telt als één kamer
   // Een stopzetting telt negatief, zodat "actief" echt actief blijft.
   const signedRooms = (a) => (a.type === "cancellation" ? -rooms(a) : rooms(a));
+  // Bestelde stuks. Zonder aantal telt een bestelling als één, maar een
+  // ingevulde nul is nul: een gratis proefzending is geen verkoop.
+  const units = (a) => (a.rooms == null || a.rooms === "" ? 1 : Math.max(0, Number(a.rooms) || 0));
   const sum = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
   const months = () => Array.from({ length: 12 }, (_, i) => new Date(2021, i, 1).toLocaleDateString(I18N.locale, { month: "short" }));
   const productLabel = (p) => p || t("stats.noProduct");
@@ -143,7 +146,12 @@ window.FollowUpStats = (() => {
     const year = view.year === "all" ? String(new Date().getFullYear()) : view.year;
     const goals = targetsFor(db, year);
     const byYear = events.filter((a) => a.date.startsWith(year));
-    const products = view.products.length ? view.products : myProducts();
+    // Het doelcijfer telt kamers, en dat zegt alleen iets over een product dat
+    // per abonnement gaat. Een product per ingreep krijgt hier voorlopig geen
+    // rij — liever geen doel dan één in de verkeerde eenheid.
+    const products = (view.products.length ? view.products : myProducts())
+      .filter((p) => productKind(p) === "subscription");
+    if (!products.length) return "";
     return card(`${t("stats.target")} ${year}`, products.map((p) => {
       // Netto voor dat jaar: wat erbij kwam min wat er weer stopte.
       const done = Math.max(0, sum(byYear.filter((a) => a.product === p), signedRooms));
@@ -204,6 +212,19 @@ window.FollowUpStats = (() => {
     return card(t("stats.perMonth"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [myProducts()[0]]), "wide");
   }
 
+  // Bestellingen per maand, voor de producten die per ingreep verbruikt worden.
+  // Geen stand zoals de abonnementen maar een optelsom per maand: wat er die
+  // maand besteld is. Een bestelling zonder aantal telt als één.
+  function ordersCard(orders) {
+    const buckets = monthBuckets();
+    for (const a of orders) {
+      const b = buckets.find((x) => x.key === (a.date || "").slice(0, 7));
+      if (b) b.values[a.product || ""] = (b.values[a.product || ""] || 0) + units(a);
+    }
+    const series = seriesIn(orders);
+    return card(t("stats.orders"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [myProducts().find((p) => productKind(p) === "procedure")]), "wide");
+  }
+
   function hospitalsCard(db) {
     const items = hospitals(db)
       .filter((h) => h.unit.roomsInstalled)
@@ -251,28 +272,34 @@ window.FollowUpStats = (() => {
   const scopesCard = (db) => brandCard(db, t("stats.scopes"), SCOPE_BRANDS, "scopeBrands");
   const processorsCard = (db) => brandCard(db, t("stats.processors"), PROCESSOR_BRANDS, "processorBrands");
 
-  function tableCard(db) {
+  // De kolommen volgen de soort product in de keuze: kamers en coloscopieën
+  // zeggen alleen iets bij een abonnement, bestellingen alleen bij een product
+  // per ingreep.
+  function tableCard(db, metSubs, orders) {
+    const besteld = (h) => sum(orders.filter((a) => a.hospital === h), units);
     const list = hospitals(db).slice().sort((a, b) =>
-      (b.unit.roomsInstalled || 0) - (a.unit.roomsInstalled || 0) || a.name.localeCompare(b.name));
+      (metSubs ? (b.unit.roomsInstalled || 0) - (a.unit.roomsInstalled || 0) : besteld(b) - besteld(a)) || a.name.localeCompare(b.name));
     if (!list.length) return card(t("stats.table"), `<p class="muted">${esc(t("stats.noData"))}</p>`, "wide");
     return card(`${t("stats.table")} (${list.length})`, `
       <div class="s-table-wrap"><table class="s-table">
         <thead><tr>
           <th>${esc(t("col.name"))}</th><th>${esc(t("col.country"))}</th><th>${esc(t("col.stage"))}</th>
-          <th>${esc(t("col.products"))}</th><th class="num">${esc(t("unit.rooms"))}</th>
+          <th>${esc(t("col.products"))}</th>${metSubs ? `<th class="num">${esc(t("unit.rooms"))}</th>
           <th class="num">${esc(t("unit.roomsDemo"))}</th><th class="num">${esc(t("unit.roomsInstalled"))}</th>
-          <th class="num">${esc(t("unit.colosPerYear"))}</th><th>${esc(t("unit.existingAI"))}</th>
+          <th class="num">${esc(t("unit.colosPerYear"))}</th><th>${esc(t("unit.existingAI"))}</th>` : ""}
+          ${orders.length ? `<th class="num">${esc(t("stats.ordersTile"))}</th>` : ""}
         </tr></thead>
         <tbody>${list.map((h) => `<tr>
           <td><i class="dot ${esc(h.status)}"></i> ${esc(h.name)}</td>
           <td>${esc(h.country ? t("country." + h.country + ".short") : "—")}</td>
           <td>${esc(t("stage." + h.stage))}</td>
-          <td>${esc(h.products.join(", ") || "—")}</td>
+          <td>${esc(h.products.join(", ") || "—")}</td>${metSubs ? `
           <td class="num">${esc(h.unit.rooms ?? "—")}</td>
           <td class="num">${esc(h.unit.roomsDemo ?? "—")}</td>
           <td class="num">${esc(h.unit.roomsInstalled ?? "—")}</td>
           <td class="num">${h.unit.colosPerYear != null ? fmt(h.unit.colosPerYear) : "—"}</td>
-          <td>${esc(h.unit.existingAI || "—")}</td>
+          <td>${esc(h.unit.existingAI || "—")}</td>` : ""}
+          ${orders.length ? `<td class="num">${besteld(h) ? fmt(besteld(h)) : "—"}</td>` : ""}
         </tr>`).join("")}</tbody>
       </table></div>`, "wide");
   }
@@ -286,8 +313,17 @@ window.FollowUpStats = (() => {
     view.products = view.products.filter((p) => myProducts().includes(p));
     const years = new Set([String(new Date().getFullYear()), ...Object.keys(DEFAULT_TARGETS)]);
     for (const h of db.hospitals) for (const a of h.activities) years.add(a.date.slice(0, 4));
-    const installs = rows(db, { types: ["installation"] });
-    const subsEvents = rows(db, { types: ["installation", "cancellation"], ignoreYear: true });
+    // Welke soorten product zitten er in de keuze? Daar hangt van af wat er te
+    // tonen valt: abonnementen, kamers en torens bij het ene, bestellingen bij
+    // het andere, en allebei als de keuze allebei bevat. Een contactmoment
+    // zonder product telt mee als abonnement, zoals het altijd deed.
+    const keuze = view.products.length ? view.products : myProducts();
+    const metSubs = keuze.some((p) => productKind(p) === "subscription");
+    const metOrders = keuze.some((p) => productKind(p) === "procedure");
+    const isSub = (a) => productKind(a.product) === "subscription";
+    const installs = rows(db, { types: ["installation"] }).filter(isSub);
+    const subsEvents = rows(db, { types: ["installation", "cancellation"], ignoreYear: true }).filter(isSub);
+    const orders = metOrders ? rows(db, { types: ["order"] }).filter((a) => !isSub(a)) : [];
     const acts = rows(db);
     const hs = hospitals(db);
     const live = hs.filter((h) => h.unit.roomsInstalled);
@@ -311,27 +347,28 @@ window.FollowUpStats = (() => {
               attrs: `data-stat-product="${esc(p)}"`, label: p, checked: view.products.includes(p),
             })),
           ], t("stats.all"), view.pickOpen)}</label>
-          <div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}">${esc(t(key))}</button>`).join("")}</div>
+          ${!metSubs ? "" : `<div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}">${esc(t(key))}</button>`).join("")}</div>`}
         </div>
       </div>
       <div class="s-tiles">
         ${tile(fmt(hs.length), t("stats.hospitals"))}
         ${tile(fmt(hs.filter((h) => h.stage === "customer").length), t("stats.customers"))}
-        ${tile(fmt(roomsLive), t("stats.roomsLive"), roomsTotal ? `${t("stats.coverage")}: ${fmt((roomsLive / roomsTotal) * 100)}%` : "")}
-        ${tile(fmt(roomsDemo), t("stats.roomsDemo"))}
+        ${!metSubs ? "" : tile(fmt(roomsLive), t("stats.roomsLive"), roomsTotal ? `${t("stats.coverage")}: ${fmt((roomsLive / roomsTotal) * 100)}%` : "")
+          + tile(fmt(roomsDemo), t("stats.roomsDemo"))}
+        ${!metOrders ? "" : tile(fmt(sum(orders, units)), t("stats.ordersTile"))}
         ${tile(fmt(acts.length), t("section.activities"))}
-        ${tile(colosCovered ? fmt(colosCovered) : "—", t("stats.colosCovered"), live.length ? `n = ${live.length}` : "")}
+        ${!metSubs ? "" : tile(colosCovered ? fmt(colosCovered) : "—", t("stats.colosCovered"), live.length ? `n = ${live.length}` : "")}
       </div>
       <div class="s-grid-cards">
-        ${view.chart === "subs" ? subscriptionsCard(subsEvents) : installationsCard(installs)}
+        ${!metSubs ? "" : (view.chart === "subs" ? subscriptionsCard(subsEvents) : installationsCard(installs))}
+        ${!metOrders ? "" : ordersCard(orders)}
         ${targetsCard(db, subsEvents)}
-        ${hospitalsCard(db)}
+        ${!metSubs ? "" : hospitalsCard(db)}
         ${pipelineCard(db)}
         ${countryCard(db)}
-        ${scopesCard(db)}
-        ${processorsCard(db)}
+        ${!metSubs ? "" : scopesCard(db) + processorsCard(db)}
         ${activityCard(db)}
-        ${tableCard(db)}
+        ${tableCard(db, metSubs, orders)}
       </div>`;
 
     el.querySelector("[data-stat=year]").onchange = (e) => { view.year = e.target.value; render(db, el, onTargetsChange); };

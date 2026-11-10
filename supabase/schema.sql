@@ -228,7 +228,7 @@ $$;
 -- bijgewerkt is.
 create or replace function followup.producten() returns text[]
 language sql immutable set search_path = public as $$
-  select array['EndoQ', 'Ainex'];
+  select array['EndoQ', 'Ainex', 'Thyroid RFA', 'Fibroid RFA'];
 $$;
 
 -- De vaste volgorde uit domain.js. Die houden we aan zodat laden-en-opslaan

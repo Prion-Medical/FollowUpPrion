@@ -46,7 +46,27 @@ window.FollowUpDomain = (() => {
   // alles wat per product bestaat (kleur, doelcijfer) wordt eruit afgeleid.
   // Komt er een derde bij, dan volstaat deze regel — plus followup.producten()
   // in supabase/schema.sql, want de databank kan dit bestand niet lezen.
-  const PRODUCTS = ["EndoQ", "Ainex"];
+  const PRODUCTS = ["EndoQ", "Ainex", "Thyroid RFA", "Fibroid RFA"];
+  // Niet elk product wordt op dezelfde manier verkocht. EndoQ en Ainex gaan
+  // per abonnement, per kamer: daar tel je kamers en actieve abonnementen. De
+  // RFA-producten worden per ingreep verbruikt — er is geen installatie en
+  // geen abonnement, er worden elektroden besteld. Wat hier niet in staat is
+  // een abonnement: zo gedraagt een product dat de app nog niet kent zich
+  // zoals alles zich tot nu toe gedroeg.
+  // De lijst hierboven blijft een lijst van namen, en dat is met opzet: die
+  // naam is wat er in de databank staat, bij elk contactmoment en in elk
+  // bereik. Wat een product ís, hangt er hier naast.
+  const PRODUCT_KINDS = { "Thyroid RFA": "procedure", "Fibroid RFA": "procedure" };
+  const productKind = (p) => PRODUCT_KINDS[p] || "subscription";
+  // Bij welk contactmoment hoort een aantal? Een contactmoment draagt één
+  // getal, en wat het telt hangt af van het product: kamers bij een product
+  // per abonnement (demo, installatie, bestelling, stopzetting), bestelde
+  // stuks bij een product per ingreep — en dan alleen bij een bestelling,
+  // want een demo of een installatie in kamers bestaat daar niet. Dat blijft
+  // een verkoopcijfer per ziekenhuis: wat er besteld is, nooit wie er
+  // behandeld is.
+  const wantsQuantity = (type, product) =>
+    (productKind(product) === "procedure" ? type === "order" : ROOM_TYPES.includes(type));
   // Welke producten deze gebruiker mag gebruiken. Een leeg bereik betekent
   // onbeperkt, dus dan zijn het ze allemaal. De databank schermt het document
   // al af; dit is er zodat de app geen keuze aanbiedt die toch geweigerd wordt.
@@ -182,6 +202,6 @@ window.FollowUpDomain = (() => {
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
-    esc, pickBox, syncPick, myProducts, productColor, emptyTargets,
+    esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, emptyTargets,
   };
 })();

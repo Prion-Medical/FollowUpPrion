@@ -39,7 +39,7 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('merge_products',  'only_in',        'bestaat die functie überhaupt'),
   ('merge_hospital',  'merge_products', 'dezelfde formule voor het ziekenhuis'),
   ('merge_doc',       'merge_entries',  'een nieuw ziekenhuis gaat door dezelfde regels'),
-  ('producten',       'EndoQ',          'de productenlijst aan de databankkant')
+  ('producten',       'Fibroid RFA',    'de productenlijst kent de RFA-producten')
 )
 select v.functie,
        v.waarvoor,

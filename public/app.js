@@ -9,8 +9,9 @@
   // Vaste waarden en esc() staan in domain.js: stats.js heeft ze ook nodig, en
   // zo moet een nieuwe fase of een nieuw merk maar op één plaats bij.
   const {
-    DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS, ROOM_TYPES,
+    DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
+    productKind, wantsQuantity,
     esc, pickBox, syncPick, myProducts,
   } = window.FollowUpDomain;
   // Welk product staat standaard in een nieuw contactmoment of een planning:
@@ -315,7 +316,7 @@
     a.product = str(a.product);
     a.contactId = str(a.contactId);
     a.note = str(a.note);
-    a.rooms = ROOM_TYPES.includes(a.type) ? numOrNull(a.rooms) : null;
+    a.rooms = wantsQuantity(a.type, a.product) ? numOrNull(a.rooms) : null;
     stampFields(a);
     return a;
   }
@@ -758,7 +759,7 @@
         ${acts.length ? `<ul class="timeline">${acts.map((a) => {
           const c = h.contacts.find((x) => x.id === a.contactId);
           const by = personName(a.createdBy);
-          const sub = [a.product, c && c.name, a.rooms ? `${a.rooms} ${t("act.rooms")}` : "",
+          const sub = [a.product, c && c.name, a.rooms ? `${a.rooms} ${t(productKind(a.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
             by && t("by", { name: by })].filter(Boolean).join(" · ");
           return `<li>
             <div class="t-date">${esc(fmtDate(a.date))}</div>
@@ -1193,7 +1194,7 @@
         <label class="field">${esc(t("dlg.a.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
-        <label class="field full" id="roomsField">${esc(t("dlg.a.rooms"))}<input type="number" min="0" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
+        <label class="field full" id="roomsField"><span id="roomsLabel">${esc(t("dlg.a.rooms"))}</span><input type="number" min="0" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
         <label class="field full">${esc(t("dlg.a.note"))}<textarea name="note" rows="4" placeholder="${esc(t("dlg.a.note.ph"))}">${esc(v.note)}</textarea></label>
       </div>
       ${stampLine(a)}
@@ -1212,9 +1213,9 @@
         // weet dat dit afvinken is en geen verwijderen. Niets verwijst naar een
         // id van een gepland moment, dus hergebruiken kan veilig.
         const rec = a || { id: plan ? plan.id : uid() };
-        const wantsRooms = ROOM_TYPES.includes(data.type);
+        const wantsRooms = wantsQuantity(data.type, data.product);
         // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
-        const before = a ? { type: rec.type, rooms: rec.rooms } : null;
+        const before = a ? { type: rec.type, rooms: rec.rooms, product: rec.product } : null;
         Object.assign(rec, {
           date: data.date, type: data.type, product: data.product, contactId: data.contactId,
           rooms: wantsRooms ? num(data.rooms) : null, note: data.note.trim(),
@@ -1237,8 +1238,13 @@
       scheduleSave();
       renderAll();
     });
+    // Het aantal hangt af van soort én product: kamers bij een abonnement,
+    // bestelde stuks bij een product per ingreep. Het veld is hetzelfde, het
+    // opschrift volgt het product.
     const sync = () => {
-      $("#roomsField", form).hidden = !ROOM_TYPES.includes(form.elements.type.value);
+      const product = form.elements.product.value;
+      $("#roomsField", form).hidden = !wantsQuantity(form.elements.type.value, product);
+      $("#roomsLabel", form).textContent = t(productKind(product) === "procedure" ? "dlg.a.quantity" : "dlg.a.rooms");
     };
     form.onchange = sync;
     sync();
@@ -1325,8 +1331,11 @@
   // Een demo overschrijft wél: dat is de huidige toestand, geen optelsom — we
   // nemen het aantal van de laatste demo waarvoor een aantal is ingevuld.
   function syncRooms(h, before, after) {
+    // Alleen voor een product per abonnement: het aantal bij een RFA-bestelling
+    // zijn stuks, geen kamers, en hoort dus niet bij de afdeling opgeteld.
+    const perKamer = (a) => !!a && productKind(a.product) === "subscription";
     const installed = (a) => {
-      if (!a || !a.rooms) return 0;
+      if (!perKamer(a) || !a.rooms) return 0;
       if (a.type === "installation") return a.rooms;
       if (a.type === "cancellation") return -a.rooms;
       return 0;
@@ -1335,8 +1344,8 @@
     if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
       h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);
     }
-    if ((before && before.type === "demo") || (after && after.type === "demo")) {
-      const demos = h.activities.filter((a) => a.type === "demo" && a.rooms);
+    if ((perKamer(before) && before.type === "demo") || (perKamer(after) && after.type === "demo")) {
+      const demos = h.activities.filter((a) => a.type === "demo" && a.rooms && perKamer(a));
       if (demos.length) h.unit.roomsDemo = demos.sort((a, b) => b.date.localeCompare(a.date))[0].rooms;
     }
   }
