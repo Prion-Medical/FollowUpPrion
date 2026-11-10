@@ -223,6 +223,13 @@ p.muted { margin: 0 0 8px; }
 .btn.lang { color: var(--muted); }
 .btn.danger { color: var(--red-ink); }
 .btn.danger:hover { background: var(--red-soft); border-color: var(--red); }
+/* Vol rood: alleen op de knop die in een bevestiging echt iets weggooit. */
+.btn.danger.solid { background: var(--red-ink); border-color: var(--red-ink); color: var(--panel); }
+.btn.danger.solid:hover { background: color-mix(in srgb, var(--red-ink) 88%, #000); border-color: transparent; }
+/* Bezig: een rondje dat draait voor het woord. Wie beweging uit heeft staan,
+   ziet het rondje stilstaan en leest het woord. */
+.btn.busy::before { content: ""; width: 13px; height: 13px; flex: none; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; }
+.btn.busy:disabled { opacity: .85; }
 .btn.small { min-height: var(--ctl-sm); padding: 0 9px; font-size: var(--t-sm); }
 .btn.icon { width: var(--ctl); padding: 0; }
 .btn.icon svg { fill: currentColor; }
@@ -292,7 +299,13 @@ p.muted { margin: 0 0 8px; }
 .menu__theme .s-seg button { min-height: 24px; padding: 0 3px; font-size: var(--t-sm); }
 .menu__theme .s-seg button > span { min-height: 20px; padding: 0 7px; }
 
-.banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--accent-soft); color: var(--ink); border-bottom: 1px solid var(--accent-line); padding: 8px 16px; font-size: var(--t-base); }
+/* De balk onder de topbalk. Drie tonen, door showBanner() gekozen: er ging
+   iets mis (rood), opgelet (oranje) of ter info (blauw). */
+.banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 16px; font-size: var(--t-base); font-weight: 500;
+  background: var(--red-soft); color: var(--red-ink); border-bottom: 1px solid color-mix(in srgb, var(--red) 35%, transparent); }
+.banner[data-tone="warn"] { background: var(--orange-soft); color: var(--orange-ink); border-bottom-color: color-mix(in srgb, var(--orange) 40%, transparent); }
+.banner[data-tone="info"] { background: var(--accent-soft); color: var(--ink); border-bottom-color: var(--accent-line); font-weight: 400; }
+.banner .btn { color: var(--ink); }
 
 /* ---------- indeling ---------- */
 .layout { flex: 1; display: flex; min-height: 0; position: relative; }
@@ -344,7 +357,7 @@ p.muted { margin: 0 0 8px; }
 .list .meta { font-size: var(--t-sm); color: var(--muted); margin-top: 1px; overflow-wrap: anywhere; }
 .list .meta.lead { display: flex; align-items: center; gap: 5px; }
 .list .meta.lead .ic { width: 11px; height: 11px; color: var(--line-strong); }
-.list .empty { color: var(--muted); cursor: default; justify-content: center; border: 0; padding: 24px 16px; }
+.list .empty { color: var(--muted); cursor: default; flex-direction: column; align-items: center; gap: 10px; border: 0; padding: 24px 16px; }
 .list .empty:hover { background: none; }
 .badge {
   display: inline-block; font-size: var(--t-xs); font-weight: 500; line-height: 1.45;
@@ -407,7 +420,7 @@ p.muted { margin: 0 0 8px; }
 }
 .place-hint .link { color: inherit; text-decoration-color: currentColor; }
 .pin {
-  width: 18px; height: 18px; border-radius: 50%; border: 2px solid #fff;
+  position: relative; width: 18px; height: 18px; border-radius: 50%; border: 2px solid #fff;
   box-shadow: 0 0 0 1px rgba(17, 24, 39, 0.25), 0 1px 3px rgba(17, 24, 39, 0.3);
   transition: transform var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
@@ -416,6 +429,11 @@ p.muted { margin: 0 0 8px; }
 .pin.orange { background: var(--orange); }
 .pin.red { background: var(--red); }
 .pin.selected { transform: scale(1.25); box-shadow: 0 0 0 3px var(--accent), 0 2px 6px rgba(17, 24, 39, 0.35); }
+/* Net gekozen: één ring die uitdijt en vervaagt, even na het aanvliegen. */
+.pin.pulse::after {
+  content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--accent); opacity: 0; pointer-events: none;
+  animation: pin-pulse 700ms var(--ease) 450ms;
+}
 .pin.dragging { transform: scale(1.4); box-shadow: 0 0 0 3px var(--accent), 0 6px 14px rgba(17, 24, 39, 0.4); }
 .leaflet-container { font-family: var(--font); font-size: var(--t-sm); background: var(--bg); }
 .leaflet-tile-pane { filter: var(--tile-filter); }
@@ -465,36 +483,43 @@ p.muted { margin: 0 0 8px; }
 .pipe-name .muted { display: none; }
 body[data-rights~="no-write"] .pipe-name .muted { display: inline; }
 .pipe .status-pick { margin: 0; flex: 0 0 auto; }
-.pipe .status-pick button { padding: 0 9px; white-space: nowrap; }
 .pipe ~ .pipe .lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .pipe ~ .pipe .field { gap: 0; }
-/* Drie knoppen als één schakelaar: een grijs spoor met de gekozene erbovenop
-   in de kleur van zijn status. */
-.status-pick { display: flex; gap: 2px; margin-top: 12px; padding: 2px; background: var(--hover); border-radius: var(--radius); }
+/* Drie knoppen als één schakelaar: een grijs spoor, en om de gekozene een
+   plaatje in de kleur van zijn status. Zoals bij .s-seg zit het plaatje om
+   het woord (de span) en glijdt het naar de volgende keuze; onderweg
+   verkleurt het van de ene status naar de andere. */
+.status-pick { display: flex; gap: 0; margin-top: 12px; padding: 2px; background: var(--hover); border-radius: var(--radius); position: relative; isolation: isolate; overflow: hidden; }
 .status-pick button {
-  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 28px;
-  border: 1px solid transparent; background: none; border-radius: 4px; padding: 0 4px;
-  font-size: var(--t-sm); font-weight: 500; color: var(--muted);
-  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+  position: relative; z-index: 1; flex: 1; display: flex; align-items: center; justify-content: center; min-height: 28px;
+  border: 0; background: none; padding: 0 3px; font-size: var(--t-sm); font-weight: 500; color: var(--muted);
+  transition: color var(--fast) var(--ease);
 }
+.status-pick button > span { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 0 8px; border-radius: 4px; white-space: nowrap; }
 .status-pick button:hover { color: var(--ink); }
-.status-pick button.active { background: var(--panel); color: var(--ink); box-shadow: 0 1px 2px rgba(17, 24, 39, 0.12); }
-.status-pick button.active.green { background: var(--green-soft); color: var(--green-ink); border-color: color-mix(in srgb, var(--green) 35%, transparent); }
-.status-pick button.active.orange { background: var(--orange-soft); color: var(--orange-ink); border-color: color-mix(in srgb, var(--orange) 40%, transparent); }
-.status-pick button.active.red { background: var(--red-soft); color: var(--red-ink); border-color: color-mix(in srgb, var(--red) 35%, transparent); }
+.status-pick button:focus-visible { outline-offset: -2px; }
+.status-pick button.active.green { color: var(--green-ink); }
+.status-pick button.active.orange { color: var(--orange-ink); }
+.status-pick button.active.red { color: var(--red-ink); }
+.status-pick button.active.green > span, .seg-pill.green { background: var(--green-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 35%, transparent); }
+.status-pick button.active.orange > span, .seg-pill.orange { background: var(--orange-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--orange) 40%, transparent); }
+.status-pick button.active.red > span, .seg-pill.red { background: var(--red-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 35%, transparent); }
+.status-pick.seg-live button.active > span { background: none; box-shadow: none; }
 .show-on-map { display: none; }
 
 .section { padding: 16px 20px; border-bottom: 1px solid var(--line); }
+/* Het kopje van een sectie: een maat groter dan de tekst eronder, vet en in
+   de volle tekstkleur, zodat je ziet waar een nieuw stuk begint. */
 .section h3, .s-card h3 {
-  margin: 0 0 10px; min-height: var(--ctl-sm); font-size: var(--t-xs); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  margin: 0 0 10px; min-height: var(--ctl-sm); font-size: var(--t-md); font-weight: 600; letter-spacing: -0.005em; color: var(--ink);
   display: flex; align-items: center; gap: 8px;
 }
-.section h3 .btn { margin-left: auto; text-transform: none; letter-spacing: 0; }
+.section h3 .btn { margin-left: auto; letter-spacing: 0; }
 /* De knop waarmee je iets toevoegt aan een sectie: wit zoals de andere, maar
    met een blauw woord. Geen bleke vulling: die betekent hier "gekozen". */
 .section h3 .btn { color: var(--accent-ink); }
 .section h3 .btn:hover { background: var(--accent-soft); border-color: var(--accent-line); }
-.section h3 .badge { margin-left: 0; text-transform: none; letter-spacing: 0; }
+.section h3 .badge { margin-left: 0; letter-spacing: 0; }
 .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px 16px; }
 .stat b { display: block; font-size: var(--t-md); font-weight: 600; font-variant-numeric: tabular-nums; }
 .stat span { font-size: var(--t-sm); color: var(--muted); }
@@ -579,6 +604,9 @@ dialog {
 }
 dialog[open] { animation: dialog-in var(--slow) var(--ease); }
 dialog::backdrop { background: var(--scrim); animation: fade-in var(--slow) ease-out; }
+/* Een vraag of een melding (ask() en tell() in ui.js). */
+dialog.ask { width: min(420px, 94vw); }
+.ask-msg { margin: 0; font-size: var(--t-md); line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
 dialog form { padding: 20px 24px; }
 dialog h2 { margin: 0 0 16px; font-size: var(--t-md); overflow-wrap: anywhere; }
 dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
@@ -715,7 +743,7 @@ button.cal-day:focus-visible { outline-offset: -2px; }
 .s-seg button:focus-visible { outline-offset: -2px; }
 /* Het plaatje dat van de ene keuze naar de andere glijdt. In rust is het er
    niet: dan draagt de span van de actieve knop zelf zijn achtergrond,
-   hierboven. Tijdens de beweging zet domain.js (segSlide) er twee plaatjes
+   hierboven. Tijdens de beweging zet ui.js (segSlide) er twee plaatjes
    onder die naar dezelfde plek gaan, het ene vlugger dan het andere. Samen
    zijn ze één vlak dat uitrekt terwijl het onderweg is en weer samenvalt bij
    aankomst. Alleen transform beweegt, in een transition: wie halverwege
@@ -724,9 +752,14 @@ button.cal-day:focus-visible { outline-offset: -2px; }
 .seg-pill {
   position: absolute; z-index: 0; top: 0; left: 0; border-radius: 4px; pointer-events: none;
   background: var(--seg-on);
-  transition: transform 440ms var(--spring);
+  /* Het randje (box-shadow) staat hier bewust niet bij: dat zou het plaatje
+     elk beeld opnieuw laten tekenen, en dat het randje meteen omslaat terwijl
+     de vulling overvloeit, ziet niemand. */
+  transition: transform 440ms var(--spring), background-color 300ms var(--ease);
 }
-.seg-pill.lag { transition-duration: 600ms; }
+/* Het trage plaatje draagt geen randje: twee randen door elkaar tekenen
+   onderweg een naad. */
+.seg-pill.lag { transition-duration: 600ms, 300ms; box-shadow: none !important; }
 
 .s-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; margin-bottom: 16px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; }
 .s-tile { background: var(--panel); padding: 14px 16px; display: flex; flex-direction: column; }
@@ -759,6 +792,19 @@ button.cal-day:focus-visible { outline-offset: -2px; }
 .s-stack div { min-height: 2px; }
 .s-stack div:last-child { border-radius: 3px 3px 0 0; }
 .s-xlabel { position: absolute; bottom: -22px; font-size: var(--t-xs); color: var(--muted); white-space: nowrap; }
+
+/* Bij het binnenkomen van de pagina groeien de balken vanaf hun as, de ene
+   kort na de andere. .enter staat er maar even (setView in app.js). */
+.stats-view.enter .s-stack { transform-origin: bottom; animation: grow-y 420ms var(--ease) backwards; }
+.stats-view.enter .s-hbar, .stats-view.enter .s-progress div { transform-origin: left; animation: grow-x 420ms var(--ease) backwards; }
+.stats-view.enter .s-col:nth-child(n+2) .s-stack { animation-delay: 50ms; }
+.stats-view.enter .s-col:nth-child(n+4) .s-stack { animation-delay: 100ms; }
+.stats-view.enter .s-col:nth-child(n+6) .s-stack { animation-delay: 150ms; }
+.stats-view.enter .s-col:nth-child(n+8) .s-stack { animation-delay: 200ms; }
+.stats-view.enter .s-col:nth-child(n+10) .s-stack { animation-delay: 250ms; }
+.stats-view.enter .s-hrow:nth-child(n+3) .s-hbar { animation-delay: 60ms; }
+.stats-view.enter .s-hrow:nth-child(n+5) .s-hbar { animation-delay: 120ms; }
+.stats-view.enter .s-hrow:nth-child(n+7) .s-hbar { animation-delay: 180ms; }
 
 .s-hbars { display: flex; flex-direction: column; gap: 2px; }
 .s-hrow { display: grid; grid-template-columns: minmax(90px, 38%) 1fr 36px; align-items: center; gap: 10px; padding: 5px 6px; margin: 0 -6px; border-radius: var(--radius); transition: background var(--fast) var(--ease); }
@@ -878,7 +924,7 @@ button.cal-day:focus-visible { outline-offset: -2px; }
 /* ---------- keuzelijsten ---------- */
 /* Een gewone <select> klapt op een Mac open bovenóp zijn eigen veld: het
    systeem legt de gekozen regel over de knop, en weg is de rand die zegt welk
-   veld je aan het invullen bent. Daarom tekent domain.js (selShow) de lijst
+   veld je aan het invullen bent. Daarom tekent ui.js (selShow) de lijst
    zelf, onder het veld of erboven als daar meer plaats is. De <select> blijft
    bestaan en houdt de waarde: formulieren en luisteraars merken er niets van.
    Dit is de opmaak van die lijst; op een aanraakscherm komt ze er niet en
@@ -1031,6 +1077,7 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
   .show-on-map { display: inline-grid; }
   .section { padding: 16px; }
   .status-pick button { min-height: 40px; }
+  .status-pick button > span { min-height: 32px; padding: 0 10px; }
   .icon-btn { width: 44px; height: 44px; }
   .ic { width: 18px; height: 18px; }
   .contact .c-actions { top: 0; right: -10px; }
@@ -1047,6 +1094,7 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
     margin: auto 0 0; border-radius: 14px 14px 0 0; border-width: 1px 0 0;
   }
   dialog[open] { animation: sheet-up .25s var(--ease); }
+  dialog.ask { width: 100%; }
   dialog form { padding: 20px 16px 0; }
   dialog .actions {
     position: sticky; bottom: 0; background: var(--panel); margin: 18px -16px 0;
@@ -1068,6 +1116,18 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
   .tabbar svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
   .tabbar svg circle { fill: currentColor; stroke: none; }
   .tabbar button.active { color: var(--accent-ink); }
+  /* Een streepje boven het gekozen tabblad, dat meeschuift. Vijf knoppen,
+     dus een vijfde breed; wie niets mag toevoegen heeft er vier. */
+  .tabbar::before {
+    content: ""; position: absolute; top: -1px; left: 0; width: 20%; height: 2px; pointer-events: none;
+    background: linear-gradient(var(--accent), var(--accent)) center / 28px 2px no-repeat;
+    transition: transform 440ms var(--spring), opacity var(--fast) var(--ease);
+  }
+  body[data-rights~="no-write"] .tabbar::before { width: 25%; }
+  .tabbar:has(button:nth-child(2).active)::before { transform: translateX(100%); }
+  .tabbar:has(button:nth-child(3).active)::before { transform: translateX(200%); }
+  .tabbar:has(button:nth-child(4).active)::before { transform: translateX(300%); }
+  .tabbar:not(:has(button.active))::before { opacity: 0; }
   .tabbar button:focus-visible { outline-offset: -4px; }
 
   .agenda-view, .stats-view { padding: 16px 12px 28px; }
@@ -1092,6 +1152,9 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
   .s-seg button { flex: 1; padding: 0 4px; min-height: 36px; }
   .s-seg button > span { min-height: 30px; padding: 0 14px; }
   .s-tiles { grid-template-columns: 1fr 1fr; }
+  /* Een oneven aantal tegels liet rechtsonder een grijs gat: de laatste
+     neemt dan de hele rij. */
+  .s-tiles > .s-tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .s-card { padding: 16px 14px; }
   .s-table-wrap { margin: 0 -14px -16px; }
   .s-table th:first-child, .s-table td:first-child { padding-left: 14px; }
@@ -1103,6 +1166,10 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
 
 /* ---------- beweging ---------- */
 @keyframes fade-in { from { opacity: 0; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pin-pulse { from { opacity: .8; transform: scale(1); } to { opacity: 0; transform: scale(2.6); } }
+@keyframes grow-y { from { transform: scaleY(0); } }
+@keyframes grow-x { from { transform: scaleX(0); } }
 @keyframes shimmer { to { transform: translateX(170%); } }
 @keyframes pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
 @keyframes slide-in { from { opacity: 0; transform: translateX(16px); } }
@@ -1169,7 +1236,7 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
 
   /* Kleur draagt hier betekenis — de stip, het merkje, de soort contactmoment.
      Zonder dit laat de browser die vlakjes bij het afdrukken gewoon weg. */
-  .dot, .badge, .tag, .type-pill, input[type="checkbox"], .status-pick button.active,
+  .dot, .badge, .tag, .type-pill, input[type="checkbox"],
   .cal-dots i, .cal-day, .cal-grid, .cal-wd, .s-tiles, .s-stack div, .s-hbar div, .s-progress, .s-progress div, .s-legend i, .s-target-head i, .toggles label {
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
@@ -1183,10 +1250,8 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
 
   /* Van de drie statusknoppen blijft alleen de gekozene over, als tekst. */
   .status-pick { display: block; background: none; padding: 0; }
-  .status-pick button.active {
-    border: 0 !important; background: none !important; padding: 0 !important; box-shadow: none;
-    width: auto; min-height: 0; color: var(--ink); font-weight: 600;
-  }
+  .status-pick button.active { padding: 0 !important; width: auto; min-height: 0; color: var(--ink); font-weight: 600; }
+  .status-pick button.active > span { background: none !important; box-shadow: none !important; padding: 0; min-height: 0; }
 
   /* Niets halverwege doorsnijden. */
   .section, .contact, .timeline li, .stat, .ag-row, .s-card { break-inside: avoid; }

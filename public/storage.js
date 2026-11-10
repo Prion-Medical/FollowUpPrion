@@ -108,6 +108,12 @@ window.FollowUpStore = (() => {
         err.textContent = "";
         const btn = form.querySelector("button");
         btn.disabled = true;
+        // Zeg dat er iets gebeurt: op een trage verbinding leek een uitgegrijsde
+        // knop op een klik die niet was aangekomen. Het draaiende rondje tekent
+        // styles.css op .busy.
+        const label = btn.textContent;
+        btn.textContent = t("login.busy");
+        btn.classList.add("busy");
         let error = null;
         try {
           ({ error } = await client.auth.signInWithPassword({
@@ -120,6 +126,8 @@ window.FollowUpStore = (() => {
           error = e;
         }
         btn.disabled = false;
+        btn.classList.remove("busy");
+        btn.textContent = label;
         if (error) {
           err.textContent = t("login.failed") + (error.message === "Invalid login credentials" ? t("login.badCredentials") : error.message);
           return;

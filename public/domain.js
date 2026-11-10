@@ -148,25 +148,6 @@ window.FollowUpDomain = (() => {
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  // De pictogrammen, op één plaats en als SVG. Vroeger stonden hier tekens uit
-  // het lettertype (✎ ✓ ★ ☎): die zien er op elk toestel anders uit, lijnen
-  // nergens mee uit en kleuren niet mee in de donkere weergave. Dit is onze
-  // eigen opmaak en geen invoer van een gebruiker, dus hier hoeft geen esc().
-  const ICONS = {
-    close: '<path d="M6 6l12 12M18 6 6 18"/>',
-    check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
-    edit: '<path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="m13 7 4 4"/>',
-    star: '<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 16.9l-5.2 2.8 1-5.9-4.3-4.1 5.9-.8L12 3.5Z"/>',
-    phone: '<path d="M5 4h4l1.5 4.5-2 1.5a12 12 0 0 0 5.5 5.5l1.5-2L20 15v4a1 1 0 0 1-1 1A15 15 0 0 1 4 5a1 1 0 0 1 1-1Z"/>',
-    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/>',
-    note: '<path d="M5 4h14v11l-5 5H5V4Z"/><path d="M14 20v-5h5M8.5 9h7M8.5 12.5h4"/>',
-    arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
-    prev: '<path d="m14.5 6-6 6 6 6"/>',
-    next: '<path d="m9.5 6 6 6-6 6"/>',
-  };
-  const icon = (name, cls) =>
-    `<svg class="ic${cls ? " " + cls : ""}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;
-
   // De uitklapper met vinkjes. Staat hier omdat vijf schermen hem gebruiken:
   // de drie filters in de zijbalk, de producten van een contactpersoon, het
   // product van een contactmoment en van een gepland moment, het bereik van
@@ -224,9 +205,17 @@ window.FollowUpDomain = (() => {
   // die in een dialoog en die er bij een volgende render bijkomen. Een klik ín
   // de uitklapper telt niet mee — anders sloeg het vakje dat je net aanvinkte
   // de uitklapper meteen weer dicht.
+  // Dichtklappen gaat zacht, via leave() in ui.js; dat bestand wordt na dit
+  // geladen, maar hier komen we pas bij een klik. Is het er niet (buiten een
+  // browser), dan klapt de lijst gewoon dicht.
+  const sluitPick = (d) => {
+    const ui = window.FollowUpUI, list = d.querySelector(".pick-list");
+    if (ui && list) ui.leave(list, () => { d.open = false; }, { ms: 90 });
+    else d.open = false;
+  };
   const sluitPicks = (behalve) => {
     for (const d of document.querySelectorAll("details.pick[open]")) {
-      if (d !== behalve && !d.contains(behalve)) d.open = false;
+      if (d !== behalve && !d.contains(behalve)) sluitPick(d);
     }
   };
   // De twee luisteraars hieronder zijn het enige in dit bestand dat de pagina
@@ -240,7 +229,13 @@ window.FollowUpDomain = (() => {
     // statistiekpagina tekent zichzelf opnieuw zodra je een vinkje zet; liep
     // dit daarna, dan was het aangeklikte vakje al uit het document verdwenen
     // en sloot de verse uitklapper zich alsnog.
-    document.addEventListener("click", (e) => sluitPicks(e.target), true);
+    document.addEventListener("click", (e) => {
+      sluitPicks(e.target);
+      // Een klik op de eigen knop van een open uitklapper: de browser zou hem
+      // in één klap sluiten. Dat doen we zelf, even zacht als de andere.
+      const knop = e.target.closest && e.target.closest("details.pick[open] > summary");
+      if (knop) { e.preventDefault(); sluitPick(knop.parentElement); }
+    }, true);
     // En hier houdt het component zijn eigen samenvatting bij. Eén luisteraar
     // voor alle uitklappers samen, ook die in een dialoog en die er bij een
     // volgende render bijkomen. Een scherm dat de vinkjes zelf verzet, roept
@@ -260,234 +255,9 @@ window.FollowUpDomain = (() => {
     });
   }
 
-  // ---------- de schakelaar die glijdt ----------
-  // Een .s-seg (Gepland | Logboek, Abonnementen | Installaties, licht | donker)
-  // toont de gekozen knop met een wit plaatje. Dat plaatje glijdt hier van de
-  // oude naar de nieuwe keuze. Twee dingen maken het lastiger dan het lijkt:
-  //
-  // - De schermen bouwen hun innerHTML opnieuw op bij elke klik, dus de knop
-  //   waar het plaatje vandaan komt bestaat daarna niet meer. Daarom meten we
-  //   in de capture-fase, vóór de pagina reageert, waar het plaatje nu staat,
-  //   en zetten we het in het volgende beeld op die plek terug in de verse
-  //   schakelaar. Vandaar ook de sleutel: de schakelaar is een andere node.
-  // - Wie halverwege terugklikt, moet het plaatje zien omkeren. De gemeten
-  //   plek is dan die van het plaatje onderweg, en een transition vertrekt
-  //   altijd van waar iets op dat moment is.
-  //
-  // De beweging zelf is een CSS-transition op transform (zie .seg-pill in
-  // styles.css); JavaScript zet alleen het begin en het einde klaar, één keer
-  // per klik. Wie beweging uit heeft staan, krijgt gewoon de nieuwe toestand.
-  const segKey = (seg) => {
-    // Vanaf de ouder: draagt de schakelaar zelf een id, dan zou hij zichzelf
-    // als gastheer vinden en er niet in voorkomen.
-    const host = seg.parentElement && seg.parentElement.closest("[id]");
-    const all = [...(host || document).querySelectorAll(".s-seg")];
-    return (host ? host.id : "") + "#" + all.indexOf(seg);
-  };
-  const segFind = (key) => {
-    const [id, i] = key.split("#");
-    const host = id ? document.getElementById(id) : document;
-    return host ? host.querySelectorAll(".s-seg")[+i] || null : null;
-  };
-  // Plaats en maat ten opzichte van de schakelaar zelf.
-  const segBox = (el, seg) => {
-    const a = el.getBoundingClientRect(), b = seg.getBoundingClientRect();
-    return { x: a.left - b.left, y: a.top - b.top, w: a.width, h: a.height };
-  };
-  // Het plaatje zit om het woord, niet om de hele knop: de span erin. De knop
-  // eromheen is het klikvlak en laat ruimte om in door te veren.
-  const segMark = (btn) => btn.querySelector("span") || btn;
-  const segSlide = (e) => {
-    const btn = e.target.closest && e.target.closest(".s-seg button");
-    if (!btn || btn.classList.contains("active")) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const seg = btn.parentElement;
-    // Waar staat het plaatje nu? Onderweg: de twee plaatjes zelf. In rust: de
-    // knop die aan stond. Staat er niets aan, dan valt er niets te glijden.
-    const pills = [...seg.querySelectorAll(".seg-pill")];
-    const was = seg.querySelector("button.active");
-    if (!pills.length && !was) return;
-    const from = pills.length ? pills.map((p) => segBox(p, seg)) : [segBox(segMark(was), seg), segBox(segMark(was), seg)];
-    const key = segKey(seg);
-    requestAnimationFrame(() => {
-      const now = segFind(key);
-      const on = now && now.querySelector("button.active");
-      if (!on) return;
-      const to = segBox(segMark(on), now);
-      for (const p of now.querySelectorAll(".seg-pill")) p.remove();
-      const made = from.map((f, i) => {
-        const p = document.createElement("i");
-        p.className = "seg-pill" + (i ? " lag" : "");
-        p.setAttribute("aria-hidden", "true");
-        // De breedte is meteen die van de nieuwe knop; alleen de plaats beweegt.
-        p.style.width = to.w + "px";
-        p.style.height = to.h + "px";
-        p.style.top = to.y + "px";
-        p.style.transition = "none";
-        p.style.transform = `translateX(${f.x}px)`;
-        now.prepend(p);
-        return p;
-      });
-      now.classList.add("seg-live");
-      // Eén keer de opmaak laten uitrekenen, zodat de browser de beginplek
-      // kent; daarna pas de transition aan en het doel erin.
-      void now.offsetWidth;
-      for (const p of made) {
-        p.style.transition = "";
-        p.style.transform = `translateX(${to.x}px)`;
-      }
-      // Het trage plaatje komt als laatste aan. Dan ruimen we op en draagt de
-      // knop zelf weer zijn achtergrond: zo klopt de plek ook nog nadat het
-      // venster van grootte verandert.
-      made[1].addEventListener("transitionend", () => {
-        if (!made[1].isConnected) return;
-        for (const p of made) p.remove();
-        now.classList.remove("seg-live");
-      });
-    });
-  };
-  if (typeof document !== "undefined") document.addEventListener("click", segSlide, true);
-
-  // ---------- keuzelijsten ----------
-  // De lijst van een <select>, zelf getekend. De reden staat bij .sel-list in
-  // styles.css: de lijst van het systeem valt over het veld heen, en hoe dat
-  // eruitziet verschilt per browser. Dit werkt in alle drie hetzelfde.
-  //
-  // De <select> zelf blijft wat hij is. Wij houden alleen zijn eigen lijst
-  // tegen (preventDefault op mousedown) en tonen de onze; bij een keuze zetten
-  // we zijn waarde en sturen we een gewone change. Wie naar change luistert of
-  // het formulier uitleest, ziet dus geen verschil, en een select die een
-  // scherm er later bijzet doet vanzelf mee: er wordt niets per stuk omgebouwd.
-  //
-  // Alleen met een muis. Op een aanraakscherm is het keuzewiel van het toestel
-  // beter dan wat wij kunnen tekenen, en dat valt ook niet over het veld.
-  let sel = null; // { el, list, i } zolang er een lijst openstaat
-  const selFine = () => window.matchMedia("(hover: hover) and (pointer: fine)").matches;
-  const selOk = (el) => el && el.tagName === "SELECT" && !el.multiple && !el.disabled && selFine();
-  const selClose = () => {
-    if (!sel) return;
-    sel.list.remove();
-    sel.el.classList.remove("sel-open");
-    sel = null;
-  };
-  // De regel waar je op staat (muis of pijltjes), en zorgen dat ze in beeld is.
-  const selMark = (i, scroll) => {
-    if (!sel || i < 0 || i >= sel.el.options.length) return;
-    sel.i = i;
-    [...sel.list.children].forEach((o, k) => o.classList.toggle("on", k === i));
-    if (scroll) sel.list.children[i].scrollIntoView({ block: "nearest" });
-  };
-  // Eén stap verder in de gegeven richting, over uitgeschakelde regels heen.
-  const selStep = (from, by) => {
-    const opts = sel.el.options;
-    for (let i = from + by; i >= 0 && i < opts.length; i += by) if (!opts[i].disabled) return i;
-    return from;
-  };
-  const selPick = (i) => {
-    const el = sel.el, o = el.options[i];
-    if (!o || o.disabled) return;
-    selClose();
-    if (el.selectedIndex !== i) {
-      el.selectedIndex = i;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-    // Het scherm kan zich net opnieuw getekend hebben; dan is dit veld weg.
-    if (el.isConnected) el.focus();
-  };
-  const selShow = (el) => {
-    selClose();
-    const list = document.createElement("div");
-    list.className = "sel-list";
-    list.setAttribute("role", "listbox");
-    [...el.options].forEach((o, i) => {
-      const row = document.createElement("div");
-      row.className = "sel-opt" + (o.selected ? " checked" : "") + (o.disabled ? " off" : "");
-      row.setAttribute("role", "option");
-      row.setAttribute("aria-selected", String(o.selected));
-      row.dataset.i = i;
-      row.textContent = o.textContent; // textContent, dus hier hoeft geen esc()
-      list.append(row);
-    });
-    // In een dialoog moet de lijst ín de dialoog hangen: die ligt in de
-    // bovenste laag van de browser, en al wat daarbuiten staat valt eronder.
-    (el.closest("dialog") || document.body).append(list);
-    // Onder het veld als ze daar past of als daar de meeste plaats is, anders
-    // erboven. Nooit erover.
-    const r = el.getBoundingClientRect();
-    const below = window.innerHeight - r.bottom - 12, above = r.top - 12;
-    const down = list.offsetHeight <= below || below >= above;
-    list.style.minWidth = r.width + "px";
-    list.style.maxHeight = Math.max(120, down ? below : above) + "px";
-    if (down) list.style.top = r.bottom + 4 + "px";
-    else list.style.bottom = window.innerHeight - r.top + 4 + "px";
-    list.style.left = Math.max(8, Math.min(r.left, window.innerWidth - list.offsetWidth - 8)) + "px";
-    list.style.transformOrigin = down ? "top left" : "bottom left";
-    // Een klik in de lijst mag de focus niet van het veld halen.
-    list.addEventListener("mousedown", (e) => e.preventDefault());
-    list.addEventListener("mousemove", (e) => {
-      const row = e.target.closest(".sel-opt");
-      if (row && +row.dataset.i !== sel.i) selMark(+row.dataset.i, false);
-    });
-    list.addEventListener("click", (e) => {
-      const row = e.target.closest(".sel-opt");
-      if (row) selPick(+row.dataset.i);
-    });
-    el.classList.add("sel-open");
-    sel = { el, list, i: -1 };
-    selMark(el.selectedIndex, true);
-  };
-  if (typeof document !== "undefined") {
-    document.addEventListener("mousedown", (e) => {
-      if (e.button !== 0) return;
-      if (sel && sel.list.contains(e.target)) return;
-      const el = e.target.closest && e.target.closest("select");
-      const was = sel && sel.el;
-      selClose();
-      if (!selOk(el)) return;
-      // Dit houdt de lijst van het systeem tegen. De focus zetten we zelf,
-      // want die hoort bij dezelfde standaardactie en gaat dus mee verloren.
-      e.preventDefault();
-      el.focus();
-      if (el !== was) selShow(el); // nog eens klikken op hetzelfde veld sluit
-    }, true);
-    document.addEventListener("keydown", (e) => {
-      const el = e.target;
-      if (!selOk(el)) return;
-      const open = sel && sel.el === el;
-      const stop = () => { e.preventDefault(); e.stopPropagation(); };
-      if (!open) {
-        // Spatie en Alt+pijl openen, zoals bij een gewone select. De pijltjes
-        // alleen blijven van de browser: die bladeren door de waarden.
-        if (e.key === " " || (e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp"))) { stop(); selShow(el); }
-        return;
-      }
-      if (e.key === "Escape") { stop(); selClose(); } // en níet ook de dialoog eronder
-      else if (e.key === "Tab") selClose();
-      else if (e.key === "Enter" || e.key === " ") { stop(); selPick(sel.i); }
-      else if (e.key === "ArrowDown") { stop(); selMark(selStep(sel.i, 1), true); }
-      else if (e.key === "ArrowUp") { stop(); selMark(selStep(sel.i, -1), true); }
-      else if (e.key === "Home") { stop(); selMark(selStep(-1, 1), true); }
-      else if (e.key === "End") { stop(); selMark(selStep(el.options.length, -1), true); }
-      else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
-        // Een letter: naar de volgende regel die ermee begint.
-        stop();
-        const n = el.options.length, c = e.key.toLowerCase();
-        for (let k = 1; k <= n; k++) {
-          const i = (sel.i + k) % n;
-          if (!el.options[i].disabled && el.options[i].textContent.trim().toLowerCase().startsWith(c)) { selMark(i, true); break; }
-        }
-      }
-    }, true);
-    // Verschuift de pagina onder de lijst, dan klopt haar plek niet meer.
-    document.addEventListener("scroll", (e) => { if (sel && e.target !== sel.list) selClose(); }, true);
-    window.addEventListener("resize", selClose);
-    document.addEventListener("focusout", (e) => { if (sel && e.target === sel.el) selClose(); });
-  }
-
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
-    esc, icon, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
+    esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
   };
 })();

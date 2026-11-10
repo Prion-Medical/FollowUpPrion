@@ -59,6 +59,8 @@ window.FollowUpI18n = (() => {
 
       "search.placeholder": "Zoek ziekenhuis, arts of stad…",
       "list.empty": "Geen resultaten",
+      "list.clear": "Filters wissen",
+      "btn.continue": "Doorgaan",
       "filter.all": "Alle",
       "filter.allStatuses": "Alle statussen",
       "filter.allProducts": "Alle producten",
@@ -357,6 +359,7 @@ window.FollowUpI18n = (() => {
       "login.email": "E-mail",
       "login.password": "Wachtwoord",
       "login.submit": "Aanmelden",
+      "login.busy": "Bezig met aanmelden…",
       "login.failed": "Aanmelden mislukt: ",
       "login.badCredentials": "verkeerd e-mailadres of wachtwoord",
       "seed.empty": "De online databank is nog leeg. ",
@@ -494,6 +497,8 @@ window.FollowUpI18n = (() => {
 
       "search.placeholder": "Search hospital, doctor or city…",
       "list.empty": "No results",
+      "list.clear": "Clear filters",
+      "btn.continue": "Continue",
       "filter.all": "All",
       "filter.allStatuses": "All statuses",
       "filter.allProducts": "All products",
@@ -779,6 +784,7 @@ window.FollowUpI18n = (() => {
       "login.email": "E-mail",
       "login.password": "Password",
       "login.submit": "Sign in",
+      "login.busy": "Signing in…",
       "login.failed": "Sign-in failed: ",
       "login.badCredentials": "wrong e-mail address or password",
       "seed.empty": "The online database is still empty. ",

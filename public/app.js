@@ -12,8 +12,10 @@
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
-    esc, icon, pickBox, syncPick, myProducts, productColor,
+    esc, pickBox, syncPick, myProducts, productColor,
   } = window.FollowUpDomain;
+  // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
+  const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
   // Welk product staat standaard in een nieuw contactmoment of een planning:
   // dat van het ziekenhuis als er maar één is, anders het jouwe als jij er maar
   // één mag.
@@ -26,13 +28,16 @@
   const REGION_BOUNDS = [[49.3, 2.3], [53.7, 7.4]];
   const REGION_BBOX = [2.3, 49.3, 7.4, 53.7];
 
+  // Geen enkel filter aan. Op één plaats: de begintoestand, de vraag of er
+  // iets gefilterd is en "filters wissen" lezen alle drie dit lijstje.
+  const noFilter = () => ({ statuses: [], products: [], countries: [], owners: [], derived: "", query: "" });
   const state = {
     db: { version: 1, hospitals: [] },
     selectedId: null,
     // Elke filter is een lijst; leeg betekent geen beperking, dezelfde
     // betekenis als een leeg bereik op een gebruiker. derived is er één van
     // twee vragen over de opvolging en sluit zichzelf uit.
-    filter: { statuses: [], products: [], countries: [], owners: [], derived: "", query: "" },
+    filter: noFilter(),
     // Van welk ziekenhuis de lijst contactmomenten helemaal openstaat. Eén id
     // en geen vlag: zo klapt ze vanzelf weer dicht bij een ander ziekenhuis.
     actsOpen: null,
@@ -130,11 +135,11 @@
   function toast(msg) {
     const el = $("#toast");
     el.textContent = msg;
+    stay(el); // stond ze net weg te gaan, dan blijft ze
     el.hidden = false;
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => (el.hidden = true), 2600);
+    toast._t = setTimeout(() => leave(el, () => { el.hidden = true; }, { ms: 160, shift: "translate(-50%, 6px)" }), 2600);
   }
-
   // ---------- opslag ----------
   let saveTimer = null;
   // Of er nog iets te bewaren is, houden we zelf bij. Eerder werd daarvoor de
@@ -175,7 +180,7 @@
     } catch (e) {
       showSaveState("save.failed", true);
       if (e instanceof store.ConflictError) {
-        showBanner(t("save.conflict"), true);
+        showBanner(t("save.conflict"), true, "warn");
       } else {
         const hint = store.mode === "local" ? t("save.errorLocal") : t("save.errorOnline");
         showBanner(t("save.errorBody", { hint, msg: e.message }));
@@ -201,8 +206,12 @@
   if (printMedia.addEventListener) {
     printMedia.addEventListener("change", (e) => fitTextareasForPrint(e.matches));
   }
-  function showBanner(msg, reload = false) {
+  // tone: "error" (er ging iets mis), "warn" (opgelet) of "info" (ter info).
+  // styles.css kleurt de balk ernaar; een mislukte opslag mag er niet uitzien
+  // als een mededeling.
+  function showBanner(msg, reload = false, tone = "error") {
     const b = $("#banner");
+    b.dataset.tone = tone;
     b.textContent = msg;
     if (reload) {
       const btn = document.createElement("button");
@@ -229,7 +238,7 @@
     $("#usersBtn").hidden = !can.manageUsers;
     // Zonder profiel valt iedereen terug op "alleen lezen". Dat is veilig, maar
     // zonder uitleg lijkt het op een storing: zeg dus wat eraan hapert.
-    if (can.noProfile) showBanner(t("rights.noProfile"));
+    if (can.noProfile) showBanner(t("rights.noProfile"), false, "warn");
     // De productfilter biedt enkel aan wat je mag zien; renderFilters() leest
     // myProducts(). Stond er nog iets aangevinkt dat nu buiten bereik valt,
     // dan zou de lijst leeg blijven zonder dat je ziet waarom.
@@ -687,11 +696,18 @@
       nameHit(a) - nameHit(b) || order[shown(a).status] - order[shown(b).status] || a.name.localeCompare(b.name));
     const ul = $("#list");
     ul.removeAttribute("aria-busy"); // de streepjes van het laden gaan eruit
-    // Waar staat elke rij nu? Dat moet vóór het hertekenen gemeten worden; zie
-    // settleList() hieronder.
+    // Waar staat elke rij nu? Dat moet vóór het hertekenen gemeten worden;
+    // zie rowTops() en settleRows() in ui.js.
+    // De lijst meet alle rijen, ook onder de rand: het zijn er een veertigtal,
+    // en zo glijdt een ziekenhuis dat je opzoekt van onderaf naar boven in
+    // plaats van uit het niets op te komen.
     const before = rowTops(ul, "li[data-id]", listKey);
     if (!items.length) {
-      ul.innerHTML = `<li class="empty">${esc(t("list.empty"))}</li>`;
+      // Staat er een filter aan, dan is dat bijna altijd de reden. Eén knop
+      // zet ze allemaal uit, in plaats van vier uitklappers na te lopen.
+      const filtered = Object.values(state.filter).some((v) => v.length);
+      ul.innerHTML = `<li class="empty"><span>${esc(t("list.empty"))}</span>${filtered
+        ? `<button class="btn small" data-clear-filters>${esc(t("list.clear"))}</button>` : ""}</li>`;
       settleList(ul, before);
       return;
     }
@@ -714,48 +730,18 @@
     }).join("");
     settleList(ul, before);
   }
-  // Na een filter of een zoekterm staat de lijst er in één klap anders: rijen
-  // weg, andere ertussen, alles verspringt. Dat leest als een schok. Hier
-  // schuift een rij die blijft van haar oude plek naar haar nieuwe, en komt
-  // een rij die er nog niet stond zacht op. Rijen die verdwijnen, verdwijnen
-  // gewoon: wachten tot ze uitgefaded zijn zou het typen vertragen.
-  //
-  // Kort en klein, want dit gebeurt bij elke toetsaanslag: de afstand is
-  // afgetopt, zodat een rij van onder uit de lijst niet het hele scherm
-  // oversteekt. Alleen transform en opacity, via element.animate(): dat kan de
-  // browser buiten de hoofddraad afspelen. Een volgende hertekening meet
-  // gewoon waar de rijen op dat moment staan, ook halverwege.
-  //
-  // Dezelfde twee stappen dienen voor het logboek: eerst meten (rowTops), dan
-  // hertekenen, dan laten bezinken (settleRows). Wat een rij is en hoe ze
-  // heet, zegt de oproeper met een selector en een sleutel.
-  const LIST_MOVE = { duration: 340, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" };
-  const rowTops = (root, sel, key) =>
-    new Map([...root.querySelectorAll(sel)].map((el) => [key(el), el.getBoundingClientRect().top]));
-  function settleRows(root, sel, key, before, bottom) {
-    if (!root.animate || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    // Eerst alles meten, dan pas iets in beweging zetten. Door elkaar zou
-    // elke meting de browser dwingen de stijl van de rij ervoor opnieuw uit
-    // te rekenen: één keer per rij, bij elke toetsaanslag.
-    const seen = [];
-    for (const el of root.querySelectorAll(sel)) {
-      const top = el.getBoundingClientRect().top;
-      if (top > bottom) break; // wat onder de rand valt, ziet niemand
-      seen.push([el, top]);
-    }
-    for (const [el, top] of seen) {
-      const was = before.get(key(el));
-      if (was === undefined) {
-        el.animate([{ opacity: 0 }, { opacity: 1 }], LIST_MOVE);
-      } else if (Math.abs(was - top) > 1) {
-        const d = Math.max(-64, Math.min(64, was - top));
-        el.animate([{ transform: `translateY(${d}px)` }, { transform: "none" }], LIST_MOVE);
-      }
-    }
-  }
   const listKey = (li) => li.dataset.id;
   const settleList = (ul, before) => settleRows(ul, "li", listKey, before, ul.getBoundingClientRect().bottom);
   $("#list").addEventListener("click", (e) => {
+    if (e.target.closest("[data-clear-filters]")) {
+      Object.assign(state.filter, noFilter());
+      $("#search").value = "";
+      renderFilters();
+      renderList();
+      renderMarkers();
+      renderKpis();
+      return;
+    }
     const li = e.target.closest("li[data-id]");
     if (li) select(li.dataset.id, true);
   });
@@ -879,6 +865,10 @@
     const h = sel();
     renderAll();
     if (fly && h) focusOn(h);
+    // Eén ring die uitdijt rond de gekozen speld, zodat je op een volle kaart
+    // ziet welke het is. Alleen bij het kiezen, niet bij elke hertekening.
+    const pin = document.querySelector("#map .pin.selected");
+    if (pin) pin.classList.add("pulse");
   }
   // Een verborgen kaart (gsm, ander tabblad) heeft geen grootte; dan pas inzoomen zodra ze zichtbaar is.
   function focusOn(h) {
@@ -923,8 +913,20 @@
   function renderFiche() {
     const el = $("#fiche");
     const h = sel();
-    el.hidden = !h || !state.ficheOpen;
-    if (!h) { el.innerHTML = ""; return; }
+    // Sluiten gaat zacht: het paneel schuift weg en is daarna pas verborgen.
+    // De inhoud blijft tot dan staan (een leeg paneel zien wegschuiven is
+    // lelijker dan niets), en pas daarna is de kaart zo breed als ze wordt.
+    if (h && state.ficheOpen) {
+      stay(el);
+      el.hidden = false;
+    } else if (!el.hidden && !leaving(el)) {
+      leave(el, () => {
+        el.hidden = true;
+        if (!sel()) el.innerHTML = "";
+        map.invalidateSize();
+      }, { ms: 140, shift: window.matchMedia("(max-width: 760px)").matches ? "translateY(24px)" : "translateX(12px)" });
+    }
+    if (!h) { if (el.hidden) el.innerHTML = ""; return; }
 
     const lc = lastContact(h);
     const contacts = [...h.contacts].sort((a, b) => (b.primary - a.primary) || a.name.localeCompare(b.name));
@@ -949,7 +951,7 @@
           <button class="icon-btn" data-act="close" title="${esc(t("btn.close"))}" aria-label="${esc(t("btn.close"))}">${icon("close")}</button>
         </div>
         ${pipe.length || beperkt ? "" : `<div class="status-pick">
-          ${STATUSES.map((k) => `<button class="${k} ${h.status === k ? "active" : ""}" data-status="${k}" title="${esc(t("status." + k))}"><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</button>`).join("")}
+          ${STATUSES.map((k) => `<button class="${k} ${h.status === k ? "active" : ""}" data-status="${k}" title="${esc(t("status." + k))}"><span><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</span></button>`).join("")}
         </div>`}
       </div>
 
@@ -970,7 +972,7 @@
             <div class="pipe-head">
               <div class="pipe-name"><i class="dot ${esc(e.status)}"></i><b>${esc(p)}</b><span class="muted">${esc(t("status." + e.status + ".short"))}</span></div>
               <div class="status-pick">
-                ${STATUSES.map((k) => `<button class="${k} ${e.status === k ? "active" : ""}" data-status="${k}" data-pproduct="${esc(p)}" title="${esc(t("status." + k))}"><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</button>`).join("")}
+                ${STATUSES.map((k) => `<button class="${k} ${e.status === k ? "active" : ""}" data-status="${k}" data-pproduct="${esc(p)}" title="${esc(t("status." + k))}"><span><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</span></button>`).join("")}
               </div>
             </div>
             <div class="grid">
@@ -1246,11 +1248,12 @@
         if (state.dragId) toast(t("map.dragHint"));
         return renderAll();
       case "delete":
-        if (confirm(t("confirm.deleteHospital", { name: h.name }))) {
+        ask(t("confirm.deleteHospital", { name: h.name })).then((yes) => {
+          if (!yes) return;
           state.db.hospitals = state.db.hospitals.filter((x) => x.id !== h.id);
           scheduleSave();
           closeFiche();
-        }
+        });
         return;
     }
   });
@@ -1393,7 +1396,18 @@
   // bij de export de soort lijst). Geeft onSubmit KEEP_OPEN terug, dan blijft de
   // dialoog open — handig als je er meerdere dingen achter elkaar doet.
   const KEEP_OPEN = "keep-open";
-  function openDialog(html, onSubmit) {
+  // De formulierdialoog sluit zacht (softClose in ui.js), langs elke weg: een
+  // knop of Escape. Dit staat op de dialoog en loopt dus na de afhandeling op
+  // het formulier zelf; hield die het sluiten al tegen, dan blijft hij open.
+  $("#dialog").addEventListener("submit", (e) => {
+    if (e.defaultPrevented) return;
+    e.preventDefault();
+    softClose(e.currentTarget, e.submitter ? e.submitter.value : "");
+  });
+  $("#dialog").addEventListener("cancel", (e) => { e.preventDefault(); softClose(e.currentTarget); });
+  // askDelete is de vraag die de knop "Verwijder" eerst stelt; een dialoog
+  // zonder zo'n knop laat hem weg.
+  function openDialog(html, onSubmit, askDelete) {
     const dlg = $("#dialog");
     const form = $("#dialogForm");
     form.innerHTML = html;
@@ -1411,7 +1425,14 @@
       // het niet heeft; dit is het vangnet erachter, net als bij scheduleSave.
       if (submitter.value === "delete") {
         if (!store.can.remove) { toast(t("rights.notAllowed")); return; }
-        onSubmit(null, "delete");
+        // Eerst vragen. De dialoog blijft eronder openstaan: wie "Annuleer"
+        // kiest, staat terug waar hij was in plaats van alles kwijt te zijn.
+        e.preventDefault();
+        ask(askDelete).then((yes) => {
+          if (!yes) return;
+          softClose(dlg, "delete");
+          onSubmit(null, "delete");
+        });
         return;
       }
       if (!form.reportValidity()) { e.preventDefault(); return; }
@@ -1478,7 +1499,6 @@
         <button class="btn primary" value="ok">${esc(t("btn.save"))}</button>
       </div>`, (data, action) => {
       if (action === "delete") {
-        if (!confirm(t("confirm.deleteContact", { name: c.name }))) return;
         h.contacts = h.contacts.filter((x) => x.id !== c.id);
         h.activities.forEach((a) => { if (a.contactId === c.id) a.contactId = ""; });
         syncProducts(h, c.products);
@@ -1503,7 +1523,7 @@
       syncPipeline(h);
       scheduleSave();
       renderAll();
-    });
+    }, c && t("confirm.deleteContact", { name: c.name }));
   }
 
   function activityDialog(h, a, plan) {
@@ -1535,7 +1555,6 @@
         <button class="btn primary" value="ok">${esc(t("btn.save"))}</button>
       </div>`, (data, action) => {
       if (action === "delete") {
-        if (!confirm(t("confirm.deleteActivity"))) return;
         h.activities = h.activities.filter((x) => x.id !== a.id);
         syncRooms(h, a, null);
       } else {
@@ -1572,7 +1591,7 @@
       }
       scheduleSave();
       renderAll();
-    });
+    }, t("confirm.deleteActivity"));
     // Het aantal hangt af van soort én product: kamers bij een abonnement,
     // bestelde stuks bij een product per ingreep. Het veld is hetzelfde, het
     // opschrift volgt het product.
@@ -1616,7 +1635,6 @@
         <button class="btn primary" value="ok">${esc(t("btn.save"))}</button>
       </div>`, (data, action) => {
       if (action === "delete") {
-        if (!confirm(t("confirm.deletePlanned"))) return;
         h.planned = h.planned.filter((x) => x.id !== p.id);
       } else {
         const rec = p || { id: uid() };
@@ -1631,7 +1649,7 @@
       syncNextAction(h);
       scheduleSave();
       renderAll();
-    });
+    }, t("confirm.deletePlanned"));
   }
 
   // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
@@ -1856,7 +1874,7 @@
     try {
       const data = JSON.parse(await file.text());
       if (!Array.isArray(data.hospitals)) throw new Error(t("import.noHospitals"));
-      if (!confirm(t("import.confirm", { n: data.hospitals.length }))) return;
+      if (!(await ask(t("import.confirm", { n: data.hospitals.length }), { ok: t("btn.continue") }))) return;
       data.hospitals.forEach(normalize);
       state.db = data;
       state.selectedId = null;
@@ -1866,12 +1884,12 @@
       fitAll();
       toast(t("import.done"));
     } catch (err) {
-      alert(t("import.failed", { msg: err.message }));
+      tell(t("import.failed", { msg: err.message }));
     }
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !$("#dialog").open) {
+    if (e.key === "Escape" && !document.querySelector("dialog[open]")) {
       if (state.placing) $("#cancelPlace").click();
       else if (!menuList.hidden) toggleMenu(false);
       else if (state.selectedId) closeFiche();
@@ -2090,7 +2108,7 @@
     // springen zij terwijl de rijen eronder glijden.
     const LOG_ROWS = "h3.ag-h, li.ag-row, p.muted";
     const logKey = (el) => el.dataset.aid || "kop:" + el.textContent;
-    const before = rowTops(body, LOG_ROWS, logKey);
+    const before = rowTops(body, LOG_ROWS, logKey, window.innerHeight);
     const settle = () => settleRows(body, LOG_ROWS, logKey, before, window.innerHeight);
     if (!items.length) { body.innerHTML = `<p class="muted">${esc(t("log.empty"))}</p>`; settle(); return; }
     const counts = {};
@@ -2176,7 +2194,7 @@
       // Het versienummer zegt of deze app de vorm van de data nog begrijpt.
       // Komt ze van een nieuwere versie, dan waarschuwen we en laten we het
       // nummer staan — overschrijven zou stille gegevensverlies betekenen.
-      if (Number(state.db.version) > DB_VERSION) showBanner(t("save.newerVersion"));
+      if (Number(state.db.version) > DB_VERSION) showBanner(t("save.newerVersion"), false, "warn");
       state.db.version = Math.max(Number(state.db.version) || 1, DB_VERSION);
       state.db.hospitals.forEach(normalize);
       // read_state geeft de rol en het bereik mee waarmee dit document is
@@ -2196,6 +2214,7 @@
   // Lege online databank: startlijst laden of een back-up importeren.
   function offerSeed() {
     const b = $("#banner");
+    b.dataset.tone = "info";
     b.textContent = t("seed.empty");
     // Zonder schrijfrecht blijft het bij de melding: de knop zou toch stuiten
     // op de grendel in scheduleSave en op de databank. Met een productbeperking
@@ -2217,7 +2236,7 @@
         fitAll();
         toast(t("seed.loaded", { n: state.db.hospitals.length }));
       } catch (e) {
-        alert(t("seed.missing"));
+        tell(t("seed.missing"));
       }
     };
     b.append(btn, t("seed.or"));
@@ -2259,8 +2278,13 @@
     $("#agendaBtn").textContent = view === "agenda" ? t("btn.backToMap") : t("btn.agenda");
     document.querySelectorAll(".tabbar [data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     try { localStorage.setItem("followup-view", view); } catch (e) { /* privévenster */ }
-    if (view === "stats") window.FollowUpStats.render(state.db, statsView, scheduleSave);
-    else window.FollowUpStats.hideTip();
+    if (view === "stats") {
+      // Bij het binnenkomen groeien de balken vanaf de as (styles.css). Alleen
+      // dan: bij elke filterklik opnieuw zou het een trucje worden.
+      statsView.classList.add("enter");
+      setTimeout(() => statsView.classList.remove("enter"), 900);
+      window.FollowUpStats.render(state.db, statsView, scheduleSave);
+    } else window.FollowUpStats.hideTip();
     if (view === "agenda") renderAgenda();
     if (view === "users") loadUsers();
     if (view === "map") setTimeout(() => {
@@ -2484,7 +2508,7 @@
     } catch (err) {
       Object.assign(u, before);
       renderUsers();
-      alert(t("users.failed", { msg: err.message }));
+      tell(t("users.failed", { msg: err.message }));
       return;
     }
     // Bijwerken zonder hertekenen: renderUsers() bouwt het scherm opnieuw op en
@@ -2497,7 +2521,7 @@
     // gooit je bij élk vinkje terug naar de kaart. Nu vraagt de balk erom en
     // kies je zelf wanneer — met meerdere wijzigingen na elkaar één keer.
     if (u.id === store.me().id && (before.role !== u.role || String(before.products) !== String(u.products))) {
-      showBanner(t("users.reloadNeeded"), true);
+      showBanner(t("users.reloadNeeded"), true, "info");
     }
   });
 
@@ -2511,10 +2535,12 @@
   // ---------- menu (⋯) ----------
   const menuList = $("#menuList");
   function toggleMenu(open) {
-    menuList.hidden = !open;
+    if (open === (!menuList.hidden && !leaving(menuList))) return; // elke klik op de pagina komt hier langs
     $("#menuBtn").setAttribute("aria-expanded", String(open));
+    if (open) { stay(menuList); menuList.hidden = false; }
+    else leave(menuList, () => { menuList.hidden = true; }, { ms: 90, shift: "translateY(-4px) scale(0.98)" });
   }
-  $("#menuBtn").addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(menuList.hidden); });
+  $("#menuBtn").addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(menuList.hidden || leaving(menuList)); });
   // Licht, donker of het toestel. De keuze zelf bewaart theme.js; hier staat
   // alleen welke knop aan is. Het menu blijft open, zodat je meteen ziet wat
   // je koos en nog kunt wisselen.
