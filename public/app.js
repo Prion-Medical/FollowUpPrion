@@ -413,6 +413,18 @@
   // Wat de kaart, de lijst en de tellers van een ziekenhuis tonen: het volgt
   // de productfilter in de zijbalk.
   const shown = (h) => pipelineView(h, state.filter.products);
+  // De endoscopie-afdeling — scopes, torens, kamers, coloscopieën — beschrijft
+  // waar een product per abonnement op aangesloten wordt. Voor een ziekenhuis
+  // dat enkel voor RFA gevolgd wordt zegt ze niets, en voor wie enkel RFA mag
+  // evenmin. Twee vragen dus: heeft dit account zo'n product, en hangt er een
+  // aan dit ziekenhuis. De regel is "een product per abonnement", niet twee
+  // namen, zodat een vijfde product vanzelf aan de juiste kant valt.
+  //
+  // Dit is tonen of niet tonen, geen muur: unit is een gedeeld veld van het
+  // ziekenhuis en bereikt de browser nog altijd. Moet dat niet, dan is dat
+  // werk voor scope_hospital() in schema.sql.
+  const endoAccount = () => myProducts().some((p) => productKind(p) === "subscription");
+  const endoFor = (h) => myProducts().some((p) => productKind(p) === "subscription" && h.products.includes(p));
   // Wie verantwoordelijk kan zijn: iedereen met een account, op naam. Eén
   // lijst voor de keuzelijst in de fiche en voor de filter in de zijbalk.
   function owners() {
@@ -640,7 +652,7 @@
       const primary = h.contacts.find((c) => c.primary);
       const bits = [t("stage." + shown(h).stage)];
       if (h.country) bits.push(t("country." + h.country + ".short"));
-      if (h.unit.roomsInstalled) bits.push(`${h.unit.roomsInstalled}× ${t("stats.roomsLive").toLowerCase()}`);
+      if (h.unit.roomsInstalled && endoAccount()) bits.push(`${h.unit.roomsInstalled}× ${t("stats.roomsLive").toLowerCase()}`);
       if (lc) bits.push(t("rel.last") + " " + relDays(lc));
       const chosen = h.id === state.selectedId;
       return `<li data-id="${esc(h.id)}" class="${chosen ? "selected" : ""}" tabindex="0"${chosen ? ' aria-current="true"' : ""}>
@@ -748,7 +760,9 @@
     const hs = scopedHospitals();
     const n = (s) => hs.filter((h) => shown(h).status === s).length;
     // Kamers zeggen niets als er enkel op producten per ingreep gefilterd is.
-    const kamers = !state.filter.products.length || state.filter.products.some((p) => productKind(p) === "subscription");
+    const kamers = state.filter.products.length
+      ? state.filter.products.some((p) => productKind(p) === "subscription")
+      : endoAccount();
     const sum = (f) => hs.reduce((s, h) => s + (f(h) || 0), 0);
     const demos = hs.filter(hasDemoPlanned).length;
     const late = hs.filter(isOverdue).length;
@@ -850,8 +864,8 @@
         <div class="stats">
           <div class="stat"><b>${esc(fmtDate(lc))}</b><span>${esc(t("fiche.lastContact"))} ${lc ? "· " + esc(relDays(lc)) : ""}</span></div>
           <div class="stat"><b>${countType(h, "demo")}</b><span>${esc(t("fiche.demos"))}</span></div>
-          <div class="stat"><b>${countType(h, "installation")}</b><span>${esc(t("fiche.installations"))}</span></div>
-          <div class="stat"><b>${h.unit.roomsInstalled ?? "—"}</b><span>${esc(t("fiche.roomsLive"))}</span></div>
+          ${endoAccount() ? `<div class="stat"><b>${countType(h, "installation")}</b><span>${esc(t("fiche.installations"))}</span></div>
+          <div class="stat"><b>${h.unit.roomsInstalled ?? "—"}</b><span>${esc(t("fiche.roomsLive"))}</span></div>` : ""}
         </div>
       </div>
 
@@ -937,62 +951,6 @@
           </div>`).join("") : `<p class="muted">${esc(t("empty.contacts"))}</p>`}
       </div>
 
-      ${pipe.filter((p) => productKind(p) === "procedure").map((p) => {
-        // Eén sectie per product per ingreep, zoals de endoscopie-afdeling er
-        // één is voor EndoQ en Ainex. Ze staat er alleen als het product bij
-        // dit ziekenhuis aangevinkt is en binnen je bereik valt.
-        const e = h.pipeline[p];
-        const fact = (k) => `data-fact="${k}" data-fact-product="${esc(p)}"`;
-        return `<div class="section">
-        <h3>${esc(p)}</h3>
-        <p class="muted">${esc(t("unit.unknownOk"))}</p>
-        <div class="grid">
-          <label class="field">${esc(t("rfa.cmm"))}
-            <select ${fact("cmm")}>${[opt("", "—", e.cmm), ...CMM_STATES.map((k) => opt(k, t("rfa.cmm." + k), e.cmm))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("rfa.prio"))}
-            <select ${fact("prio")}>${[opt("", "—", String(e.prio ?? "")), ...[1, 2, 3].map((n) => opt(String(n), String(n), String(e.prio ?? "")))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("rfa.doesAlready"))}
-            <select ${fact("doesAlready")}>${[opt("", "—", e.doesAlready), ...YES_NO.map((k) => opt(k, t("yn." + k), e.doesAlready))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("rfa.currentSystem"))}
-            <input ${fact("currentSystem")} value="${esc(e.currentSystem)}" placeholder="${esc(t("rfa.currentSystem.ph"))}">
-          </label>
-          <label class="field full">${esc(t("rfa.notes"))}
-            <textarea ${fact("notes")} rows="3">${esc(e.notes)}</textarea>
-          </label>
-        </div>
-      </div>`;
-      }).join("")}
-
-      <div class="section">
-        <h3>${esc(t("section.unit"))}</h3>
-        <p class="muted">${esc(t("unit.unknownOk"))}</p>
-        <div class="grid">
-          <div class="field full"><span class="field-label">${esc(t("unit.scopeBrands"))}</span>
-            ${brandToggles(h, "scopeBrands", SCOPE_BRANDS)}
-          </div>
-          <label class="field full">${esc(t("unit.scopeNotes"))}
-            <input data-unit="scopeNotes" value="${esc(h.unit.scopeNotes)}" placeholder="${esc(t("unit.scopeNotes.ph"))}">
-          </label>
-          <div class="field full"><span class="field-label">${esc(t("unit.processorBrands"))}</span>
-            ${brandToggles(h, "processorBrands", PROCESSOR_BRANDS)}
-          </div>
-          <label class="field full">${esc(t("unit.processorNotes"))}
-            <input data-unit="processorNotes" value="${esc(h.unit.processorNotes)}" placeholder="${esc(t("unit.processorNotes.ph"))}">
-          </label>
-          ${numField(h, "rooms", t("unit.rooms"))}
-          ${numField(h, "colosPerYear", t("unit.colosPerYear"))}
-          ${numField(h, "roomsDemo", t("unit.roomsDemo"))}
-          ${numField(h, "roomsInstalled", t("unit.roomsInstalled"))}
-          <label class="field full">${esc(t("unit.existingAI"))}
-            <input data-unit="existingAI" value="${esc(h.unit.existingAI)}" placeholder="${esc(t("unit.existingAI.ph"))}">
-          </label>
-          <label class="field full check"><input type="checkbox" data-unit-bool="screening" ${h.unit.screening ? "checked" : ""}>${esc(t("unit.screening"))}</label>
-        </div>
-      </div>
-
       <div class="section">
         <h3>${esc(t("section.data"))}</h3>
         <div class="grid">
@@ -1029,6 +987,62 @@
           <p class="muted full">${esc(t("field.createdAt"))}: ${esc(fmtDate(h.createdAt))}</p>
         </div>
       </div>
+
+      ${pipe.filter((p) => productKind(p) === "procedure").map((p) => {
+        // Eén sectie per product per ingreep, zoals de endoscopie-afdeling er
+        // één is voor EndoQ en Ainex. Ze staat er alleen als het product bij
+        // dit ziekenhuis aangevinkt is en binnen je bereik valt.
+        const e = h.pipeline[p];
+        const fact = (k) => `data-fact="${k}" data-fact-product="${esc(p)}"`;
+        return `<div class="section">
+        <h3>${esc(p)}</h3>
+        <p class="muted">${esc(t("unit.unknownOk"))}</p>
+        <div class="grid">
+          <label class="field">${esc(t("rfa.cmm"))}
+            <select ${fact("cmm")}>${[opt("", "—", e.cmm), ...CMM_STATES.map((k) => opt(k, t("rfa.cmm." + k), e.cmm))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("rfa.prio"))}
+            <select ${fact("prio")}>${[opt("", "—", String(e.prio ?? "")), ...[1, 2, 3].map((n) => opt(String(n), String(n), String(e.prio ?? "")))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("rfa.doesAlready"))}
+            <select ${fact("doesAlready")}>${[opt("", "—", e.doesAlready), ...YES_NO.map((k) => opt(k, t("yn." + k), e.doesAlready))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("rfa.currentSystem"))}
+            <input ${fact("currentSystem")} value="${esc(e.currentSystem)}" placeholder="${esc(t("rfa.currentSystem.ph"))}">
+          </label>
+          <label class="field full">${esc(t("rfa.notes"))}
+            <textarea ${fact("notes")} rows="3">${esc(e.notes)}</textarea>
+          </label>
+        </div>
+      </div>`;
+      }).join("")}
+
+      ${!endoFor(h) ? "" : `<div class="section">
+        <h3>${esc(t("section.unit"))}</h3>
+        <p class="muted">${esc(t("unit.unknownOk"))}</p>
+        <div class="grid">
+          <div class="field full"><span class="field-label">${esc(t("unit.scopeBrands"))}</span>
+            ${brandToggles(h, "scopeBrands", SCOPE_BRANDS)}
+          </div>
+          <label class="field full">${esc(t("unit.scopeNotes"))}
+            <input data-unit="scopeNotes" value="${esc(h.unit.scopeNotes)}" placeholder="${esc(t("unit.scopeNotes.ph"))}">
+          </label>
+          <div class="field full"><span class="field-label">${esc(t("unit.processorBrands"))}</span>
+            ${brandToggles(h, "processorBrands", PROCESSOR_BRANDS)}
+          </div>
+          <label class="field full">${esc(t("unit.processorNotes"))}
+            <input data-unit="processorNotes" value="${esc(h.unit.processorNotes)}" placeholder="${esc(t("unit.processorNotes.ph"))}">
+          </label>
+          ${numField(h, "rooms", t("unit.rooms"))}
+          ${numField(h, "colosPerYear", t("unit.colosPerYear"))}
+          ${numField(h, "roomsDemo", t("unit.roomsDemo"))}
+          ${numField(h, "roomsInstalled", t("unit.roomsInstalled"))}
+          <label class="field full">${esc(t("unit.existingAI"))}
+            <input data-unit="existingAI" value="${esc(h.unit.existingAI)}" placeholder="${esc(t("unit.existingAI.ph"))}">
+          </label>
+          <label class="field full check"><input type="checkbox" data-unit-bool="screening" ${h.unit.screening ? "checked" : ""}>${esc(t("unit.screening"))}</label>
+        </div>
+      </div>`}
 
       <div class="fiche-foot">
         <button class="btn danger" data-act="delete">${esc(t("btn.delete"))}</button>
@@ -1667,7 +1681,7 @@
         <button class="btn" value="hospitals">${esc(t("export.hospitals"))}</button>
         <button class="btn" value="contacts">${esc(t("export.contacts"))}</button>
         <button class="btn" value="activities">${esc(t("export.activities"))}</button>
-        <button class="btn" value="units">${esc(t("export.units"))}</button>
+        ${endoAccount() ? `<button class="btn" value="units">${esc(t("export.units"))}</button>` : ""}
         <button class="btn" value="json">${esc(t("export.json"))}</button>
       </div>
       <div class="actions"><button class="btn" value="cancel">${esc(t("btn.close"))}</button></div>`, (data, kind) => {

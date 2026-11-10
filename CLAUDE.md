@@ -413,7 +413,8 @@ the database; the file names both at the foot.
 - Commits are authored `Dante Kerstens <dante@prionmedical.be>`, set per-repo.
 - **No AI attribution** in commit messages or PR descriptions — no `Co-Authored-By`
   trailer, no "Generated with" footer.
-- Commit messages in Dutch, matching the code comments.
+- Commit messages in Dutch or English, either is fine. **Branch names and pull request
+  titles in English.**
 - `.claude/` is gitignored, skills included.
 
 ## Known and accepted
