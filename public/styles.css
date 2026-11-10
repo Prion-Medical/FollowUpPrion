@@ -841,6 +841,31 @@ button.cal-day:focus-visible { outline-offset: -2px; }
    beheerscherm en op de statistiekpagina. */
 .pick-list .pick-all { border-bottom: 1px solid var(--line); border-radius: 4px 4px 0 0; padding-bottom: 8px; margin-bottom: 4px; }
 
+/* ---------- keuzelijsten ---------- */
+/* Een gewone <select> klapt op een Mac open bovenóp zijn eigen veld: het
+   systeem legt de gekozen regel over de knop, en weg is de rand die zegt welk
+   veld je aan het invullen bent. Daarom tekent domain.js (selShow) de lijst
+   zelf, onder het veld of erboven als daar meer plaats is. De <select> blijft
+   bestaan en houdt de waarde: formulieren en luisteraars merken er niets van.
+   Dit is de opmaak van die lijst; op een aanraakscherm komt ze er niet en
+   doet het toestel zijn eigen keuzewiel. */
+.sel-list {
+  position: fixed; z-index: 7000; margin: 0; padding: 4px; overflow-y: auto; overscroll-behavior: contain;
+  border: 1px solid var(--line); border-radius: var(--radius-lg);
+  background: var(--panel); color: var(--ink); box-shadow: var(--shadow-pop);
+  font-size: var(--t-base); font-weight: 400; text-align: left; scrollbar-width: thin;
+  animation: pop-in var(--fast) var(--ease);
+}
+.sel-opt { padding: 6px 8px; border-radius: 4px; white-space: nowrap; cursor: pointer; }
+.sel-opt.on { background: var(--hover); }
+.sel-opt.checked { background: var(--accent-soft); color: var(--accent-ink); font-weight: 500; }
+.sel-opt.checked.on { background: var(--seg-on); }
+.sel-opt.off { color: var(--muted); cursor: default; }
+/* Zolang de lijst openstaat, houdt het veld zijn blauwe rand: dit is nog
+   altijd het veld waar het om gaat. !important omdat de velden elk hun eigen,
+   specifiekere randregel hebben. */
+select.sel-open { border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--ring) !important; outline: none; }
+
 /* ---------- rechten ---------- */
 /* Wat een rol niet mag, staat niet op het scherm. Dat gebeurt hier en niet in
    JavaScript: elke render bouwt innerHTML opnieuw op, en een CSS-regel
@@ -946,6 +971,7 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
      erbij stak het paneel dan buiten het scherm. */
   .filters.picks .pick-list { top: calc(100% - 4px); left: 12px; right: 12px; min-width: 0; }
   .pick-list label { padding: 10px 8px; }
+  .sel-opt { padding: 10px 8px; }
   /* Dezelfde ingreep voor de keuzes boven het logboek: op een telefoon staan
      ze met twee naast elkaar, en een lijst onder de rechtse viel anders
      buiten het scherm. Het blok zelf is het anker, de lijst is zo breed als
@@ -1104,7 +1130,7 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
   textarea { height: auto; min-height: 0; overflow: visible; resize: none; }
   /* Een uitklapper is op papier de tekst die erop staat. */
   .pick > summary { border: 0; padding: 0; min-height: 0; }
-  .pick > summary::after, .pick-list { display: none; }
+  .pick > summary::after, .pick-list, .sel-list { display: none; }
 
   /* Kleur draagt hier betekenis — de stip, het merkje, de soort contactmoment.
      Zonder dit laat de browser die vlakjes bij het afdrukken gewoon weg. */

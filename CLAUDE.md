@@ -156,6 +156,14 @@ text — so the caller wraps its own values in `esc()`, as everywhere else here.
 called "all" is a row like any other, which is why "all products" is also automatically
 the text on the button. `type: "radio"` makes it a choice of one.
 
+**Select lists.** A `<select>` stays a `<select>`, but with a mouse its list is drawn
+by `selShow()` in `domain.js` (`.sel-list` in `styles.css`): the system's own list
+opens over the field on a Mac and hides which field you are in. One listener on the
+document holds the native list back and shows ours under the field, or above it; a
+choice sets the select's value and fires an ordinary `change`, so no screen had to be
+converted and a new select joins in by existing. On a touch screen nothing is
+intercepted and the device shows its own picker.
+
 **Data shape.** One document: `{ version, hospitals: [...] }`. Each hospital carries
 `contacts[]`, `activities[]`, `planned[]` and a `unit` object (scope brands and notes,
 processor brands and notes — what EndoQ or Ainex actually plugs

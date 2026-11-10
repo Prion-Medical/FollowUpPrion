@@ -348,6 +348,143 @@ window.FollowUpDomain = (() => {
   };
   if (typeof document !== "undefined") document.addEventListener("click", segSlide, true);
 
+  // ---------- keuzelijsten ----------
+  // De lijst van een <select>, zelf getekend. De reden staat bij .sel-list in
+  // styles.css: de lijst van het systeem valt over het veld heen, en hoe dat
+  // eruitziet verschilt per browser. Dit werkt in alle drie hetzelfde.
+  //
+  // De <select> zelf blijft wat hij is. Wij houden alleen zijn eigen lijst
+  // tegen (preventDefault op mousedown) en tonen de onze; bij een keuze zetten
+  // we zijn waarde en sturen we een gewone change. Wie naar change luistert of
+  // het formulier uitleest, ziet dus geen verschil, en een select die een
+  // scherm er later bijzet doet vanzelf mee: er wordt niets per stuk omgebouwd.
+  //
+  // Alleen met een muis. Op een aanraakscherm is het keuzewiel van het toestel
+  // beter dan wat wij kunnen tekenen, en dat valt ook niet over het veld.
+  let sel = null; // { el, list, i } zolang er een lijst openstaat
+  const selFine = () => window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  const selOk = (el) => el && el.tagName === "SELECT" && !el.multiple && !el.disabled && selFine();
+  const selClose = () => {
+    if (!sel) return;
+    sel.list.remove();
+    sel.el.classList.remove("sel-open");
+    sel = null;
+  };
+  // De regel waar je op staat (muis of pijltjes), en zorgen dat ze in beeld is.
+  const selMark = (i, scroll) => {
+    if (!sel || i < 0 || i >= sel.el.options.length) return;
+    sel.i = i;
+    [...sel.list.children].forEach((o, k) => o.classList.toggle("on", k === i));
+    if (scroll) sel.list.children[i].scrollIntoView({ block: "nearest" });
+  };
+  // Eén stap verder in de gegeven richting, over uitgeschakelde regels heen.
+  const selStep = (from, by) => {
+    const opts = sel.el.options;
+    for (let i = from + by; i >= 0 && i < opts.length; i += by) if (!opts[i].disabled) return i;
+    return from;
+  };
+  const selPick = (i) => {
+    const el = sel.el, o = el.options[i];
+    if (!o || o.disabled) return;
+    selClose();
+    if (el.selectedIndex !== i) {
+      el.selectedIndex = i;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    // Het scherm kan zich net opnieuw getekend hebben; dan is dit veld weg.
+    if (el.isConnected) el.focus();
+  };
+  const selShow = (el) => {
+    selClose();
+    const list = document.createElement("div");
+    list.className = "sel-list";
+    list.setAttribute("role", "listbox");
+    [...el.options].forEach((o, i) => {
+      const row = document.createElement("div");
+      row.className = "sel-opt" + (o.selected ? " checked" : "") + (o.disabled ? " off" : "");
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", String(o.selected));
+      row.dataset.i = i;
+      row.textContent = o.textContent; // textContent, dus hier hoeft geen esc()
+      list.append(row);
+    });
+    // In een dialoog moet de lijst ín de dialoog hangen: die ligt in de
+    // bovenste laag van de browser, en al wat daarbuiten staat valt eronder.
+    (el.closest("dialog") || document.body).append(list);
+    // Onder het veld als ze daar past of als daar de meeste plaats is, anders
+    // erboven. Nooit erover.
+    const r = el.getBoundingClientRect();
+    const below = window.innerHeight - r.bottom - 12, above = r.top - 12;
+    const down = list.offsetHeight <= below || below >= above;
+    list.style.minWidth = r.width + "px";
+    list.style.maxHeight = Math.max(120, down ? below : above) + "px";
+    if (down) list.style.top = r.bottom + 4 + "px";
+    else list.style.bottom = window.innerHeight - r.top + 4 + "px";
+    list.style.left = Math.max(8, Math.min(r.left, window.innerWidth - list.offsetWidth - 8)) + "px";
+    list.style.transformOrigin = down ? "top left" : "bottom left";
+    // Een klik in de lijst mag de focus niet van het veld halen.
+    list.addEventListener("mousedown", (e) => e.preventDefault());
+    list.addEventListener("mousemove", (e) => {
+      const row = e.target.closest(".sel-opt");
+      if (row && +row.dataset.i !== sel.i) selMark(+row.dataset.i, false);
+    });
+    list.addEventListener("click", (e) => {
+      const row = e.target.closest(".sel-opt");
+      if (row) selPick(+row.dataset.i);
+    });
+    el.classList.add("sel-open");
+    sel = { el, list, i: -1 };
+    selMark(el.selectedIndex, true);
+  };
+  if (typeof document !== "undefined") {
+    document.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      if (sel && sel.list.contains(e.target)) return;
+      const el = e.target.closest && e.target.closest("select");
+      const was = sel && sel.el;
+      selClose();
+      if (!selOk(el)) return;
+      // Dit houdt de lijst van het systeem tegen. De focus zetten we zelf,
+      // want die hoort bij dezelfde standaardactie en gaat dus mee verloren.
+      e.preventDefault();
+      el.focus();
+      if (el !== was) selShow(el); // nog eens klikken op hetzelfde veld sluit
+    }, true);
+    document.addEventListener("keydown", (e) => {
+      const el = e.target;
+      if (!selOk(el)) return;
+      const open = sel && sel.el === el;
+      const stop = () => { e.preventDefault(); e.stopPropagation(); };
+      if (!open) {
+        // Spatie en Alt+pijl openen, zoals bij een gewone select. De pijltjes
+        // alleen blijven van de browser: die bladeren door de waarden.
+        if (e.key === " " || (e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp"))) { stop(); selShow(el); }
+        return;
+      }
+      if (e.key === "Escape") { stop(); selClose(); } // en níet ook de dialoog eronder
+      else if (e.key === "Tab") selClose();
+      else if (e.key === "Enter" || e.key === " ") { stop(); selPick(sel.i); }
+      else if (e.key === "ArrowDown") { stop(); selMark(selStep(sel.i, 1), true); }
+      else if (e.key === "ArrowUp") { stop(); selMark(selStep(sel.i, -1), true); }
+      else if (e.key === "Home") { stop(); selMark(selStep(-1, 1), true); }
+      else if (e.key === "End") { stop(); selMark(selStep(el.options.length, -1), true); }
+      else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+        // Een letter: naar de volgende regel die ermee begint.
+        stop();
+        const n = el.options.length, c = e.key.toLowerCase();
+        for (let k = 1; k <= n; k++) {
+          const i = (sel.i + k) % n;
+          if (!el.options[i].disabled && el.options[i].textContent.trim().toLowerCase().startsWith(c)) { selMark(i, true); break; }
+        }
+      }
+    }, true);
+    // Verschuift de pagina onder de lijst, dan klopt haar plek niet meer.
+    document.addEventListener("scroll", (e) => { if (sel && e.target !== sel.list) selClose(); }, true);
+    window.addEventListener("resize", selClose);
+    document.addEventListener("focusout", (e) => { if (sel && e.target === sel.el) selClose(); });
+  }
+
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
