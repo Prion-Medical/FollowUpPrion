@@ -16,7 +16,7 @@ window.FollowUpStats = (() => {
 
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
   const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS,
-          esc, pickBox, myProducts, productColor, productKind, emptyTargets } = window.FollowUpDomain;
+          esc, pickBox, myProducts, productColor, productKind, pipelineView, emptyTargets } = window.FollowUpDomain;
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Een doelcijfer aanpassen is schrijven. Zonder dat recht staat het getal er
   // nog wel — het hoort bij de cijfers — maar op slot. storage.js is op dit
@@ -246,8 +246,8 @@ window.FollowUpStats = (() => {
   function pipelineCard(db) {
     const hs = hospitals(db);
     const statusTiles = `<div class="s-status">${STATUSES.map((k) =>
-      `<div><i class="dot ${k}"></i><b>${hs.filter((h) => h.status === k).length}</b><span>${esc(t("status." + k + ".short"))}</span></div>`).join("")}</div>`;
-    const items = STAGES.map((s) => ({ label: t("stage." + s), total: hs.filter((h) => h.stage === s).length })).filter((i) => i.total);
+      `<div><i class="dot ${k}"></i><b>${hs.filter((h) => shown(h).status === k).length}</b><span>${esc(t("status." + k + ".short"))}</span></div>`).join("")}</div>`;
+    const items = STAGES.map((s) => ({ label: t("stage." + s), total: hs.filter((h) => shown(h).stage === s).length })).filter((i) => i.total);
     return card(t("stats.pipeline"), statusTiles + hbars(items, null, t("stats.noData")));
   }
 
@@ -355,7 +355,7 @@ window.FollowUpStats = (() => {
       </div>
       <div class="s-tiles">
         ${tile(fmt(hs.length), t("stats.hospitals"))}
-        ${tile(fmt(hs.filter((h) => h.stage === "customer").length), t("stats.customers"))}
+        ${tile(fmt(hs.filter((h) => shown(h).stage === "customer").length), t("stats.customers"))}
         ${!metSubs ? "" : tile(fmt(roomsLive), t("stats.roomsLive"), roomsTotal ? `${t("stats.coverage")}: ${fmt((roomsLive / roomsTotal) * 100)}%` : "")
           + tile(fmt(roomsDemo), t("stats.roomsDemo"))}
         ${!metOrders ? "" : tile(fmt(sum(orders, units)), t("stats.ordersTile"))}

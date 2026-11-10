@@ -19,10 +19,10 @@ window.FollowUpDomain = (() => {
   // In de databank staat de sleutel, niet de vertaalde tekst.
   const STAGES = [
     "prospect", "first_contact", "meeting", "demo_planned", "demo_installed",
-    "evaluation", "customer", "on_hold", "not_interested",
+    "evaluation", "purchasing", "customer", "on_hold", "not_interested",
   ];
   // Fases vóór de verkoop: een installatie of bestelling maakt er "customer" van.
-  const PRE_SALE = ["prospect", "first_contact", "meeting", "demo_planned", "demo_installed", "evaluation"];
+  const PRE_SALE = ["prospect", "first_contact", "meeting", "demo_planned", "demo_installed", "evaluation", "purchasing"];
   const ACT_TYPES = {
     prospecting: "#7b61ff",
     email: "#3a8dde",
@@ -121,7 +121,14 @@ window.FollowUpDomain = (() => {
   const PROCESSOR_BRANDS = SCOPE_BRANDS;
   // Diensten waar een contactpersoon toe behoort. Niet alleen de artsen
   // beslissen mee: ICT, aankoop en de biomedische dienst evengoed.
-  const DEPARTMENTS = ["physician", "endoscopy", "it", "purchasing", "biomed", "admin", "other"];
+  // De volgorde is die van de keuzelijst: eerst de artsen per discipline, dan
+  // de diensten eromheen. "physician" is de gastro-enteroloog — de sleutel is
+  // ouder dan de RFA-producten en blijft zo heten, anders verliezen bestaande
+  // contactpersonen hun dienst.
+  const DEPARTMENTS = [
+    "physician", "endoscopy", "radiology", "endocrinology", "nuclear", "ent", "surgery", "gynaecology",
+    "pharmacy", "it", "purchasing", "biomed", "admin", "secretariat", "other",
+  ];
   const SECTORS = ["public", "private", "university"];
   // De taal waarin je een contactpersoon aanspreekt. Codes, geen vertaalde
   // namen: ze zijn in beide talen van de app gelijk.
