@@ -37,6 +37,9 @@
   --accent-soft: color-mix(in srgb, var(--accent) 8%, var(--panel));
   --accent-line: color-mix(in srgb, var(--accent) 30%, var(--panel));
   --ring: color-mix(in srgb, var(--accent) 28%, transparent);
+  /* Het plaatje op een schakelaar: bleek accent, maar een tint voller dan
+     --accent-soft, want het ligt op een grijs spoor en niet op wit. */
+  --seg-on: color-mix(in srgb, var(--accent) 16%, var(--panel));
 
   /* Status. De volle kleur is voor stippen en vlakjes, -ink voor tekst
      (genoeg contrast op -soft en op wit), -soft voor de ondergrond erachter. */
@@ -84,6 +87,11 @@
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --fast: 120ms;
   --slow: 180ms;
+  /* Een veer met een kleine doorschieter (ruim 5%) en dan stil: de respons van
+     een gedempte veer, uitgerekend en niet op het oog getekend. Voor wat van
+     plaats verandert en mag aankomen met een tikje. Browsers zonder linear()
+     krijgen de gewone uitloop. */
+  --spring: var(--ease);
 
   /* Het pijltje van een keuzelijst. In een variabele, zodat de donkere
      weergave er een lichte van kan maken. */
@@ -124,6 +132,7 @@
     --accent-soft: color-mix(in srgb, var(--accent) 16%, var(--panel));
     --accent-line: color-mix(in srgb, var(--accent) 45%, var(--panel));
     --ring: color-mix(in srgb, var(--accent) 45%, transparent);
+    --seg-on: color-mix(in srgb, var(--accent) 32%, var(--panel));
 
     --green: #34c26b;
     --orange: #f2a33a;
@@ -156,6 +165,10 @@
   /* De kleur per soort contactmoment is voor een lichte ondergrond gekozen;
      hier wat lichter, zodat de donkerste stippen leesbaar blijven. */
   [data-theme="dark"] .type-pill, [data-theme="dark"] .cal-dots i { filter: brightness(1.5) saturate(0.85); }
+}
+
+@supports (transition-timing-function: linear(0, 1)) {
+  :root { --spring: linear(0, 0.046, 0.157, 0.3, 0.451, 0.595, 0.722, 0.827, 0.909, 0.97, 1.011, 1.037, 1.05, 1.054, 1.052, 1.047, 1.039, 1.031, 1.023, 1.016, 1.01, 1.005, 1.002, 1.0, 0.998, 0.997, 0.997, 0.997, 1); }
 }
 
 * { box-sizing: border-box; }
@@ -271,9 +284,8 @@ p.muted { margin: 0 0 8px; }
 .menu__list button:hover { background: var(--hover); }
 /* De keuze licht / donker onderaan het menu: een woord en een schakelaar. */
 .menu__theme { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; padding: 8px 6px 4px 10px; border-top: 1px solid var(--line); font-size: var(--t-sm); color: var(--muted); white-space: nowrap; }
-.menu__theme .s-seg button { min-height: 24px; padding: 0 8px; font-size: var(--t-sm); }
-.menu__theme .s-seg button:hover { background: none; }
-.menu__theme .s-seg button.active:hover { background: var(--panel); }
+.menu__theme .s-seg button { min-height: 24px; padding: 0 3px; font-size: var(--t-sm); }
+.menu__theme .s-seg button > span { min-height: 20px; padding: 0 7px; }
 
 .banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--accent-soft); color: var(--ink); border-bottom: 1px solid var(--accent-line); padding: 8px 16px; font-size: var(--t-base); }
 
@@ -652,14 +664,35 @@ button.cal-day:focus-visible { outline-offset: -2px; }
   border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 28px 0 10px; min-height: var(--ctl); background: var(--panel) var(--chev) no-repeat right 10px center;
   font-size: var(--t-base); color: var(--ink); -webkit-appearance: none; appearance: none;
 }
-/* Een schakelaar: grijs spoor, de gekozene als wit plaatje erbovenop. */
-.s-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius); background: var(--hover); }
+/* Een schakelaar: een grijs spoor, en om het woord van de gekozene een wit
+   plaatje. Het plaatje zit om de tekst (de span), niet om de hele knop: de
+   knop is het klikvlak, en de ruimte ertussen is waar het plaatje in kan
+   uitrekken en doorveren zonder buiten het spoor te komen. */
+.s-seg { display: inline-flex; gap: 0; padding: 2px; border-radius: var(--radius); background: var(--hover); position: relative; isolation: isolate; overflow: hidden; }
 .s-seg button {
-  border: 0; background: none; padding: 0 12px; min-height: 28px; border-radius: 4px; font-size: var(--t-base); font-weight: 500; color: var(--muted);
-  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+  position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: none; padding: 0 6px; min-height: 28px; font-size: var(--t-base); font-weight: 500; color: var(--muted);
+  transition: color var(--fast) var(--ease);
 }
+.s-seg button > span { display: inline-flex; align-items: center; min-height: 24px; padding: 0 10px; border-radius: 4px; white-space: nowrap; }
 .s-seg button:hover { color: var(--ink); }
-.s-seg button.active { background: var(--panel); color: var(--ink); box-shadow: 0 1px 2px rgba(17, 24, 39, 0.14); }
+.s-seg button.active { color: var(--accent-ink); }
+.s-seg button.active > span { background: var(--seg-on); }
+.s-seg button:focus-visible { outline-offset: -2px; }
+/* Het plaatje dat van de ene keuze naar de andere glijdt. In rust is het er
+   niet: dan draagt de span van de actieve knop zelf zijn achtergrond,
+   hierboven. Tijdens de beweging zet domain.js (segSlide) er twee plaatjes
+   onder die naar dezelfde plek gaan, het ene vlugger dan het andere. Samen
+   zijn ze één vlak dat uitrekt terwijl het onderweg is en weer samenvalt bij
+   aankomst. Alleen transform beweegt, in een transition: wie halverwege
+   terugklikt, keert om vanaf waar het plaatje op dat moment is. */
+.s-seg.seg-live button.active > span { background: none; }
+.seg-pill {
+  position: absolute; z-index: 0; top: 0; left: 0; border-radius: 4px; pointer-events: none;
+  background: var(--seg-on);
+  transition: transform 440ms var(--spring);
+}
+.seg-pill.lag { transition-duration: 600ms; }
 
 .s-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; margin-bottom: 16px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; }
 .s-tile { background: var(--panel); padding: 14px 16px; display: flex; flex-direction: column; }
@@ -880,7 +913,8 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
   .top-actions .btn.icon { width: 36px; }
   .menu__list button { padding: 12px; }
   .menu__theme { padding: 10px 6px 6px 12px; }
-  .menu__theme .s-seg button { min-height: 32px; padding: 0 10px; }
+  .menu__theme .s-seg button { min-height: 32px; }
+  .menu__theme .s-seg button > span { min-height: 26px; padding: 0 9px; }
 
   /* één scherm tegelijk, gekozen via de tabbalk */
   .layout { padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom)); }
@@ -995,7 +1029,8 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
   /* flex-basis 0 zou betekenen dat de balken nooit afbreken maar buiten het
      scherm lopen; met 100% krijgt elke balk een eigen regel. */
   .s-seg { flex: 1 1 100%; }
-  .s-seg button { flex: 1; padding: 0 8px; min-height: 36px; }
+  .s-seg button { flex: 1; padding: 0 4px; min-height: 36px; }
+  .s-seg button > span { min-height: 30px; padding: 0 14px; }
   .s-tiles { grid-template-columns: 1fr 1fr; }
   .s-card { padding: 16px 14px; }
   .s-table-wrap { margin: 0 -14px -16px; }
@@ -1081,7 +1116,9 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
      de niet-gekozen knoppen zeggen op papier niets. */
   .s-seg { border: 0; background: none; padding: 0; }
   .s-seg button:not(.active) { display: none; }
-  .s-seg button.active { background: none !important; color: var(--ink) !important; padding: 0 6px; box-shadow: none; }
+  .seg-pill { display: none; }
+  .s-seg button.active { color: var(--ink) !important; padding: 0 6px; }
+  .s-seg button.active > span { background: none !important; padding: 0; }
 
   /* Van de drie statusknoppen blijft alleen de gekozene over, als tekst. */
   .status-pick { display: block; background: none; padding: 0; }

@@ -260,6 +260,94 @@ window.FollowUpDomain = (() => {
     });
   }
 
+  // ---------- de schakelaar die glijdt ----------
+  // Een .s-seg (Gepland | Logboek, Abonnementen | Installaties, licht | donker)
+  // toont de gekozen knop met een wit plaatje. Dat plaatje glijdt hier van de
+  // oude naar de nieuwe keuze. Twee dingen maken het lastiger dan het lijkt:
+  //
+  // - De schermen bouwen hun innerHTML opnieuw op bij elke klik, dus de knop
+  //   waar het plaatje vandaan komt bestaat daarna niet meer. Daarom meten we
+  //   in de capture-fase, vóór de pagina reageert, waar het plaatje nu staat,
+  //   en zetten we het in het volgende beeld op die plek terug in de verse
+  //   schakelaar. Vandaar ook de sleutel: de schakelaar is een andere node.
+  // - Wie halverwege terugklikt, moet het plaatje zien omkeren. De gemeten
+  //   plek is dan die van het plaatje onderweg, en een transition vertrekt
+  //   altijd van waar iets op dat moment is.
+  //
+  // De beweging zelf is een CSS-transition op transform (zie .seg-pill in
+  // styles.css); JavaScript zet alleen het begin en het einde klaar, één keer
+  // per klik. Wie beweging uit heeft staan, krijgt gewoon de nieuwe toestand.
+  const segKey = (seg) => {
+    // Vanaf de ouder: draagt de schakelaar zelf een id, dan zou hij zichzelf
+    // als gastheer vinden en er niet in voorkomen.
+    const host = seg.parentElement && seg.parentElement.closest("[id]");
+    const all = [...(host || document).querySelectorAll(".s-seg")];
+    return (host ? host.id : "") + "#" + all.indexOf(seg);
+  };
+  const segFind = (key) => {
+    const [id, i] = key.split("#");
+    const host = id ? document.getElementById(id) : document;
+    return host ? host.querySelectorAll(".s-seg")[+i] || null : null;
+  };
+  // Plaats en maat ten opzichte van de schakelaar zelf.
+  const segBox = (el, seg) => {
+    const a = el.getBoundingClientRect(), b = seg.getBoundingClientRect();
+    return { x: a.left - b.left, y: a.top - b.top, w: a.width, h: a.height };
+  };
+  // Het plaatje zit om het woord, niet om de hele knop: de span erin. De knop
+  // eromheen is het klikvlak en laat ruimte om in door te veren.
+  const segMark = (btn) => btn.querySelector("span") || btn;
+  const segSlide = (e) => {
+    const btn = e.target.closest && e.target.closest(".s-seg button");
+    if (!btn || btn.classList.contains("active")) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const seg = btn.parentElement;
+    // Waar staat het plaatje nu? Onderweg: de twee plaatjes zelf. In rust: de
+    // knop die aan stond. Staat er niets aan, dan valt er niets te glijden.
+    const pills = [...seg.querySelectorAll(".seg-pill")];
+    const was = seg.querySelector("button.active");
+    if (!pills.length && !was) return;
+    const from = pills.length ? pills.map((p) => segBox(p, seg)) : [segBox(segMark(was), seg), segBox(segMark(was), seg)];
+    const key = segKey(seg);
+    requestAnimationFrame(() => {
+      const now = segFind(key);
+      const on = now && now.querySelector("button.active");
+      if (!on) return;
+      const to = segBox(segMark(on), now);
+      for (const p of now.querySelectorAll(".seg-pill")) p.remove();
+      const made = from.map((f, i) => {
+        const p = document.createElement("i");
+        p.className = "seg-pill" + (i ? " lag" : "");
+        p.setAttribute("aria-hidden", "true");
+        // De breedte is meteen die van de nieuwe knop; alleen de plaats beweegt.
+        p.style.width = to.w + "px";
+        p.style.height = to.h + "px";
+        p.style.top = to.y + "px";
+        p.style.transition = "none";
+        p.style.transform = `translateX(${f.x}px)`;
+        now.prepend(p);
+        return p;
+      });
+      now.classList.add("seg-live");
+      // Eén keer de opmaak laten uitrekenen, zodat de browser de beginplek
+      // kent; daarna pas de transition aan en het doel erin.
+      void now.offsetWidth;
+      for (const p of made) {
+        p.style.transition = "";
+        p.style.transform = `translateX(${to.x}px)`;
+      }
+      // Het trage plaatje komt als laatste aan. Dan ruimen we op en draagt de
+      // knop zelf weer zijn achtergrond: zo klopt de plek ook nog nadat het
+      // venster van grootte verandert.
+      made[1].addEventListener("transitionend", () => {
+        if (!made[1].isConnected) return;
+        for (const p of made) p.remove();
+        now.classList.remove("seg-live");
+      });
+    });
+  };
+  if (typeof document !== "undefined") document.addEventListener("click", segSlide, true);
+
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,

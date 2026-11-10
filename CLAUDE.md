@@ -134,7 +134,12 @@ because the CSP allows no inline script. A rule that needs a different value in
 the dark gets a token, not a second rule: a rule inside that block that also exists
 further down the file loses to it. Icons are `icon("edit")` from `domain.js`, inline
 SVG in the colour of the text beside them; no glyphs from the font. Motion is short
-and all of it is switched off under `prefers-reduced-motion`. The font is the
+and all of it is switched off under `prefers-reduced-motion`. The one piece with
+JavaScript behind it is the highlight that slides between the buttons of an `.s-seg`
+(`segSlide()` in `domain.js`): the screens rebuild their `innerHTML` on the click, so
+it measures where the highlight is in the capture phase and re-creates it in the new
+markup. The movement itself is a CSS transition on `transform` with `--spring`, which
+is what makes a click halfway turn it round. The font is the
 device's own, so nothing is fetched from Google Fonts any more; the CSP still allows
 it and was left alone.
 

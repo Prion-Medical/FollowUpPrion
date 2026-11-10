@@ -376,7 +376,7 @@ window.FollowUpStats = (() => {
               attrs: `data-stat-product="${esc(p)}"`, label: p, checked: view.products.includes(p),
             })),
           ], t("stats.all"), view.pickOpen)}</label>
-          ${!metSubs ? "" : `<div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}">${esc(t(key))}</button>`).join("")}</div>`}
+          ${!metSubs ? "" : `<div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}"><span>${esc(t(key))}</span></button>`).join("")}</div>`}
         </div>
       </div>
       <div class="s-tiles">

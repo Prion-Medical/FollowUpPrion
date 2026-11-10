@@ -1941,7 +1941,7 @@
   const LOG_STEP = 50;
   const LOG_PERIODS = ["week", "month", "quarter", "year", "all"];
   const agendaTabs = () => `<div class="s-seg">${[["planned", "agenda.tabPlanned"], ["log", "agenda.tabLog"]].map(([k, key]) =>
-    `<button data-ag-tab="${k}" class="${state.agenda.tab === k ? "active" : ""}">${esc(t(key))}</button>`).join("")}</div>`;
+    `<button data-ag-tab="${k}" class="${state.agenda.tab === k ? "active" : ""}"><span>${esc(t(key))}</span></button>`).join("")}</div>`;
   // De eerste dag van de periode, of leeg voor alles.
   function periodStart(period) {
     const d = new Date();
