@@ -93,12 +93,13 @@ Two things that cost an evening to find out:
 
 | File | What it is |
 |---|---|
-| `public/domain.js` | Fixed values both app.js and stats.js need, plus `esc()` |
+| `public/domain.js` | Fixed values both app.js and stats.js need, plus `esc()`, `icon()` and `pickBox()` |
 | `public/app.js` | The whole app: map, list, record, agenda, dialogs, export/import (~1,500 lines) |
 | `public/i18n.js` | NL/EN dictionaries and `t()` |
 | `public/stats.js` | Statistics page, charts as plain HTML |
 | `public/storage.js` | Two backends: local `server.py`, or Supabase with login |
-| `public/styles.css` | Prion Medical house style — ink/paper/Jost, amber accent `#d97b2a` |
+| `public/theme.js` | Light, dark or system: sets `data-theme` on `<html>` before anything is drawn |
+| `public/styles.css` | The look: white panels on cool grey, system font, one blue accent `#2563eb`, light and dark |
 | `server.py` | Local static server + `GET`/`PUT /api/data` |
 | `data/seed.json` | 40 starter hospitals (BE/NL/LU), no contacts, approximate coordinates |
 
@@ -115,6 +116,27 @@ Static markup uses `data-i18n`, `data-i18n-ph`, `data-i18n-title`.
 interpolated value that could come from a user **must** be wrapped in `esc()`. This is
 a discipline, not a guarantee — when editing a template, check it. Translated strings
 and numbers are ours and safe.
+
+**The look.** `styles.css` opens with every token: surfaces, ink, one accent, the
+three status colours each as a full colour (dots, pins), an `-ink` (text) and a
+`-soft` (the ground behind it), and `--series-1` … `--series-6`. The accent is one
+value, `--accent` (light and dark each have theirs), with `--on-accent` for the text
+on top of it; hover, soft, line, ink and focus ring are derived with `color-mix()`.
+There are five
+font sizes (`--t-xs` … `--t-lg`, 11/12/13/15/18) and `--t-xl` for the figures on the
+statistics page; pick one of those rather than writing a pixel value. The phone block
+remaps the same tokens one step larger, so inputs reach 16px and iOS does not zoom.
+Dark mode is the same token names under `:root[data-theme="dark"]` inside `@media
+screen` — `screen`, so a print is always light. `public/theme.js` sets that attribute
+from the choice in the menu (system, light or dark, kept in `localStorage`); it loads
+in the `<head>` so the page does not flash white first, and it is a file of its own
+because the CSP allows no inline script. A rule that needs a different value in
+the dark gets a token, not a second rule: a rule inside that block that also exists
+further down the file loses to it. Icons are `icon("edit")` from `domain.js`, inline
+SVG in the colour of the text beside them; no glyphs from the font. Motion is short
+and all of it is switched off under `prefers-reduced-motion`. The font is the
+device's own, so nothing is fetched from Google Fonts any more; the CSP still allows
+it and was left alone.
 
 **The dropdown.** `pickBox()` in `public/domain.js` is the one multi-select in this
 app: the three sidebar filters, a contact's products, a contact moment's and a planned

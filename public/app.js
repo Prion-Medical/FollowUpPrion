@@ -12,7 +12,7 @@
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
-    esc, pickBox, syncPick, myProducts,
+    esc, icon, pickBox, syncPick, myProducts, productColor,
   } = window.FollowUpDomain;
   // Welk product staat standaard in een nieuw contactmoment of een planning:
   // dat van het ziekenhuis als er maar één is, anders het jouwe als jij er maar
@@ -147,6 +147,10 @@
     const el = $("#saveState");
     el.textContent = key ? t(key) : "";
     el.classList.toggle("error", error);
+    // Het vinkje ervoor tekent styles.css, op deze toestand; de uitleg staat
+    // in de tooltip, want "Opgeslagen" alleen zegt niet wát.
+    el.dataset.state = key.replace("save.", "");
+    el.title = key === "save.saved" ? t("save.savedTitle") : "";
   }
   function scheduleSave() {
     // Vangnet achter de knoppen. Een rol zonder schrijfrecht komt hier niet
@@ -692,14 +696,14 @@
       const bits = [t("stage." + shown(h).stage)];
       if (h.country) bits.push(t("country." + h.country + ".short"));
       if (h.unit.roomsInstalled && endoAccount()) bits.push(`${h.unit.roomsInstalled}× ${t("stats.roomsLive").toLowerCase()}`);
-      if (lc) bits.push(t("rel.last") + " " + relDays(lc));
       const chosen = h.id === state.selectedId;
       return `<li data-id="${esc(h.id)}" class="${chosen ? "selected" : ""}" tabindex="0"${chosen ? ' aria-current="true"' : ""}>
         <i class="dot ${esc(shown(h).status)}"></i>
         <div>
+          ${lc ? `<span class="age" title="${esc(t("rel.last") + " " + relDays(lc))}">${esc(daysAgo(lc) > 0 ? t("rel.short", { n: daysAgo(lc) }) : relDays(lc))}</span>` : ""}
           <div class="name">${esc(h.name)}${isOverdue(h) ? `<span class="badge">${esc(t("badge.overdue"))}</span>` : ""}${isQuiet(h) ? `<span class="badge quiet">${esc(t("badge.quiet"))}</span>` : ""}${h.lat == null ? `<span class="badge neutral">${esc(t("map.noLocation"))}</span>` : ""}</div>
           <div class="meta">${esc(bits.join(" · "))}</div>
-          ${primary ? `<div class="meta">★ ${esc(primary.name)}</div>` : ""}
+          ${primary ? `<div class="meta lead">${icon("star", "fill")}${esc(primary.name)}</div>` : ""}
         </div>
       </li>`;
     }).join("");
@@ -719,7 +723,7 @@
   // De drie filters in de zijbalk. Ze staan hier en niet in index.html omdat
   // de lijsten van de taal afhangen en de producten van je bereik.
   const FILTERS = [
-    { key: "statuses",  leeg: "filter.all",          items: () => STATUSES,  label: (k) => t("status." + k + ".short") },
+    { key: "statuses",  leeg: "filter.allStatuses",        items: () => STATUSES,  label: (k) => t("status." + k + ".short") },
     { key: "products",  leeg: "filter.allProducts",  items: myProducts,      label: (p) => p },
     { key: "countries", leeg: "filter.allCountries", items: () => COUNTRIES, label: (c) => t("country." + c) },
     // Wie verantwoordelijk is. De lijst is die van de keuzelijst in de fiche:
@@ -807,14 +811,14 @@
     const late = hs.filter(isOverdue).length;
     const quiet = hs.filter(isQuiet).length;
     $("#kpis").innerHTML = `
-      <div class="kpi"><b style="color:var(--green)">${n("green")}</b><span>${esc(t("status.green.short"))}</span></div>
-      <div class="kpi"><b style="color:var(--orange)">${n("orange")}</b><span>${esc(t("status.orange.short"))}</span></div>
-      <div class="kpi"><b style="color:var(--red)">${n("red")}</b><span>${esc(t("status.red.short"))}</span></div>
+      <div class="kpi"><b><i class="dot green"></i>${n("green")}</b><span>${esc(t("status.green.short"))}</span></div>
+      <div class="kpi"><b><i class="dot orange"></i>${n("orange")}</b><span>${esc(t("status.orange.short"))}</span></div>
+      <div class="kpi"><b><i class="dot red"></i>${n("red")}</b><span>${esc(t("status.red.short"))}</span></div>
+      <div class="kpi${late ? " alert" : ""}"><b>${late}</b><span>${esc(t("kpi.overdue"))}</span></div>
+      <div class="kpi${quiet ? " warn" : ""}"><b>${quiet}</b><span>${esc(t("kpi.quiet"))}</span></div>
       <div class="kpi"><b>${demos}</b><span>${esc(t("kpi.demosPlanned"))}</span></div>
       ${kamers ? `<div class="kpi"><b>${sum((h) => h.unit.roomsDemo)}</b><span>${esc(t("kpi.roomsDemo"))}</span></div>
-      <div class="kpi"><b>${sum((h) => h.unit.roomsInstalled)}</b><span>${esc(t("kpi.roomsInstalled"))}</span></div>` : ""}
-      <div class="kpi"><b style="${late ? "color:var(--red)" : ""}">${late}</b><span>${esc(t("kpi.overdue"))}</span></div>
-      <div class="kpi"><b style="${quiet ? "color:var(--orange)" : ""}">${quiet}</b><span>${esc(t("kpi.quiet"))}</span></div>`;
+      <div class="kpi"><b>${sum((h) => h.unit.roomsInstalled)}</b><span>${esc(t("kpi.roomsInstalled"))}</span></div>` : ""}`;
   }
 
   // ---------- selectie ----------
@@ -892,9 +896,9 @@
       <div class="fiche-head">
         <div class="row">
           <i class="dot ${esc(shown(h).status)}" style="width:14px;height:14px"></i>
-          <input class="fiche-title" data-field="name" value="${esc(h.name)}" aria-label="${esc(t("fiche.name"))}">
+          <input class="fiche-title" data-field="name" value="${esc(h.name)}" title="${esc(h.name)}" aria-label="${esc(t("fiche.name"))}">
           <button class="icon-btn show-on-map" data-act="show-map" title="${esc(t("map.showOnMap"))}" aria-label="${esc(t("map.showOnMap"))}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg></button>
-          <button class="icon-btn" data-act="close" title="${esc(t("btn.close"))}" aria-label="${esc(t("btn.close"))}">✕</button>
+          <button class="icon-btn" data-act="close" title="${esc(t("btn.close"))}" aria-label="${esc(t("btn.close"))}">${icon("close")}</button>
         </div>
         ${pipe.length || beperkt ? "" : `<div class="status-pick">
           ${STATUSES.map((k) => `<button class="${k} ${h.status === k ? "active" : ""}" data-status="${k}" title="${esc(t("status." + k))}"><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</button>`).join("")}
@@ -915,15 +919,17 @@
         ${pipe.length ? pipe.map((p) => {
           const e = h.pipeline[p];
           return `<div class="pipe">
-            <div class="pipe-name"><i class="dot ${esc(e.status)}"></i><b>${esc(p)}</b><span class="muted">${esc(t("status." + e.status + ".short"))}</span></div>
-            <div class="status-pick">
-              ${STATUSES.map((k) => `<button class="${k} ${e.status === k ? "active" : ""}" data-status="${k}" data-pproduct="${esc(p)}" title="${esc(t("status." + k))}"><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</button>`).join("")}
+            <div class="pipe-head">
+              <div class="pipe-name"><i class="dot ${esc(e.status)}"></i><b>${esc(p)}</b><span class="muted">${esc(t("status." + e.status + ".short"))}</span></div>
+              <div class="status-pick">
+                ${STATUSES.map((k) => `<button class="${k} ${e.status === k ? "active" : ""}" data-status="${k}" data-pproduct="${esc(p)}" title="${esc(t("status." + k))}"><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</button>`).join("")}
+              </div>
             </div>
             <div class="grid">
-              <label class="field">${esc(t("field.stage"))}
+              <label class="field"><span class="lbl">${esc(t("field.stage"))}</span>
                 <select data-pstage="${esc(p)}">${stagesFor(p).map((s) => opt(s, t("stage." + s), e.stage)).join("")}</select>
               </label>
-              <label class="field">${esc(t("field.owner"))}
+              <label class="field"><span class="lbl">${esc(t("field.owner"))}</span>
                 <select data-powner="${esc(p)}">${ownerOptions(e.owner)}</select>
               </label>
             </div>
@@ -936,7 +942,7 @@
       </div>
 
       <div class="section">
-        <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small primary" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
+        <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
         ${h.planned.length ? `<ul class="timeline">${h.planned.map((p) => {
           const c = h.contacts.find((x) => x.id === p.contactId);
           const by = personName(p.createdBy);
@@ -949,15 +955,15 @@
               ${p.note ? `<div class="t-note">${esc(p.note)}</div>` : ""}
             </div>
             <div class="t-acts">
-              <button class="icon-btn" data-act="done-planned" data-id="${esc(p.id)}" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">✓</button>
-              <button class="icon-btn" data-act="edit-planned" data-id="${esc(p.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">✎</button>
+              <button class="icon-btn" data-act="done-planned" data-id="${esc(p.id)}" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
+              <button class="icon-btn" data-act="edit-planned" data-id="${esc(p.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
             </div>
           </li>`;
         }).join("")}</ul>` : `<p class="muted">${esc(t("empty.planned"))}</p>`}
       </div>
 
       <div class="section">
-        <h3>${esc(t("section.activities"))} <button class="btn small primary" data-act="add-activity">${esc(t("btn.addActivity"))}</button></h3>
+        <h3>${esc(t("section.activities"))} <button class="btn small" data-act="add-activity">${esc(t("btn.addActivity"))}</button></h3>
         ${acts.length ? `<ul class="timeline ${state.actsOpen === h.id ? "" : "capped"}">${acts.map((a, i) => {
           const sub = momentLine(h, a, false);
           return `<li${i >= ACT_CAP ? ' class="extra"' : ""}>
@@ -967,7 +973,7 @@
               ${sub ? `<div class="t-sub">${esc(sub)}</div>` : ""}
               ${a.note ? `<div class="t-note">${esc(a.note)}</div>` : ""}
             </div>
-            <div><button class="icon-btn" data-act="edit-activity" data-id="${esc(a.id)}" title="${esc(t("btn.edit"))}">✎</button></div>
+            <div><button class="icon-btn" data-act="edit-activity" data-id="${esc(a.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button></div>
           </li>`;
         }).join("")}</ul>${acts.length > ACT_CAP
           // Geen data-act: wat een rol niet mag wordt daarop verborgen, en
@@ -982,15 +988,15 @@
         ${contacts.length ? contacts.map((c) => `
           <div class="contact ${c.primary ? "primary" : ""}">
             <div class="c-actions">
-              <button class="icon-btn" data-act="primary" data-id="${esc(c.id)}" title="${esc(t("dlg.c.primary"))}">${c.primary ? "★" : "☆"}</button>
-              <button class="icon-btn" data-act="edit-contact" data-id="${esc(c.id)}" title="${esc(t("btn.edit"))}">✎</button>
+              <button class="icon-btn" data-act="primary" data-id="${esc(c.id)}" title="${esc(t("dlg.c.primary"))}" aria-label="${esc(t("dlg.c.primary"))}" aria-pressed="${c.primary}">${icon("star", c.primary ? "fill" : "")}</button>
+              <button class="icon-btn" data-act="edit-contact" data-id="${esc(c.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
             </div>
-            <div class="c-name">${esc(c.name)}${c.department ? `<span class="tag dept">${esc(t("dept." + c.department))}</span>` : ""}${c.primary ? `<span class="tag primary">${esc(t("tag.primary"))}</span>` : ""}${c.language ? `<span class="tag dept">${esc(c.language)}</span>` : ""}${c.products.map((p) => `<span class="tag">${esc(p)}</span>`).join("")}</div>
+            <div class="c-name">${esc(c.name)}${c.department ? `<span class="tag dept">${esc(t("dept." + c.department))}</span>` : ""}${c.primary ? `<span class="tag primary">${esc(t("tag.primary"))}</span>` : ""}${c.language ? `<span class="tag dept">${esc(c.language)}</span>` : ""}${c.products.map((p) => `<span class="tag prod" style="--c:${productColor(p)}">${esc(p)}</span>`).join("")}</div>
             ${c.role ? `<div class="c-role">${esc(c.role)}</div>` : ""}
-            ${c.phone ? `<div class="c-line">☎ <a href="tel:${esc(c.phone.replace(/[^\d+]/g, ""))}">${esc(c.phone)}</a></div>` : ""}
-            ${c.email ? `<div class="c-line">✉ <a href="mailto:${esc(c.email)}">${esc(c.email)}</a></div>` : ""}
+            ${c.phone ? `<div class="c-line">${icon("phone")}<a href="tel:${esc(c.phone.replace(/[^\d+]/g, ""))}">${esc(c.phone)}</a></div>` : ""}
+            ${c.email ? `<div class="c-line">${icon("mail")}<a href="mailto:${esc(c.email)}">${esc(c.email)}</a></div>` : ""}
             ${c.address ? `<div class="c-line muted">${esc(c.address)}</div>` : ""}
-            ${c.notes ? `<div class="c-line muted">ⓘ ${esc(c.notes)}</div>` : ""}
+            ${c.notes ? `<div class="c-line muted">${icon("note")}<span>${esc(c.notes)}</span></div>` : ""}
           </div>`).join("") : `<p class="muted">${esc(t("empty.contacts"))}</p>`}
       </div>
 
@@ -1847,9 +1853,9 @@
         ${p.note ? `<div class="ag-note">${esc(p.note)}</div>` : ""}
       </div>
       <div class="ag-acts">
-        <button class="icon-btn" data-ag="done" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">✓</button>
-        <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">✎</button>
-        <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">→</button>
+        <button class="icon-btn" data-ag="done" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
+        <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
+        <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">${icon("arrow")}</button>
       </div>
     </li>`;
   }
@@ -1898,9 +1904,9 @@
       <div class="s-head">
         <h2>${esc(t("agenda.title"))}</h2>
         <div class="ag-nav">
-          <button class="btn small" data-ag="prev" title="${esc(t("btn.prevMonth"))}" aria-label="${esc(t("btn.prevMonth"))}">‹</button>
+          <button class="btn small" data-ag="prev" title="${esc(t("btn.prevMonth"))}" aria-label="${esc(t("btn.prevMonth"))}">${icon("prev")}</button>
           <button class="btn small" data-ag="today">${esc(t("btn.today"))}</button>
-          <button class="btn small" data-ag="next" title="${esc(t("btn.nextMonth"))}" aria-label="${esc(t("btn.nextMonth"))}">›</button>
+          <button class="btn small" data-ag="next" title="${esc(t("btn.nextMonth"))}" aria-label="${esc(t("btn.nextMonth"))}">${icon("next")}</button>
         </div>
         ${// De schakelaar als laatste, op beide tabbladen: zo staat hij op
           // dezelfde plaats en verspringt hij niet onder je muis.
@@ -2020,8 +2026,8 @@
         ${a.note ? `<div class="ag-note">${esc(a.note)}</div>` : ""}
       </div>
       <div class="ag-acts">
-        <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">✎</button>
-        <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">→</button>
+        <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
+        <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">${icon("arrow")}</button>
       </div>
     </li>`;
   }
@@ -2448,7 +2454,25 @@
     $("#menuBtn").setAttribute("aria-expanded", String(open));
   }
   $("#menuBtn").addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(menuList.hidden); });
-  menuList.addEventListener("click", () => toggleMenu(false));
+  // Licht, donker of het toestel. De keuze zelf bewaart theme.js; hier staat
+  // alleen welke knop aan is. Het menu blijft open, zodat je meteen ziet wat
+  // je koos en nog kunt wisselen.
+  const theme = window.FollowUpTheme;
+  const paintTheme = () => {
+    for (const b of $("#themeSeg").querySelectorAll("[data-theme-set]")) {
+      const on = b.dataset.themeSet === theme.get();
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-pressed", String(on));
+    }
+  };
+  $("#themeSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-theme-set]");
+    if (!b) return;
+    theme.set(b.dataset.themeSet);
+    paintTheme();
+  });
+  paintTheme();
+  menuList.addEventListener("click", (e) => { if (!e.target.closest(".menu__theme")) toggleMenu(false); });
   document.addEventListener("click", (e) => { if (!e.target.closest(".menu")) toggleMenu(false); });
   init();
 })();

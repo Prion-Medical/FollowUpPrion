@@ -1,32 +1,54 @@
 /* =========================================================
    FollowUp Prion — styles.css
-   Huisstijl van prionmedical.com: inkt · papier · grijs · Jost,
-   met het warme amberaccent. Statuskleuren (groen/oranje/rood)
-   en de twee datareeksen zijn de enige andere kleur.
+   Een rustige, zakelijke opmaak: witte panelen op een koelgrijze
+   ondergrond, haarlijnen, het lettertype van het toestel en één
+   blauw accent voor de hoofdactie, de selectie en de focus.
+   Statuskleuren (groen/oranje/rood) en de kleur per product zijn
+   de enige andere kleur. Donkere weergave volgt het toestel.
    ========================================================= */
 
 /* ---------- tokens ---------- */
 :root {
-  --ink: #161616;
-  --ink-soft: #3a3a3a;
-  --paper: #ffffff;
-  --paper-2: #f3f3f1;
-  --card: #fafafa;
-  --grey: #6e6e6e;
-  --grey-2: #c9c9c9;
-  --line: rgba(22, 22, 22, 0.12);
-  --muted: rgba(22, 22, 22, 0.64);
-  --hover: rgba(22, 22, 22, 0.05);
+  color-scheme: light;
 
-  --green: #1f9d55;
-  --orange: #e8920f;
-  --red: #d93a30;
+  /* Vlakken en tekst */
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --panel-2: #f9fafb;
+  --ink: #111827;
+  --ink-2: #374151;
+  --muted: #636b78;
+  --line: #e5e7eb;
+  --line-strong: #d1d5db;
+  --hover: #f1f3f5;
+  --press: #e8ebef;
+  --scrim: rgba(17, 24, 39, 0.4);
+  --tip-bg: #111827;
+  --tip-ink: #ffffff;
 
-  /* Datareeksen in grafieken (gevalideerd categorisch palet, slot 1 en 2) */
-  /* Warm amberaccent van prionmedical.com */
-  --accent: #d97b2a;
-  --accent-dark: #a85c1b;
-  --accent-soft: rgba(217, 123, 42, 0.12);
+  /* Het ene accent. Wie de kleur wil veranderen, verandert --accent (hier en
+     in het donkere blok) en kijkt of --on-accent er nog leesbaar op staat: wit
+     op blauw, maar op een lichte kleur als amber moet dat donker zijn. Al de
+     rest hieronder is ervan afgeleid en hoeft niemand aan te raken. */
+  --accent: #2563eb;
+  --on-accent: #ffffff;
+  --accent-hover: color-mix(in srgb, var(--accent) 86%, #000);
+  --accent-ink: color-mix(in srgb, var(--accent) 84%, #000);
+  --accent-soft: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  --accent-line: color-mix(in srgb, var(--accent) 30%, var(--panel));
+  --ring: color-mix(in srgb, var(--accent) 28%, transparent);
+
+  /* Status. De volle kleur is voor stippen en vlakjes, -ink voor tekst
+     (genoeg contrast op -soft en op wit), -soft voor de ondergrond erachter. */
+  --green: #16a34a;
+  --orange: #e8890c;
+  --red: #dc2626;
+  --green-ink: #15803d;
+  --orange-ink: #9a5800;
+  --red-ink: #b91c1c;
+  --green-soft: #ecfdf3;
+  --orange-soft: #fff4e2;
+  --red-soft: #fef2f2;
 
   /* Kleur per product, op volgorde van PRODUCTS in domain.js. Zes staan er
      klaar zodat een nieuw product meteen een eigen kleur heeft en niemand
@@ -39,15 +61,101 @@
   --series-6: #a8436b;
   --series-none: #a3a9b3;
 
-  --font: "Jost", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --radius: 4px;
+  /* Vijf lettergroottes, en één grote voor de cijfers op de statistieken.
+     Meer zijn er niet: wie een zesde nodig denkt te hebben, kiest een andere
+     dikte of kleur. */
+  --t-xs: 11px;
+  --t-sm: 12px;
+  --t-base: 13px;
+  --t-md: 15px;
+  --t-lg: 18px;
+  --t-xl: 24px;
+
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --radius: 6px;
   --radius-lg: 8px;
-  --shadow-card: 0 18px 40px -28px rgba(0, 0, 0, 0.45);
-  --shadow-float: 0 10px 30px -12px rgba(0, 0, 0, 0.35);
+  --ctl: 32px;
+  --ctl-sm: 26px;
+  --shadow-pop: 0 8px 24px -6px rgba(17, 24, 39, 0.18), 0 2px 6px -2px rgba(17, 24, 39, 0.08);
+  --shadow-side: -6px 0 18px -10px rgba(17, 24, 39, 0.16);
+  --shadow-dialog: 0 24px 56px -16px rgba(17, 24, 39, 0.35), 0 4px 12px -4px rgba(17, 24, 39, 0.12);
+
+  /* Beweging: kort, en uitlopend. Iets reageert meteen en komt zacht tot rust. */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --fast: 120ms;
+  --slow: 180ms;
+
+  /* Het pijltje van een keuzelijst. In een variabele, zodat de donkere
+     weergave er een lichte van kan maken. */
+  --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23636b78' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
+  /* De kaart in grijs, zodat alleen de drie statuskleuren kleur zijn. */
+  --tile-filter: grayscale(1) contrast(.92) brightness(1.04);
 
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --tabbar-h: 0px;
+}
+
+/* Donker. theme.js zet data-theme op <html>: wat de gebruiker in het menu
+   koos, of anders wat het toestel vraagt. Alleen op het scherm: een afdruk is
+   altijd licht, en zo hoeft @media print onderaan niets terug te zetten. */
+@media screen {
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0e1014;
+    --panel: #16181d;
+    --panel-2: #1a1d23;
+    --ink: #eceef2;
+    --ink-2: #c9cdd6;
+    --muted: #969dab;
+    --line: #272b33;
+    --line-strong: #383d48;
+    --hover: #1f232b;
+    --press: #272c36;
+    --scrim: rgba(0, 0, 0, 0.6);
+    --tip-bg: #eceef2;
+    --tip-ink: #111827;
+
+    /* Iets lichter blauw op donker; als tekst nog een stuk lichter, anders
+       leest het niet. De andere afgeleiden rekenen zichzelf opnieuw uit. */
+    --accent: #3b6fe0;
+    --accent-ink: color-mix(in srgb, var(--accent) 55%, #fff);
+    --accent-soft: color-mix(in srgb, var(--accent) 16%, var(--panel));
+    --accent-line: color-mix(in srgb, var(--accent) 45%, var(--panel));
+    --ring: color-mix(in srgb, var(--accent) 45%, transparent);
+
+    --green: #34c26b;
+    --orange: #f2a33a;
+    --red: #f0605a;
+    --green-ink: #6fdc9a;
+    --orange-ink: #f7c377;
+    --red-ink: #ff9d98;
+    --green-soft: #12301f;
+    --orange-soft: #37280f;
+    --red-soft: #3a1919;
+
+    --series-1: #5b9cf0;
+    --series-2: #2bb3ac;
+    --series-3: #df7d4f;
+    --series-4: #9b82e0;
+    --series-5: #7fb558;
+    --series-6: #d9709b;
+    --series-none: #6b7280;
+
+    --shadow-pop: 0 8px 24px -6px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    --shadow-side: -6px 0 18px -10px rgba(0, 0, 0, 0.6);
+    --shadow-dialog: 0 24px 56px -16px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.05);
+    --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23969dab' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    /* De kaarttegels zijn licht. Omkeren en wat dimmen geeft een donkere kaart
+       waarop de drie statuskleuren blijven spreken. */
+    --tile-filter: grayscale(1) invert(1) brightness(0.9) contrast(0.88);
+  }
+  /* Het logo is zwart op doorzichtig; omgekeerd is het wit op doorzichtig. */
+  [data-theme="dark"] .brand__logo, [data-theme="dark"] .login-logo { filter: invert(1); }
+  /* De kleur per soort contactmoment is voor een lichte ondergrond gekozen;
+     hier wat lichter, zodat de donkerste stippen leesbaar blijven. */
+  [data-theme="dark"] .type-pill, [data-theme="dark"] .cal-dots i { filter: brightness(1.5) saturate(0.85); }
 }
 
 * { box-sizing: border-box; }
@@ -55,486 +163,650 @@
 html, body { margin: 0; height: 100%; }
 body {
   display: flex; flex-direction: column; height: 100dvh;
-  font-family: var(--font); font-size: 15px; line-height: 1.45; color: var(--ink);
-  background: var(--paper-2); -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%;
-  -webkit-tap-highlight-color: transparent;
+  font-family: var(--font); font-size: var(--t-base); line-height: 1.45; color: var(--ink);
+  background: var(--bg); -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent; caret-color: var(--accent);
+  scrollbar-color: var(--line-strong) transparent;
 }
+::selection { background: var(--accent-line); color: var(--ink); }
 button { font: inherit; cursor: pointer; color: inherit; }
 input, select, textarea { font: inherit; color: inherit; }
+::placeholder { color: var(--muted); opacity: 1; }
 h1, h2, h3 { font-weight: 600; letter-spacing: -0.01em; }
-.muted { color: var(--muted); font-size: 13px; }
-.eyebrow {
-  font-size: 11px; font-weight: 600; letter-spacing: .22em; text-transform: uppercase; color: var(--grey); margin: 0;
-}
+b { font-weight: 600; }
+a { color: inherit; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+a:hover { color: var(--accent-ink); text-decoration-color: currentColor; }
+.muted { color: var(--muted); font-size: var(--t-sm); }
+p.muted { margin: 0 0 8px; }
+.eyebrow { font-size: var(--t-md); font-weight: 600; color: var(--ink); margin: 0; }
+
+/* Eén focusring voor alles wat met het toetsenbord te bereiken is. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Pictogrammen: lijntekeningen van 16px in de kleur van de tekst ernaast. */
+.ic { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.ic.fill { fill: currentColor; }
 
 /* ---------- knoppen ---------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  min-height: 38px; padding: 7px 16px; border-radius: var(--radius);
-  border: 1.5px solid var(--ink); background: transparent; color: var(--ink);
-  font-weight: 600; font-size: 14px; white-space: nowrap;
-  transition: background .2s ease, color .2s ease, border-color .2s ease;
+  min-height: var(--ctl); padding: 0 12px; border-radius: var(--radius);
+  border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink);
+  font-weight: 500; font-size: var(--t-base); white-space: nowrap;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
-.btn:hover { background: var(--ink); color: var(--paper); }
-.btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-.btn.primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
-.btn.lang { font-size: 12px; letter-spacing: .04em; padding: 6px 10px; min-height: 34px; }
-.btn.ghost { border-color: var(--line); }
-.btn.ghost:hover { border-color: var(--ink); }
-.btn.danger { border-color: var(--line); color: var(--red); }
-.btn.danger:hover { background: var(--red); border-color: var(--red); color: #fff; }
-.btn.small { min-height: 32px; padding: 4px 12px; font-size: 13px; }
-.btn.icon { width: 38px; padding: 0; }
+.btn:hover { background: var(--hover); }
+.btn:active { background: var(--press); transform: scale(0.98); }
+.btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+/* Stil: geen rand tot je erboven hangt. Voor de navigatie in de topbalk. */
+.btn.ghost { border-color: transparent; background: transparent; color: var(--ink-2); }
+.btn.ghost:hover { background: var(--hover); color: var(--ink); }
+.btn.lang { color: var(--muted); }
+.btn.danger { color: var(--red-ink); }
+.btn.danger:hover { background: var(--red-soft); border-color: var(--red); }
+.btn.small { min-height: var(--ctl-sm); padding: 0 9px; font-size: var(--t-sm); }
+.btn.icon { width: var(--ctl); padding: 0; }
 .btn.icon svg { fill: currentColor; }
-.btn:disabled { opacity: .5; cursor: default; }
-.btn:focus-visible, .chip:focus-visible, .icon-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-.link { background: none; border: 0; color: inherit; padding: 0; text-decoration: underline; text-underline-offset: 3px; font-weight: 600; }
+.btn:disabled { opacity: .5; cursor: default; transform: none; }
+.link { background: none; border: 0; color: var(--accent-ink); padding: 0; font-weight: 500; text-decoration: underline; text-decoration-color: var(--accent-line); text-underline-offset: 3px; }
+.link:hover { text-decoration-color: currentColor; }
 .icon-btn {
-  background: none; border: 0; color: var(--grey); min-width: 36px; min-height: 36px;
-  display: inline-grid; place-items: center; border-radius: var(--radius); font-size: 16px;
+  background: none; border: 0; color: var(--muted); width: 28px; height: 28px;
+  display: inline-grid; place-items: center; border-radius: var(--radius);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
 .icon-btn:hover { background: var(--hover); color: var(--ink); }
+.icon-btn:active { background: var(--press); transform: scale(0.94); }
+.icon-btn[aria-pressed="true"] { color: var(--accent); }
 
 /* ---------- topbalk ---------- */
 .topbar {
   position: relative; z-index: 1000;
-  display: flex; align-items: center; gap: 22px;
-  padding: calc(10px + var(--safe-top)) 20px 10px;
-  background: rgba(255, 255, 255, .88); backdrop-filter: saturate(140%) blur(12px);
-  -webkit-backdrop-filter: saturate(140%) blur(12px);
-  border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: 20px; min-height: 56px;
+  padding: var(--safe-top) 16px 0;
+  background: var(--panel); border-bottom: 1px solid var(--line);
 }
 /* Een knop, want het logo brengt je terug naar de kaart — maar hij mag er
    niet als een knop uitzien: geen rand, geen vulling, alleen een handje. */
 .brand { display: flex; align-items: center; gap: 10px; flex: none;
-  background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
-.brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
-.brand__logo { height: 28px; width: auto; display: block; }
-.brand__region {
-  font-size: 10px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; color: var(--grey);
-  border-left: 1px solid var(--line); padding-left: 10px;
+  background: none; border: 0; padding: 4px; margin-left: -4px; border-radius: var(--radius); font: inherit; color: inherit; cursor: pointer; }
+.brand__logo { height: 24px; width: auto; display: block; }
+.brand__region { font-size: var(--t-xs); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+/* De tellers staan op één regel. Wat er niet op past, zakt naar een tweede
+   regel die buiten beeld valt: zo verdwijnt een teller in zijn geheel en
+   staat er nooit een cijfer zonder zijn woord. De belangrijkste staan vooraan. */
+.kpis { display: flex; flex-wrap: wrap; gap: 20px 18px; flex: 1; min-width: 0; height: 22px; overflow: hidden; padding-left: 4px; }
+.kpi { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; height: 22px; }
+.kpi b { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-md); font-weight: 600; font-variant-numeric: tabular-nums; }
+.kpi b .dot { width: 8px; height: 8px; }
+.kpi span { font-size: var(--t-sm); color: var(--muted); }
+/* Iets om op te pakken: het cijfer krijgt de kleur, het woord blijft rustig. */
+.kpi.alert b { color: var(--red-ink); }
+.kpi.warn b { color: var(--orange-ink); }
+.top-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.top-actions .btn.primary { margin: 0 4px; }
+.save-state { font-size: var(--t-sm); color: var(--muted); white-space: nowrap; margin-right: 8px; }
+.save-state.error { color: var(--red-ink); font-weight: 600; }
+/* Bewaard: een groen vinkje ervoor, zodat het woord leest als een toestand en
+   niet als een knop. Getekend met een masker, dus het kleurt mee met --green. */
+.save-state[data-state="saved"] { display: inline-flex; align-items: center; gap: 5px; }
+.save-state[data-state="saved"]::before {
+  content: ""; width: 12px; height: 12px; background: var(--green);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5' fill='none' stroke='%23000' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5' fill='none' stroke='%23000' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
 }
-.kpis { display: flex; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-.kpi { padding: 2px 12px; border-left: 1px solid var(--line); white-space: nowrap; }
-.kpi:first-child { border-left: 0; }
-.kpi b { display: block; font-size: 20px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
-.kpi span { font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--grey); }
-.top-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.save-state { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.save-state.error { color: var(--red); font-weight: 600; }
 
 .menu { position: relative; }
 .menu__list {
-  position: absolute; right: 0; top: calc(100% + 6px); min-width: 210px; z-index: 1200;
-  background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow-float);
-  padding: 6px; display: flex; flex-direction: column;
+  position: absolute; right: 0; top: calc(100% + 6px); min-width: 200px; z-index: 1200;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop);
+  padding: 4px; display: flex; flex-direction: column;
+  transform-origin: top right; animation: pop-in var(--fast) var(--ease);
 }
 .menu__list button {
-  text-align: left; background: none; border: 0; padding: 11px 12px; border-radius: var(--radius); font-size: 14px; font-weight: 500;
+  text-align: left; background: none; border: 0; padding: 7px 10px; border-radius: 4px; font-size: var(--t-base);
+  transition: background var(--fast) var(--ease);
 }
 .menu__list button:hover { background: var(--hover); }
+/* De keuze licht / donker onderaan het menu: een woord en een schakelaar. */
+.menu__theme { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; padding: 8px 6px 4px 10px; border-top: 1px solid var(--line); font-size: var(--t-sm); color: var(--muted); white-space: nowrap; }
+.menu__theme .s-seg button { min-height: 24px; padding: 0 8px; font-size: var(--t-sm); }
+.menu__theme .s-seg button:hover { background: none; }
+.menu__theme .s-seg button.active:hover { background: var(--panel); }
 
-.banner { background: var(--ink); color: var(--paper); padding: 10px 20px; font-size: 14px; }
-.banner .btn { border-color: var(--paper); color: var(--paper); }
-.banner .btn.primary { background: var(--paper); color: var(--ink); }
+.banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--accent-soft); color: var(--ink); border-bottom: 1px solid var(--accent-line); padding: 8px 16px; font-size: var(--t-base); }
 
 /* ---------- indeling ---------- */
 .layout { flex: 1; display: flex; min-height: 0; position: relative; }
 .sidebar {
-  width: 320px; flex: none; background: var(--paper); border-right: 1px solid var(--line);
+  width: 320px; flex: none; background: var(--panel); border-right: 1px solid var(--line);
   display: flex; flex-direction: column; min-height: 0;
 }
-.search { position: relative; padding: 14px 14px 8px; }
-.search__icon { position: absolute; left: 26px; top: 50%; width: 17px; height: 17px; transform: translateY(-30%); fill: none; stroke: var(--grey); stroke-width: 2; stroke-linecap: round; }
+.search { position: relative; padding: 12px 16px 8px; }
+.search__icon { position: absolute; left: 26px; top: 20px; width: 16px; height: 16px; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; pointer-events: none; }
 .search input {
-  width: 100%; height: 42px; padding: 0 12px 0 38px; font-size: 15px;
-  border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); -webkit-appearance: none;
+  width: 100%; height: var(--ctl); padding: 0 10px 0 32px; font-size: var(--t-base);
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel); -webkit-appearance: none; appearance: none;
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
-.search input:focus { outline: none; border-color: var(--ink); background: var(--paper); }
-.filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 14px; }
-/* De drie uitklappers in de zijbalk staan onder elkaar. Naast elkaar groeide
+.search input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 8px; }
+/* De uitklappers in de zijbalk staan onder elkaar. Naast elkaar groeide
    hun breedte mee met wat je aanvinkt, en dan verspringt de hele rij —
    "Verkoop, In progress" duwt de volgende naar de regel eronder. Onder elkaar
    staat alles stil, wat je ook kiest. */
-.filters.picks { flex-direction: column; align-items: stretch; gap: 6px; }
+.filters.picks { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 6px; }
 .filters.picks .pick { min-width: 0; }
-.filters.picks .pick > summary { min-height: 30px; padding: 4px 12px; border-radius: 100px; gap: 6px; }
 .filters.picks .pick-list { white-space: nowrap; }
+#derivedFilters { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .chip {
-  display: inline-flex; align-items: center; gap: 6px; min-height: 30px;
-  border: 1px solid var(--line); background: var(--paper); border-radius: 100px; padding: 3px 12px;
-  font-size: 13px; font-weight: 500; color: var(--ink-soft);
+  display: inline-flex; align-items: center; gap: 6px; min-height: var(--ctl-sm);
+  border: 1px solid var(--line-strong); background: var(--panel); border-radius: 100px; padding: 0 10px;
+  font-size: var(--t-sm); font-weight: 500; color: var(--muted);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.chip:hover { border-color: var(--ink); }
-.chip.active { background: var(--ink); border-color: var(--ink); color: var(--paper); }
-.chip .dot { margin-right: 5px; }
-.list { list-style: none; margin: 8px 0 0; padding: 0 8px 14px; overflow-y: auto; flex: 1; -webkit-overflow-scrolling: touch; }
+.chip:hover { background: var(--hover); color: var(--ink); }
+.chip.active { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-ink); }
+.list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
 .list li {
-  display: flex; gap: 12px; align-items: flex-start; padding: 11px 10px; border-radius: var(--radius); cursor: pointer;
+  display: flex; gap: 10px; align-items: flex-start; padding: 9px 16px; cursor: pointer;
   border-bottom: 1px solid var(--line);
+  transition: background var(--fast) var(--ease);
 }
+.list li > div { min-width: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; }
+.list .name { grid-area: 1 / 1; }
+/* Hoe lang het laatste contact geleden is: kort, rechts op de regel van de
+   naam, zodat elke rij even hoog blijft. */
+.list .age { grid-area: 1 / 2; font-size: var(--t-sm); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; padding-top: 1px; }
+.list .meta { grid-column: 1 / -1; }
 .list li:hover { background: var(--hover); }
-.list li.selected { background: var(--ink); color: var(--paper); }
-.list li.selected .meta { color: rgba(255, 255, 255, .7); }
-.list .name { font-weight: 600; }
-.list .meta { font-size: 12.5px; color: var(--muted); margin-top: 1px; }
-.list .empty { color: var(--muted); cursor: default; justify-content: center; border: 0; }
+.list li.selected { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.list li:focus-visible { outline-offset: -2px; }
+.list .name { font-weight: 500; overflow-wrap: anywhere; }
+.list .meta { font-size: var(--t-sm); color: var(--muted); margin-top: 1px; overflow-wrap: anywhere; }
+.list .meta.lead { display: flex; align-items: center; gap: 5px; }
+.list .meta.lead .ic { width: 11px; height: 11px; color: var(--line-strong); }
+.list .empty { color: var(--muted); cursor: default; justify-content: center; border: 0; padding: 24px 16px; }
+.list .empty:hover { background: none; }
 .badge {
-  display: inline-block; font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
-  padding: 1px 7px; border-radius: 100px; background: var(--red); color: #fff; margin-left: 6px; vertical-align: 2px;
+  display: inline-block; font-size: var(--t-xs); font-weight: 500; line-height: 1.45;
+  padding: 0 7px; border-radius: 100px; background: var(--red-soft); color: var(--red-ink); margin-left: 6px; vertical-align: 1px; white-space: nowrap;
 }
-.badge.neutral { background: var(--paper-2); color: var(--grey); }
+.badge.neutral { background: var(--hover); color: var(--muted); }
 /* Stil gevallen is geen fout maar wel iets om op te pakken: oranje, niet rood. */
-.badge.quiet { background: var(--orange); color: #fff; }
+.badge.quiet { background: var(--orange-soft); color: var(--orange-ink); }
 
-.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
-.list .dot { margin-top: 5px; width: 12px; height: 12px; box-shadow: 0 0 0 2px var(--paper); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.list .dot { margin-top: 6px; }
 .dot.green { background: var(--green); }
 .dot.orange { background: var(--orange); }
 .dot.red { background: var(--red); }
 
 /* ---------- kaart ---------- */
 .map-wrap { flex: 1; position: relative; min-width: 0; }
-#map { position: absolute; inset: 0; background: #eef0f2; }
+#map { position: absolute; inset: 0; background: var(--bg); }
 .map-tools { position: absolute; top: 12px; right: 12px; z-index: 500; display: flex; gap: 6px; }
-.map-tools .btn { background: var(--paper); border-color: var(--line); box-shadow: var(--shadow-float); }
-.map-tools .btn:hover { background: var(--ink); color: var(--paper); }
+.map-tools .btn { box-shadow: 0 1px 3px rgba(17, 24, 39, 0.1); }
 .legend {
-  position: absolute; bottom: 22px; left: 12px; z-index: 500; background: rgba(255, 255, 255, .95);
-  border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 9px 13px; box-shadow: var(--shadow-float);
-  display: flex; flex-direction: column; gap: 4px; font-size: 12.5px;
+  position: absolute; bottom: 24px; left: 12px; z-index: 500; background: var(--panel);
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px; box-shadow: 0 1px 3px rgba(17, 24, 39, 0.1);
+  display: grid; gap: 5px; font-size: var(--t-sm);
 }
 .legend span { display: flex; align-items: center; gap: 8px; }
 .place-hint {
   position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 600; white-space: nowrap;
-  background: var(--ink); color: var(--paper); padding: 9px 16px; border-radius: var(--radius); font-size: 14px;
+  background: var(--tip-bg); color: var(--tip-ink); padding: 7px 12px; border-radius: var(--radius); font-size: var(--t-base);
+  box-shadow: var(--shadow-pop);
 }
-.pin { width: 20px; height: 20px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 1px 5px rgba(0, 0, 0, .45); }
+.place-hint .link { color: inherit; text-decoration-color: currentColor; }
+.pin {
+  width: 18px; height: 18px; border-radius: 50%; border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(17, 24, 39, 0.25), 0 1px 3px rgba(17, 24, 39, 0.3);
+  transition: transform var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.pin:hover { transform: scale(1.2); }
 .pin.green { background: var(--green); }
 .pin.orange { background: var(--orange); }
 .pin.red { background: var(--red); }
-.pin.selected { outline: 3px solid var(--ink); outline-offset: 1px; }
-.pin.dragging { transform: scale(1.3); }
-.leaflet-container { font-family: var(--font); }
-.leaflet-tile-pane { filter: grayscale(1) contrast(.92) brightness(1.04); }
-.leaflet-tooltip.pin-label { font-weight: 600; font-size: 13px; border-radius: var(--radius); }
-.leaflet-bar a { color: var(--ink); }
+.pin.selected { transform: scale(1.25); box-shadow: 0 0 0 3px var(--accent), 0 2px 6px rgba(17, 24, 39, 0.35); }
+.pin.dragging { transform: scale(1.4); box-shadow: 0 0 0 3px var(--accent), 0 6px 14px rgba(17, 24, 39, 0.4); }
+.leaflet-container { font-family: var(--font); font-size: var(--t-sm); background: var(--bg); }
+.leaflet-tile-pane { filter: var(--tile-filter); }
+.leaflet-tooltip.pin-label {
+  font-weight: 500; font-size: var(--t-sm); border: 0; border-radius: var(--radius); padding: 3px 8px;
+  background: var(--tip-bg); color: var(--tip-ink); box-shadow: var(--shadow-pop);
+}
+.leaflet-tooltip.pin-label::before { display: none; }
+.leaflet-bar { border: 1px solid var(--line-strong) !important; border-radius: var(--radius) !important; box-shadow: 0 1px 3px rgba(17, 24, 39, 0.1) !important; overflow: hidden; }
+.leaflet-bar a { color: var(--ink); background: var(--panel); border-bottom-color: var(--line); transition: background var(--fast) var(--ease); }
+.leaflet-bar a:hover { background: var(--hover); color: var(--ink); }
+.leaflet-control-attribution { background: color-mix(in srgb, var(--panel) 80%, transparent) !important; color: var(--muted); }
+.leaflet-control-attribution a { color: var(--muted); }
 
 /* ---------- fiche ---------- */
 .fiche {
-  width: 460px; flex: none; background: var(--paper); border-left: 1px solid var(--line);
-  overflow-y: auto; min-height: 0; -webkit-overflow-scrolling: touch;
+  width: 460px; flex: none; background: var(--panel); border-left: 1px solid var(--line);
+  overflow-y: auto; min-height: 0; -webkit-overflow-scrolling: touch; scrollbar-width: thin;
+  box-shadow: var(--shadow-side); position: relative; z-index: 1;
+  animation: slide-in var(--slow) var(--ease);
 }
 .fiche-head {
-  padding: 18px 20px 14px; border-bottom: 1px solid var(--line);
-  position: sticky; top: 0; background: rgba(255, 255, 255, .94); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); z-index: 2;
+  padding: 14px 20px; border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; background: var(--panel); z-index: 2;
 }
 .fiche-head .row { display: flex; align-items: center; gap: 8px; }
+.fiche-head .row > .dot { width: 10px !important; height: 10px !important; }
 .fiche-title {
-  flex: 1; min-width: 0; font-size: 21px; font-weight: 600; letter-spacing: -0.01em;
-  border: 1px solid transparent; border-radius: var(--radius); padding: 2px 6px; margin-left: -7px; background: transparent;
+  flex: 1; min-width: 0; font-size: var(--t-lg); font-weight: 600; letter-spacing: -0.01em; height: var(--ctl);
+  border: 1px solid transparent; border-radius: var(--radius); padding: 0 6px; margin-left: -2px; background: transparent;
+  text-overflow: ellipsis;
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
-.fiche-title:hover, .fiche-title:focus { border-color: var(--line); outline: none; }
-/* De opvolging per product in de fiche: naam, kleur, fase en wie. */
-.pipe { padding: 12px 0; border-top: 1px solid var(--line); }
+.fiche-title:hover { border-color: var(--line-strong); }
+.fiche-title:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); outline: none; }
+/* De opvolging per product in de fiche: naam en kleur op één regel, fase en
+   verantwoordelijke eronder. De twee veldnamen staan er één keer, boven het
+   eerste product; bij de volgende zijn ze er nog voor een schermlezer. */
+.pipe { padding: 10px 0; border-top: 1px solid var(--line); }
 .pipe:first-of-type { border-top: 0; padding-top: 0; }
-.pipe-name { display: flex; align-items: center; gap: 8px; }
-.pipe .status-pick { margin: 8px 0 10px; }
-.status-pick { display: flex; gap: 6px; margin-top: 12px; }
+.pipe:last-of-type { padding-bottom: 0; }
+.pipe-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-bottom: 8px; }
+.pipe-name { display: flex; align-items: center; gap: 8px; flex: 1 1 96px; min-width: 0; }
+.pipe-name b { font-weight: 600; overflow-wrap: anywhere; }
+/* De status in woorden staat al op de schakelaar ernaast; pas als die er niet
+   is (wie alleen mag kijken) komt het woord hier te staan. */
+.pipe-name .muted { display: none; }
+body[data-rights~="no-write"] .pipe-name .muted { display: inline; }
+.pipe .status-pick { margin: 0; flex: 0 0 auto; }
+.pipe .status-pick button { padding: 0 9px; white-space: nowrap; }
+.pipe ~ .pipe .lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.pipe ~ .pipe .field { gap: 0; }
+/* Drie knoppen als één schakelaar: een grijs spoor met de gekozene erbovenop
+   in de kleur van zijn status. */
+.status-pick { display: flex; gap: 2px; margin-top: 12px; padding: 2px; background: var(--hover); border-radius: var(--radius); }
 .status-pick button {
-  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px;
-  border: 1px solid var(--line); background: var(--paper); border-radius: var(--radius); padding: 6px 4px;
-  font-size: 13px; font-weight: 500; color: var(--ink-soft);
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 28px;
+  border: 1px solid transparent; background: none; border-radius: 4px; padding: 0 4px;
+  font-size: var(--t-sm); font-weight: 500; color: var(--muted);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.status-pick button.active { color: #fff; font-weight: 600; }
-.status-pick button.active .dot { background: #fff; }
-.status-pick button.active.green { background: var(--green); border-color: var(--green); }
-.status-pick button.active.orange { background: var(--orange); border-color: var(--orange); }
-.status-pick button.active.red { background: var(--red); border-color: var(--red); }
+.status-pick button:hover { color: var(--ink); }
+.status-pick button.active { background: var(--panel); color: var(--ink); box-shadow: 0 1px 2px rgba(17, 24, 39, 0.12); }
+.status-pick button.active.green { background: var(--green-soft); color: var(--green-ink); border-color: color-mix(in srgb, var(--green) 35%, transparent); }
+.status-pick button.active.orange { background: var(--orange-soft); color: var(--orange-ink); border-color: color-mix(in srgb, var(--orange) 40%, transparent); }
+.status-pick button.active.red { background: var(--red-soft); color: var(--red-ink); border-color: color-mix(in srgb, var(--red) 35%, transparent); }
 .show-on-map { display: none; }
 
 .section { padding: 16px 20px; border-bottom: 1px solid var(--line); }
-.section h3 {
-  margin: 0 0 12px; font-size: 11px; font-weight: 600; letter-spacing: .2em; text-transform: uppercase; color: var(--grey);
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+.section h3, .s-card h3 {
+  margin: 0 0 10px; min-height: var(--ctl-sm); font-size: var(--t-xs); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  display: flex; align-items: center; gap: 8px;
 }
-.stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.stat { background: var(--paper); padding: 10px 12px; }
-.stat b { display: block; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.stat span { font-size: 12px; color: var(--muted); }
+.section h3 .btn { margin-left: auto; text-transform: none; letter-spacing: 0; }
+/* De knop waarmee je iets toevoegt aan een sectie: wit zoals de andere, maar
+   met een blauw woord. Geen bleke vulling: die betekent hier "gekozen". */
+.section h3 .btn { color: var(--accent-ink); }
+.section h3 .btn:hover { background: var(--accent-soft); border-color: var(--accent-line); }
+.section h3 .badge { margin-left: 0; text-transform: none; letter-spacing: 0; }
+.stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px 16px; }
+.stat b { display: block; font-size: var(--t-md); font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat span { font-size: var(--t-sm); color: var(--muted); }
 
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
 .grid .full { grid-column: 1 / -1; }
-label.field, .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 500; color: var(--grey); }
+label.field, .field { display: flex; flex-direction: column; gap: 4px; font-size: var(--t-sm); font-weight: 500; color: var(--muted); min-width: 0; }
 label.field input, label.field select, label.field textarea {
-  border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; font-size: 15px; background: var(--paper);
-  width: 100%; min-height: 40px; color: var(--ink); -webkit-appearance: none; appearance: none;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 10px; font-size: var(--t-base); font-weight: 400; background: var(--panel);
+  width: 100%; min-height: var(--ctl); color: var(--ink); -webkit-appearance: none; appearance: none;
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
 label.field select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23161616' stroke-width='1.6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat; background-position: right 10px center; padding-right: 30px;
+  background-image: var(--chev); background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px; text-overflow: ellipsis;
 }
-label.field textarea { resize: vertical; min-height: 70px; }
-label.field input:focus, label.field select:focus, label.field textarea:focus { outline: none; border-color: var(--ink); }
-label.field input[type="checkbox"] { width: 18px; min-height: 18px; height: 18px; -webkit-appearance: checkbox; appearance: auto; accent-color: var(--ink); }
-.field-label { font-size: 11px; color: var(--muted); }
-label.field.check { flex-direction: row; align-items: center; gap: 8px; }
-label.field.check input[type="checkbox"] { width: auto; }
-.toggles { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+label.field textarea { resize: vertical; min-height: 68px; padding: 7px 10px; line-height: 1.45; }
+label.field input:hover, label.field select:hover, label.field textarea:hover { border-color: var(--muted); }
+label.field input:focus, label.field select:focus, label.field textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+label.field input[type="checkbox"] { width: 16px; min-height: 16px; height: 16px; padding: 0; -webkit-appearance: auto; appearance: auto; box-shadow: none; }
+.field-label { font-size: var(--t-sm); color: var(--muted); }
+label.field.check { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); font-weight: 400; font-size: var(--t-base); }
+label.field.check input[type="checkbox"] { width: 16px; flex: none; }
+.toggles { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
 .toggles label {
-  display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 100px;
-  padding: 5px 12px; font-size: 13px; color: var(--ink); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-strong); border-radius: 100px;
+  min-height: var(--ctl-sm); padding: 0 10px 0 8px; font-size: var(--t-sm); font-weight: 500; color: var(--ink-2); cursor: pointer;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.toggles input { margin: 0; accent-color: var(--ink); }
+.toggles label:hover { background: var(--hover); }
+.toggles label:has(input:checked) { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-ink); }
+.toggles label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.toggles input { margin: 0; }
 
-.contact { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 11px 13px; margin-bottom: 8px; position: relative; background: var(--card); }
-.contact.primary { border-color: var(--ink); box-shadow: inset 3px 0 0 var(--ink); }
-.contact .c-name { font-weight: 600; padding-right: 76px; }
-.contact .c-role { font-size: 13px; color: var(--muted); }
-.contact .c-line { font-size: 13.5px; margin-top: 4px; word-break: break-word; }
-.contact .c-line a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--grey-2); text-underline-offset: 3px; }
-.contact .c-actions { position: absolute; top: 4px; right: 4px; display: flex; }
-.tag { font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; padding: 2px 7px; border-radius: 100px; border: 1px solid var(--line); color: var(--grey); margin-left: 6px; vertical-align: 2px; }
-.tag.primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
-.tag.dept { background: var(--accent-soft); border-color: transparent; color: var(--accent-dark); }
+/* Contactpersonen: rijen met een haarlijn ertussen, geen doosjes. */
+.contact { padding: 10px 0; border-top: 1px solid var(--line); position: relative; }
+.contact:first-of-type { border-top: 0; padding-top: 0; }
+.contact:last-of-type { padding-bottom: 0; }
+.contact .c-name { font-weight: 500; padding-right: 64px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.contact .c-role { font-size: var(--t-sm); color: var(--muted); }
+.contact .c-line { display: flex; align-items: flex-start; gap: 7px; font-size: var(--t-base); margin-top: 4px; overflow-wrap: anywhere; }
+.contact .c-line .ic { width: 14px; height: 14px; margin-top: 2px; color: var(--muted); }
+.contact .c-line.muted { font-size: var(--t-sm); }
+.contact .c-actions { position: absolute; top: 4px; right: -4px; display: flex; }
+.contact:first-of-type .c-actions { top: -6px; }
+.tag { display: inline-block; font-size: var(--t-xs); font-weight: 500; line-height: 1.45; padding: 0 7px; border-radius: 100px; background: var(--hover); color: var(--ink-2); white-space: nowrap; }
+.tag.primary { background: var(--accent-soft); color: var(--accent-ink); }
+/* Een product draagt zijn eigen kleur: bleek als ondergrond, donkerder als tekst. */
+.tag.prod { background: color-mix(in srgb, var(--c) 14%, var(--panel)); color: color-mix(in srgb, var(--c) 70%, var(--ink)); }
+.tag.dept { background: none; box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--muted); }
 
 .timeline { list-style: none; margin: 0; padding: 0; }
-.timeline li { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-.timeline li:last-child { border-bottom: 0; }
+.timeline li { display: flex; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+.timeline li:first-child { border-top: 0; padding-top: 0; }
 /* De fiche toont de recentste contactmomenten; de rest staat er wel maar is
    verborgen tot je de lijst openklapt. Verbergen en niet weglaten, zodat een
    afdruk ze allemaal kan tonen (zie @media print). */
 .timeline.capped li.extra { display: none; }
-.more-acts { margin-top: 10px; }
-.timeline .t-date { font-size: 12px; color: var(--grey); width: 78px; flex: none; padding-top: 2px; font-weight: 500; }
+.more-acts { margin-top: 10px; margin-right: 4px; }
+.timeline .t-date { font-size: var(--t-sm); color: var(--muted); width: 76px; white-space: nowrap; flex: none; padding-top: 1px; font-variant-numeric: tabular-nums; }
 .timeline .t-body { flex: 1; min-width: 0; }
-.timeline .t-type { font-weight: 600; }
-.timeline .t-note { font-size: 13.5px; margin-top: 3px; white-space: pre-wrap; word-break: break-word; }
-.timeline .t-sub { font-size: 12.5px; color: var(--muted); }
-.type-pill { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; }
-.fiche-foot { padding: 16px 20px 32px; display: flex; justify-content: space-between; gap: 8px; }
+.timeline .t-type { font-weight: 500; }
+.timeline .t-note { font-size: var(--t-base); margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+.timeline .t-sub { font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+.type-pill { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
+.fiche-foot { padding: 16px 20px 28px; display: flex; justify-content: space-between; gap: 8px; }
 
 /* ---------- adres zoeken ---------- */
 .addr-list {
-  position: fixed; z-index: 1200; margin: 0; padding: 4px 0; list-style: none;
-  background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-float);
+  position: fixed; z-index: 1200; margin: 0; padding: 4px; list-style: none;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop);
   max-height: 260px; overflow-y: auto;
 }
-.addr-list li { padding: 9px 12px; font-size: 13.5px; font-weight: 400; color: var(--ink); cursor: pointer; line-height: 1.35; }
+.addr-list li { padding: 7px 10px; border-radius: 4px; font-size: var(--t-base); color: var(--ink); cursor: pointer; line-height: 1.35; }
 .addr-list li:hover, .addr-list li.active { background: var(--hover); }
 .addr-list li.addr-empty { color: var(--muted); cursor: default; background: none; }
 
 /* ---------- dialoog ---------- */
 dialog {
-  border: 0; border-radius: var(--radius-lg); padding: 0; width: min(640px, 94vw); max-height: 92dvh;
-  box-shadow: 0 30px 60px -20px rgba(0, 0, 0, .45); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 10px; padding: 0; width: min(600px, 94vw); max-height: 92dvh;
+  background: var(--panel); box-shadow: var(--shadow-dialog); color: var(--ink);
 }
-dialog::backdrop { background: rgba(22, 22, 22, .45); }
-dialog form { padding: 22px 24px; }
-dialog h2 { margin: 0 0 16px; font-size: 19px; }
-dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+dialog[open] { animation: dialog-in var(--slow) var(--ease); }
+dialog::backdrop { background: var(--scrim); animation: fade-in var(--slow) ease-out; }
+dialog form { padding: 20px 24px; }
+dialog h2 { margin: 0 0 16px; font-size: var(--t-md); overflow-wrap: anywhere; }
+dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
 .toast {
   position: fixed; left: 50%; bottom: calc(24px + var(--tabbar-h) + var(--safe-bottom)); transform: translateX(-50%);
-  background: var(--ink); color: var(--paper); padding: 10px 18px; border-radius: var(--radius); z-index: 5000;
-  box-shadow: var(--shadow-float); font-size: 14px; white-space: nowrap;
+  background: var(--tip-bg); color: var(--tip-ink); padding: 8px 14px; border-radius: var(--radius); z-index: 5000;
+  box-shadow: var(--shadow-pop); font-size: var(--t-base); font-weight: 500; white-space: nowrap;
+  animation: toast-in var(--slow) var(--ease);
 }
 
 /* ---------- login ---------- */
 .login {
-  position: fixed; inset: 0; z-index: 6000; background: var(--paper-2);
+  position: fixed; inset: 0; z-index: 6000; background: var(--bg);
   display: flex; align-items: center; justify-content: center; padding: 16px;
 }
 .login-card {
-  background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow-card);
-  padding: 30px 26px; width: min(380px, 100%); display: flex; flex-direction: column; gap: 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-pop);
+  padding: 28px 24px; width: min(360px, 100%); display: flex; flex-direction: column; gap: 12px;
 }
-.login-logo { height: 40px; width: auto; align-self: flex-start; margin-bottom: 4px; }
+.login-logo { height: 32px; width: auto; align-self: flex-start; margin-bottom: 8px; }
 .login-card p { margin: 0; }
-.login-card .btn { min-height: 46px; margin-top: 4px; }
-.login-error { color: var(--red); font-size: 13px; min-height: 1em; }
+.login-card .btn { min-height: 36px; margin-top: 4px; }
+.login-error { color: var(--red-ink); font-size: var(--t-sm); min-height: 1.45em; }
 
 /* ---------- tabbalk (enkel gsm) ---------- */
 .tabbar { display: none; }
 
+/* ---------- pagina's naast de kaart ---------- */
+body[data-view="agenda"] .sidebar, body[data-view="agenda"] .map-wrap, body[data-view="agenda"] .fiche,
+body[data-view="stats"] .sidebar, body[data-view="stats"] .map-wrap, body[data-view="stats"] .fiche,
+body[data-view="users"] .sidebar, body[data-view="users"] .map-wrap, body[data-view="users"] .fiche { display: none; }
+.agenda-view, .stats-view, .users-view {
+  flex: 1; overflow-y: auto; min-width: 0; -webkit-overflow-scrolling: touch;
+  padding: 24px max(24px, calc((100% - 1120px) / 2)) 48px;
+  animation: fade-in var(--slow) ease-out;
+}
+/* Ruim onderaan: de uitklapper van de laatste rij valt open naar beneden en
+   moet ergens heen kunnen zonder dat je eerst moet scrollen. */
+.users-view { padding-bottom: 120px; }
+
 /* ---------- agenda ---------- */
-body[data-view="agenda"] .sidebar, body[data-view="agenda"] .map-wrap, body[data-view="agenda"] .fiche { display: none; }
-.agenda-view { flex: 1; overflow-y: auto; padding: 22px 26px 44px; min-width: 0; -webkit-overflow-scrolling: touch; }
-.ag-nav { display: flex; gap: 6px; }
+.ag-nav { display: flex; gap: 4px; }
+.ag-nav .btn { min-width: var(--ctl-sm); }
 /* Het logboek: de keuzes erboven, de samenvatting, en "toon meer" eronder. */
 /* De schakelaar Gepland | Logboek: twee even brede knoppen. Zonder vaste
    breedte is de vette, actieve knop een pixel breder en verspringt het geheel
    bij elke klik. */
 .agenda-view .s-seg button { min-width: 100px; }
-.log-filters { margin-bottom: 14px; }
-.log-filters input[type="search"] { min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); font: inherit; }
-.log-sum, .log-more, .log-only { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; font-size: 13.5px; }
+.log-filters { margin-bottom: 16px; }
+.log-filters input[type="search"] {
+  min-height: var(--ctl); padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel); font: inherit; -webkit-appearance: none; appearance: none;
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.log-filters input[type="search"]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.log-filters .pick { min-width: 150px; }
+.log-sum, .log-more, .log-only { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; font-size: var(--t-base); }
 .log-sum .btn { margin-left: auto; }
 .log-more { margin-top: 14px; }
 
-.cal { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); padding: 14px 16px 16px; margin-bottom: 22px; }
-.cal-month { font-weight: 600; font-size: 16px; text-transform: capitalize; margin-bottom: 10px; }
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
-.cal-wd { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--grey); text-align: center; padding-bottom: 4px; }
-.cal-day { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); min-height: 58px; padding: 5px 6px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font: inherit; color: var(--ink); }
-.cal-day.empty { border-color: transparent; background: none; }
-.cal-n { font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--grey); }
+/* De kalender is één raster van haarlijnen, geen doosjes in een doos: elk
+   vakje trekt alleen zijn rechter- en onderlijn. */
+.cal { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); margin-bottom: 24px; overflow: hidden; }
+.cal-month { font-weight: 600; font-size: var(--t-md); text-transform: capitalize; padding: 12px 14px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); background: var(--panel-2); border-top: 1px solid var(--line); margin-bottom: -1px; }
+.cal-wd, .cal-day { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.cal-grid > :nth-child(7n) { border-right: 0; }
+.cal-wd { font-size: var(--t-xs); font-weight: 500; color: var(--muted); background: var(--panel-2); padding: 5px 8px; }
+.cal-day {
+  border-width: 0 1px 1px 0; border-style: solid; border-color: var(--line); border-radius: 0; background: var(--panel); min-height: 58px; padding: 6px 8px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font: inherit; color: var(--ink);
+  transition: background var(--fast) var(--ease);
+}
+.cal-day.empty { background: var(--panel-2); }
+/* Het dagcijfer staat in een vast vierkantje, in het midden. Geen tabular-nums
+   hier: daarin heeft de 1 links lucht en staat "10" scheef in zijn rondje.
+   Elk cijfer heeft toch zijn eigen vakje, dus uitlijnen op breedte hoeft niet. */
+.cal-n { font-size: var(--t-sm); font-variant-numeric: normal; line-height: 1; color: var(--muted); width: 22px; height: 22px; display: inline-grid; place-items: center; text-align: center; border-radius: 50%; margin: -2px 0 0 -5px; }
 .cal-dots { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
 .cal-dots i { display: block; width: 7px; height: 7px; border-radius: 50%; }
-.cal-dots em { font-size: 10px; font-style: normal; color: var(--grey); }
-.cal-day.today { border-color: var(--ink); }
-.cal-day.today .cal-n { color: var(--ink); font-weight: 700; }
-.cal-day.late { background: rgba(217, 58, 48, 0.07); }
-.cal-day.sel { background: var(--ink); border-color: var(--ink); }
-.cal-day.sel .cal-n, .cal-day.sel .cal-dots em { color: var(--paper); }
+.cal-dots em { font-size: var(--t-xs); font-style: normal; color: var(--muted); }
+.cal-day.today .cal-n { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.cal-day.late { background: var(--red-soft); }
+.cal-day.sel { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); }
+.cal-day.sel .cal-n { color: var(--accent-ink); font-weight: 600; }
+.cal-day.sel.today .cal-n { color: var(--on-accent); }
 button.cal-day:hover:not(.sel) { background: var(--hover); }
+button.cal-day:focus-visible { outline-offset: -2px; }
 
-.ag-block { margin-bottom: 22px; }
-.ag-h { margin: 0 0 8px; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--grey); }
-.ag-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); overflow: hidden; }
-.ag-row { display: flex; gap: 12px; padding: 11px 14px; align-items: flex-start; }
+.ag-block { margin-bottom: 24px; }
+.ag-h { margin: 0 0 8px; font-size: var(--t-base); font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+.ag-h .badge { margin-left: 0; }
+.ag-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); overflow: hidden; }
+.ag-row { display: flex; gap: 12px; padding: 10px 14px; align-items: flex-start; transition: background var(--fast) var(--ease); }
+.ag-row:hover { background: var(--panel-2); }
 .ag-row + .ag-row { border-top: 1px solid var(--line); }
-.ag-row.late { background: rgba(217, 58, 48, 0.05); }
-.ag-date { width: 92px; flex: none; }
-.ag-date b { display: block; font-size: 13px; font-weight: 600; text-transform: capitalize; }
-.ag-date span { font-size: 11.5px; color: var(--muted); }
+.ag-row.late .ag-date b, .ag-row.late .ag-date span { color: var(--red-ink); }
+.ag-date { width: 96px; flex: none; }
+.ag-date b { display: block; font-size: var(--t-base); font-weight: 500; text-transform: capitalize; font-variant-numeric: tabular-nums; }
+.ag-date span { font-size: var(--t-sm); color: var(--muted); }
 .ag-body { flex: 1; min-width: 0; }
-.ag-name { font-weight: 600; }
-.ag-sub { font-size: 12.5px; color: var(--muted); }
-.ag-note { font-size: 13.5px; margin-top: 3px; white-space: pre-wrap; word-break: break-word; }
+.ag-name { font-weight: 500; overflow-wrap: anywhere; }
+.ag-sub { font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+.ag-note { font-size: var(--t-base); margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); max-width: 75ch; }
 .ag-acts { display: flex; gap: 2px; flex: none; }
 
 /* Gepland in de fiche: de relatieve dag onder de datum, te laat in het rood. */
-.timeline .t-rel { display: block; font-size: 11px; font-weight: 400; color: var(--muted); }
-.timeline li.late .t-date { color: var(--red); }
+.timeline .t-rel { display: block; font-size: var(--t-xs); color: var(--muted); }
+.timeline li.late .t-date, .timeline li.late .t-rel { color: var(--red-ink); }
 .timeline .t-acts { display: flex; gap: 2px; flex: none; }
 
 /* ---------- statistieken ---------- */
-body[data-view="stats"] .sidebar, body[data-view="stats"] .map-wrap, body[data-view="stats"] .fiche { display: none; }
-.stats-view { flex: 1; overflow-y: auto; padding: 22px 26px 44px; min-width: 0; -webkit-overflow-scrolling: touch; }
-.s-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
-.s-head h2 { margin: 0; font-size: clamp(24px, 3vw, 32px); }
-.s-filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.s-filters label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--grey); font-weight: 500; }
-.s-filters select { border: 1px solid var(--line); border-radius: var(--radius); padding: 0 10px; min-height: 36px; background: var(--paper); font-size: 15px; }
-.s-seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--paper); }
-.s-seg button { border: 0; background: none; padding: 0 14px; min-height: 36px; font-size: 13.5px; font-weight: 500; color: var(--ink-soft); }
-.s-seg button + button { border-left: 1px solid var(--line); }
-.s-seg button.active { background: var(--ink); color: var(--paper); font-weight: 600; }
+.s-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.s-head h2 { margin: 0; font-size: var(--t-lg); }
+.s-filters { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
+.s-filters label { display: flex; align-items: center; gap: 8px; font-size: var(--t-sm); color: var(--muted); font-weight: 500; }
+.s-filters select {
+  border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 28px 0 10px; min-height: var(--ctl); background: var(--panel) var(--chev) no-repeat right 10px center;
+  font-size: var(--t-base); color: var(--ink); -webkit-appearance: none; appearance: none;
+}
+/* Een schakelaar: grijs spoor, de gekozene als wit plaatje erbovenop. */
+.s-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius); background: var(--hover); }
+.s-seg button {
+  border: 0; background: none; padding: 0 12px; min-height: 28px; border-radius: 4px; font-size: var(--t-base); font-weight: 500; color: var(--muted);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.s-seg button:hover { color: var(--ink); }
+.s-seg button.active { background: var(--panel); color: var(--ink); box-shadow: 0 1px 2px rgba(17, 24, 39, 0.14); }
 
 .s-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; margin-bottom: 16px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; }
-.s-tile { background: var(--paper); padding: 14px 16px; }
-.s-tile b { display: block; font-size: 28px; font-weight: 600; line-height: 1.15; font-variant-numeric: tabular-nums; }
-.s-tile span { font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--grey); }
-.s-tile small { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+.s-tile { background: var(--panel); padding: 14px 16px; display: flex; flex-direction: column; }
+.s-tile b { order: 2; font-size: var(--t-xl); font-weight: 600; line-height: 1.2; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.s-tile span { order: 1; font-size: var(--t-sm); color: var(--muted); margin-bottom: 2px; }
+.s-tile small { order: 3; font-size: var(--t-sm); color: var(--muted); margin-top: 2px; }
 .s-tiles.small { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin-bottom: 0; }
-.s-tiles.small .s-tile { background: var(--card); }
-.s-tiles.small .s-tile b { font-size: 20px; }
+.s-tiles.small .s-tile b { font-size: var(--t-lg); }
 
 .s-grid-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.s-card { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 18px 20px; min-width: 0; }
+.s-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 16px 20px 20px; min-width: 0; }
 .s-card.wide { grid-column: 1 / -1; }
-.s-card h3 { margin: 0 0 14px; font-size: 11px; font-weight: 600; letter-spacing: .2em; text-transform: uppercase; color: var(--grey); }
+.s-card h3 { margin-bottom: 12px; }
 
-.s-legend { display: flex; gap: 16px; font-size: 13px; color: var(--ink-soft); margin-bottom: 10px; }
+.s-empty { margin: 0; padding: 20px 0 4px; font-size: var(--t-base); }
+.s-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: var(--t-sm); color: var(--ink-2); margin-bottom: 10px; }
 .s-legend span, .s-target-head span:first-child { display: inline-flex; align-items: center; gap: 7px; }
 .s-legend i, .s-target-head i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
 
 .s-cols { display: flex; gap: 8px; height: 230px; }
-.s-yaxis { display: flex; flex-direction: column; justify-content: space-between; font-size: 11px; color: var(--grey); padding-bottom: 22px; text-align: right; min-width: 22px; font-variant-numeric: tabular-nums; }
+.s-yaxis { display: flex; flex-direction: column; justify-content: space-between; font-size: var(--t-xs); color: var(--muted); padding-bottom: 22px; text-align: right; min-width: 22px; font-variant-numeric: tabular-nums; }
 .s-yaxis span { transform: translateY(-50%); }
 .s-yaxis span:last-child { transform: translateY(50%); }
-.s-plot { flex: 1; position: relative; padding-bottom: 22px; }
-.s-grid { position: absolute; left: 0; right: 0; border-top: 1px solid var(--line); margin-bottom: 22px; }
-.s-bars { position: absolute; inset: 0 0 22px 0; display: flex; gap: 6px; }
-.s-col { flex: 1; position: relative; display: flex; align-items: flex-end; justify-content: center; outline: none; border-radius: var(--radius); }
+.s-plot { flex: 1; position: relative; margin-bottom: 22px; }
+.s-grid { position: absolute; left: 0; right: 0; border-top: 1px solid var(--line); }
+.s-bars { position: absolute; inset: 0; display: flex; gap: 6px; }
+.s-col { flex: 1; position: relative; display: flex; align-items: flex-end; justify-content: center; border-radius: var(--radius); transition: background var(--fast) var(--ease); }
 .s-col:hover, .s-col:focus-visible { background: var(--hover); }
 .s-stack { width: min(28px, 72%); display: flex; flex-direction: column-reverse; gap: 2px; }
 .s-stack div { min-height: 2px; }
-.s-stack div:last-child { border-radius: 4px 4px 0 0; }
-.s-xlabel { position: absolute; bottom: -22px; font-size: 11px; color: var(--grey); }
+.s-stack div:last-child { border-radius: 3px 3px 0 0; }
+.s-xlabel { position: absolute; bottom: -22px; font-size: var(--t-xs); color: var(--muted); white-space: nowrap; }
 
 .s-hbars { display: flex; flex-direction: column; gap: 2px; }
-.s-hrow { display: grid; grid-template-columns: minmax(90px, 38%) 1fr 36px; align-items: center; gap: 10px; padding: 5px 6px; border-radius: var(--radius); outline: none; }
+.s-hrow { display: grid; grid-template-columns: minmax(90px, 38%) 1fr 36px; align-items: center; gap: 10px; padding: 5px 6px; margin: 0 -6px; border-radius: var(--radius); transition: background var(--fast) var(--ease); }
 .s-hrow:hover, .s-hrow:focus-visible { background: var(--hover); }
-.s-hlabel { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.s-htrack { height: 14px; }
+.s-hlabel { font-size: var(--t-base); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.s-htrack { height: 12px; }
 .s-hbar { height: 100%; display: flex; gap: 2px; min-width: 3px; }
-.s-hbar div:last-child { border-radius: 0 4px 4px 0; }
-.s-hval { font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; }
+.s-hbar div:last-child { border-radius: 0 3px 3px 0; }
+.s-hval { font-size: var(--t-base); text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; }
 
 .s-target { margin-bottom: 16px; }
-.s-target-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 7px; flex-wrap: wrap; }
-.s-target-head input { width: 68px; border: 1px solid var(--line); border-radius: var(--radius); padding: 3px 7px; font-size: 15px; }
-.s-progress { height: 8px; background: var(--paper-2); border-radius: 100px; overflow: hidden; }
+.s-target:last-child { margin-bottom: 0; }
+.s-target-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: var(--t-base); margin-bottom: 7px; flex-wrap: wrap; }
+.s-target-head input { width: 68px; min-height: var(--ctl-sm); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 7px; font-size: var(--t-base); background: var(--panel); }
+.s-target-head input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.s-progress { height: 6px; background: var(--hover); border-radius: 100px; overflow: hidden; }
 .s-progress div { height: 100%; border-radius: 100px; }
 
 .s-status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
-.s-status div { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 11px; display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 7px; }
-.s-status b { font-size: 20px; font-weight: 600; }
-.s-status span { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); }
+.s-status div { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 7px; }
+.s-status b { font-size: var(--t-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.s-status span { grid-column: 1 / -1; font-size: var(--t-sm); color: var(--muted); }
 
-.s-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.s-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-.s-table th { text-align: left; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--paper); background: var(--ink); font-weight: 600; padding: 9px 10px; white-space: nowrap; }
-.s-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.s-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -20px -20px; border-top: 1px solid var(--line); }
+.s-table { width: 100%; border-collapse: collapse; font-size: var(--t-base); }
+.s-table th { text-align: left; font-size: var(--t-xs); font-weight: 600; color: var(--muted); background: var(--panel-2); padding: 7px 10px; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.s-table td { padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.s-table tr:last-child td { border-bottom: 0; }
+.s-table th:first-child, .s-table td:first-child { padding-left: 20px; }
+.s-table th:last-child, .s-table td:last-child { padding-right: 20px; }
+.s-table tbody tr { transition: background var(--fast) var(--ease); }
+.s-table tbody tr:hover { background: var(--panel-2); }
+.s-table .dot { margin-right: 7px; }
 .s-table .num { text-align: right; font-variant-numeric: tabular-nums; }
-.s-tip { position: fixed; z-index: 7000; background: var(--ink); color: var(--paper); font-size: 12.5px; padding: 8px 11px; border-radius: var(--radius); pointer-events: none; box-shadow: var(--shadow-float); line-height: 1.5; }
+.s-tip { position: fixed; z-index: 7000; background: var(--tip-bg); color: var(--tip-ink); font-size: var(--t-sm); padding: 6px 10px; border-radius: var(--radius); pointer-events: none; box-shadow: var(--shadow-pop); line-height: 1.5; }
 
 /* De stempel onderaan een dialoog: wie heeft dit ingevoerd, en wanneer. */
-.stamp { font-size: 12px; margin: 10px 0 0; }
+.stamp { font-size: var(--t-sm); margin: 12px 0 0; }
 
 /* ---------- gebruikers ---------- */
-body[data-view="users"] .sidebar, body[data-view="users"] .map-wrap, body[data-view="users"] .fiche { display: none; }
-/* Ruim onderaan: de uitklapper van de laatste rij valt open naar beneden en
-   moet ergens heen kunnen zonder dat je eerst moet scrollen. */
-.users-view { flex: 1; overflow-y: auto; padding: 22px 26px 120px; min-width: 0; -webkit-overflow-scrolling: touch; }
 .u-head { margin-bottom: 16px; }
-.u-head h2 { margin: 0 0 6px; font-size: clamp(24px, 3vw, 32px); }
+.u-head h2 { margin: 0 0 4px; font-size: var(--t-lg); }
+.u-head .muted { font-size: var(--t-base); max-width: 75ch; }
 /* Geen overflow: hidden. Dat stond er voor de ronde hoeken, maar het knipte
    ook de uitklapper van de onderste rij af — die valt buiten deze doos. De
    rijen hebben zelf geen achtergrond, dus de hoeken blijven zonder clip even
    netjes. */
-.u-list { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); }
-.u-row { display: flex; gap: 14px; padding: 13px 16px; align-items: center; flex-wrap: wrap; }
+.u-list { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+.u-row { display: flex; gap: 14px; padding: 12px 16px; align-items: center; flex-wrap: wrap; }
 .u-row + .u-row { border-top: 1px solid var(--line); }
 .u-who { flex: 1 1 200px; min-width: 0; }
-.u-who input { width: 100%; border: 1px solid transparent; border-radius: var(--radius); padding: 3px 6px; margin-left: -6px; font: inherit; font-weight: 600; background: none; color: var(--ink); }
-.u-who input:hover { border-color: var(--line); }
-.u-who input:focus { border-color: var(--accent); background: var(--paper); outline: none; }
-.u-mail { font-size: 12.5px; color: var(--muted); word-break: break-all; }
+.u-who input {
+  width: 100%; height: var(--ctl); border: 1px solid transparent; border-radius: var(--radius); padding: 0 8px; margin-left: -8px; font: inherit; font-weight: 500; background: none; color: var(--ink);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.u-who input:hover { border-color: var(--line-strong); }
+.u-who input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); background: var(--panel); outline: none; }
+.u-mail { font-size: var(--t-sm); color: var(--muted); word-break: break-all; }
 /* Vaste breedtes, anders schuiven de keuzelijstjes mee met de lengte van de
    naam en staat er geen kolom meer onder elkaar. */
 .u-role { flex: 0 0 210px; }
-.u-role select { width: 100%; border: 1px solid var(--line); border-radius: var(--radius); padding: 0 10px; min-height: 36px; background: var(--paper); font-size: 14.5px; }
-.u-role small { display: block; font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+.u-role select {
+  width: 100%; border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 28px 0 10px; min-height: var(--ctl);
+  background: var(--panel) var(--chev) no-repeat right 10px center; font-size: var(--t-base); -webkit-appearance: none; appearance: none;
+}
+.u-role small { display: block; font-size: var(--t-sm); color: var(--muted); margin-top: 3px; }
 .u-scope { flex: 0 0 240px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.u-scope .field-label { font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--grey); }
-.u-scope label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
-.u-scope small { flex: 1 1 100%; font-size: 11.5px; color: var(--muted); }
+.u-scope .field-label { font-size: var(--t-sm); font-weight: 500; color: var(--muted); }
+.u-scope label { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-base); }
+.u-scope small { flex: 1 1 100%; font-size: var(--t-sm); color: var(--muted); }
+
+/* ---------- de uitklapper ---------- */
 /* De productkeuze zit in een uitklapper. Met twee producten passen de vinkjes
    nog naast elkaar, met vijf niet meer; de samenvatting op de summary zegt wat
    er aan staat, zodat je niet hoeft open te klappen om het te zien.
    Staat hier los van .u-scope: dezelfde uitklapper dient voor de producten van
    een gebruiker, die van een contactpersoon en de filter op de statistieken. */
 .u-scope .pick { flex: 1 1 auto; }
-.pick { position: relative; }
+.pick { position: relative; font-weight: 400; }
 /* Flex en geen float: met een float zakt het pijltje naast een lange
    samenvatting naar de volgende regel en wordt de knop twee regels hoog. */
-.pick > summary { display: flex; align-items: center; gap: 8px;
-  cursor: pointer; list-style: none; padding: 7px 10px; font-size: 14px;
-  border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); }
+.pick > summary {
+  display: flex; align-items: center; gap: 8px;
+  cursor: pointer; list-style: none; min-height: var(--ctl); padding: 0 10px; font-size: var(--t-base); color: var(--ink);
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.pick > summary:hover { background: var(--hover); }
+.pick[open] > summary { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
 .pick > summary::-webkit-details-marker { display: none; }
 .pick-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pick > summary::after { content: "\25BE"; flex: none; color: var(--grey); line-height: 1; }
-.pick[open] > summary::after { content: "\25B4"; }
-.pick-list { position: absolute; z-index: 5; min-width: 100%; margin-top: 4px;
-  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px;
+/* Het pijltje is getekend, geen teken uit het lettertype: het draait mee
+   wanneer de lijst opengaat. */
+.pick > summary::after {
+  content: ""; flex: none; width: 10px; height: 6px; background: var(--chev) no-repeat center;
+  transition: transform var(--fast) var(--ease);
+}
+.pick[open] > summary::after { transform: rotate(180deg); }
+.pick-list {
+  position: absolute; z-index: 5; min-width: 100%; margin-top: 4px;
+  display: flex; flex-direction: column; gap: 0; padding: 4px;
   border: 1px solid var(--line); border-radius: var(--radius-lg);
-  background: var(--paper); box-shadow: var(--shadow-float); }
-.pick-list label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; white-space: nowrap; }
+  background: var(--panel); box-shadow: var(--shadow-pop);
+  transform-origin: top left; animation: pop-in var(--fast) var(--ease);
+}
+.pick-list label {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px;
+  font-size: var(--t-base); font-weight: 400; color: var(--ink); white-space: nowrap; cursor: pointer;
+  transition: background var(--fast) var(--ease);
+}
+.pick-list label:hover { background: var(--hover); }
+.pick-list input { margin: 0; }
 /* De scheiding tussen de rij "alle" en de losse producten. Die rij staat op het
    beheerscherm en op de statistiekpagina. */
-.pick-list .pick-all { border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 2px; }
+.pick-list .pick-all { border-bottom: 1px solid var(--line); border-radius: 4px 4px 0 0; padding-bottom: 8px; margin-bottom: 4px; }
 
 /* ---------- rechten ---------- */
 /* Wat een rol niet mag, staat niet op het scherm. Dat gebeurt hier en niet in
@@ -558,39 +830,57 @@ body[data-rights~="no-import"] #importBtn { display: none !important; }
    kopje boven het niets staan. Dezelfde truc als bij het afdrukken. */
 body[data-rights~="no-write"] .field:has([data-act="place"]),
 body[data-rights~="no-write"] .field:has([data-act="drag"]) { display: none; }
+/* Zonder de knoppen rechtsboven hoeft een naam er geen plaats voor te laten. */
+body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
 
 /* ---------- tablet ---------- */
-/* Toetsenbordfocus moet te zien zijn: enkel een andere randkleur is te zwak.
-   Deze regels staan na de :focus-regels hierboven en halen het dus. */
-.search input:focus-visible,
-label.field input:focus-visible,
-label.field select:focus-visible,
-label.field textarea:focus-visible,
-.fiche-title:focus-visible,
-.list li:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
-.list li.selected:focus-visible { outline-color: var(--accent); }
-
 @media (max-width: 1180px) {
-  .kpis { display: none; }
-  .fiche { position: absolute; right: 0; top: 0; bottom: 0; z-index: 900; box-shadow: -10px 0 30px -12px rgba(0, 0, 0, .25); }
+  /* Minder plaats: de drie statustellers blijven, de rest valt weg. Die
+     staat ook op de statistiekpagina. */
+  .kpi:nth-child(n+4) { display: none; }
+  /* En wat ruimte terugwinnen voor die drie: het woordmerk naast het logo
+     gaat weg en alles schuift iets dichter op elkaar. */
+  .brand__region { display: none; }
+  .topbar { gap: 12px; }
+  .kpis { column-gap: 14px; padding-left: 0; }
+  .top-actions { gap: 0; }
+  .top-actions .btn { padding: 0 9px; }
+  .save-state { margin-right: 4px; }
+  .fiche { position: absolute; right: 0; top: 0; bottom: 0; z-index: 900; box-shadow: var(--shadow-side); }
 }
 @media (max-width: 900px) {
   .s-grid-cards { grid-template-columns: 1fr; }
+  /* Nog smaller: van "Opgeslagen" blijft het vinkje (de tooltip zegt de
+     rest). Een fout of "bezig" blijft voluit staan. Op een telefoon staan er
+     geen tellers en komt het woord terug. */
+  .save-state[data-state="saved"] { font-size: 0; }
 }
 
 /* ---------- gsm (iPhone) ---------- */
 @media (max-width: 760px) {
-  :root { --tabbar-h: 58px; }
-  body { font-size: 16px; }
+  /* Dezelfde vijf stappen, elk een maat groter: een duim is geen muis, en
+     onder de 16px zoomt iOS in zodra je een veld aantikt. */
+  :root {
+    --tabbar-h: 56px;
+    --t-xs: 12px; --t-sm: 13px; --t-base: 15px; --t-md: 16px; --t-lg: 18px; --t-xl: 22px;
+    --ctl: 44px; --ctl-sm: 36px;
+  }
   .desktop-only { display: none !important; }
+  /* Op een telefoon is de balk te smal voor tellers naast de knoppen. */
+  .kpis { display: none; }
 
-  .topbar { padding: calc(8px + var(--safe-top)) 14px 8px; gap: 10px; }
+  .topbar { padding: var(--safe-top) 12px 0; gap: 10px; min-height: 52px; }
   /* Op gsm is er naast de knoppen geen plaats voor het woordmerk: het logo zegt
      het al, en anders loopt de balk buiten het scherm en schuift de hele
      pagina zijwaarts. */
   .brand__region { display: none; }
-  .brand__logo { height: 26px; }
-  .save-state { font-size: 11px; }
+  .save-state { font-size: var(--t-xs); margin-right: 4px; }
+  .save-state[data-state="saved"] { font-size: var(--t-xs); }
+  .top-actions .btn { min-height: 36px; }
+  .top-actions .btn.icon { width: 36px; }
+  .menu__list button { padding: 12px; }
+  .menu__theme { padding: 10px 6px 6px 12px; }
+  .menu__theme .s-seg button { min-height: 32px; padding: 0 10px; }
 
   /* één scherm tegelijk, gekozen via de tabbalk */
   .layout { padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom)); }
@@ -598,26 +888,30 @@ label.field textarea:focus-visible,
   body:not([data-view="list"]) .sidebar { display: none; }
   body:not([data-view="map"]) .map-wrap { display: none; }
 
-  .search { padding: 12px 14px 8px; }
-  .search input { height: 46px; font-size: 16px; }
+  .search { padding: 12px 12px 8px; }
+  .search__icon { left: 24px; top: 26px; }
+  .search input { font-size: var(--t-md); padding-left: 36px; }
   /* Alleen de afgeleide filters schuiven zijwaarts. Op .picks mag dat niet:
      overflow maakt van de rij een knipkader, en dan valt de uitklapper
      erbuiten — op gsm gebeurde er dan niets behalve dat het pijltje omsloeg. */
-  .filters:not(.picks) { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px 14px; }
+  .filters { padding: 0 12px 8px; }
+  .filters:not(.picks) { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 10px; }
   .filters:not(.picks)::-webkit-scrollbar { display: none; }
-  /* Op gsm blijven de drie náást elkaar: drie volle regels zouden de lijst te
-     ver naar beneden duwen. Elk een gelijk derde, dus verspringt de rij niet
-     en loopt ze niet buiten het scherm; de tekst kort af op het pijltje. */
-  .filters.picks { position: relative; flex-direction: row; align-items: center; }
-  .filters.picks .pick { position: static; flex: 1 1 0; min-width: 0; }
-  /* De uitklapper hangt onder de hele rij in plaats van onder één pil: een
-     lijst van een derde breed zou bij de rechtse pil buiten het scherm
+  /* Op gsm staan de uitklappers met twee naast elkaar: vier volle regels
+     zouden de lijst te ver naar beneden duwen, en vier op één regel kortten
+     af tot "Alle pr…". Twee gelijke kolommen, dus verspringt er niets. */
+  .filters.picks { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .filters.picks .pick { position: static; min-width: 0; }
+  .filters.picks .pick > summary { min-height: 38px; }
+  /* De uitklapper hangt onder de hele rij in plaats van onder één knop: een
+     lijst van een derde breed zou bij de rechtse buiten het scherm
      vallen. Vandaar ook position: static hierboven — dan is de rij zelf het
-     anker. De 14px is de padding van .filters, zodat het paneel onder de
-     pillen uitlijnt, en min-width terug op nul: de basisregel zet die op
+     anker. De 12px is de padding van .filters, zodat het paneel onder de
+     knoppen uitlijnt, en min-width terug op nul: de basisregel zet die op
      100% van het anker, en dat is hier de hele rij — met left én right
-     erbij stak het paneel dan 28px buiten het scherm. */
-  .filters.picks .pick-list { top: 100%; left: 14px; right: 14px; min-width: 0; }
+     erbij stak het paneel dan buiten het scherm. */
+  .filters.picks .pick-list { top: calc(100% - 4px); left: 12px; right: 12px; min-width: 0; }
+  .pick-list label { padding: 10px 8px; }
   /* Dezelfde ingreep voor de keuzes boven het logboek: op een telefoon staan
      ze met twee naast elkaar, en een lijst onder de rechtse viel anders
      buiten het scherm. Het blok zelf is het anker, de lijst is zo breed als
@@ -626,93 +920,103 @@ label.field textarea:focus-visible,
   .log-filters label { flex: 1 1 45%; min-width: 0; }
   .log-filters .pick { position: static; flex: 1 1 auto; min-width: 0; }
   .log-filters .pick-list { top: 100%; left: 0; right: 0; min-width: 0; }
-  .log-filters input[type="search"] { flex: 1 1 100%; }
+  .log-filters input[type="search"] { flex: 1 1 100%; font-size: var(--t-md); }
   .log-filters select { flex: 1 1 auto; min-width: 0; }
-  .chip { min-height: 36px; flex: none; font-size: 14px; }
-  .list { padding: 0 6px 18px; }
-  .list li { padding: 14px 10px; }
-  .list .name { font-size: 16px; }
+  .chip { flex: none; }
+  .list li { padding: 12px; }
 
   .map-tools { top: 10px; right: 10px; }
-  .legend { bottom: 12px; left: 10px; font-size: 12px; padding: 7px 10px; }
+  .legend { bottom: 12px; left: 10px; }
 
   /* fiche = volledig scherm */
   .fiche {
     position: fixed; inset: 0; width: 100%; z-index: 2000; border: 0;
-    padding-bottom: var(--safe-bottom); box-shadow: none;
+    padding-bottom: var(--safe-bottom); box-shadow: none; animation-name: sheet-up;
   }
-  .fiche-head { padding: calc(12px + var(--safe-top)) 16px 12px; }
-  .fiche-title { font-size: 19px; }
+  .fiche-head { padding: calc(10px + var(--safe-top)) 12px 10px 16px; }
   .show-on-map { display: inline-grid; }
   .section { padding: 16px; }
-  .status-pick button { min-height: 44px; font-size: 12.5px; }
-  .icon-btn { min-width: 44px; min-height: 44px; font-size: 18px; }
-  .contact .c-actions { top: 2px; right: 2px; }
-  .contact .c-name { padding-right: 92px; }
+  .status-pick button { min-height: 40px; }
+  .icon-btn { width: 44px; height: 44px; }
+  .ic { width: 18px; height: 18px; }
+  .contact .c-actions { top: 0; right: -10px; }
+  .contact:first-of-type .c-actions { top: -10px; }
+  .contact .c-name { padding-right: 84px; }
+  .timeline .t-acts, .ag-acts { margin: -8px -8px -8px 0; }
   .fiche-foot { padding: 16px 16px 28px; }
-  .fiche-foot .btn, .section h3 .btn { min-height: 40px; }
 
   /* formulieren schuiven van onderen open */
-  label.field input, label.field select, label.field textarea { font-size: 16px; min-height: 46px; }
+  label.field input, label.field select, label.field textarea { font-size: var(--t-md); }
   label.field input[type="checkbox"] { min-height: 20px; height: 20px; width: 20px; }
   dialog {
     width: 100%; max-width: 100%; max-height: calc(100dvh - var(--safe-top) - 24px);
-    margin: auto 0 0; border-radius: 14px 14px 0 0;
+    margin: auto 0 0; border-radius: 14px 14px 0 0; border-width: 1px 0 0;
   }
-  dialog[open] { animation: sheet-up .25s ease-out; }
+  dialog[open] { animation: sheet-up .25s var(--ease); }
   dialog form { padding: 20px 16px 0; }
   dialog .actions {
-    position: sticky; bottom: 0; background: var(--paper); margin: 18px -16px 0;
+    position: sticky; bottom: 0; background: var(--panel); margin: 18px -16px 0;
     padding: 12px 16px calc(12px + var(--safe-bottom)); border-top: 1px solid var(--line);
   }
-  dialog .actions .btn { flex: 1; min-height: 46px; }
+  dialog .actions .btn { flex: 1; }
   .grid { gap: 10px; }
 
   .tabbar {
     display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 1500;
     height: calc(var(--tabbar-h) + var(--safe-bottom)); padding-bottom: var(--safe-bottom);
-    background: rgba(255, 255, 255, .94); backdrop-filter: saturate(140%) blur(14px); -webkit-backdrop-filter: saturate(140%) blur(14px);
-    border-top: 1px solid var(--line);
+    background: var(--panel); border-top: 1px solid var(--line);
   }
   .tabbar button {
     flex: 1; background: none; border: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-    font-size: 11px; font-weight: 500; color: var(--grey);
+    font-size: var(--t-xs); font-weight: 500; color: var(--muted);
+    transition: color var(--fast) var(--ease);
   }
-  .tabbar svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .tabbar svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
   .tabbar svg circle { fill: currentColor; stroke: none; }
-  .tabbar button.active { color: var(--ink); font-weight: 600; }
+  .tabbar button.active { color: var(--accent-ink); }
+  .tabbar button:focus-visible { outline-offset: -4px; }
 
-  .agenda-view { padding: 16px 14px 28px; }
-  .cal { padding: 12px 12px 14px; }
-  .cal-day { min-height: 46px; padding: 4px; }
+  .agenda-view, .stats-view { padding: 16px 12px 28px; }
+  .users-view { padding: 16px 12px 120px; }
+  .cal-day { min-height: 48px; padding: 5px 6px; }
+  .cal-wd { padding: 5px 6px; }
+  .timeline .t-date { width: 88px; }
+  .pipe .status-pick { flex-basis: 100%; }
   /* Op gsm is er geen plaats voor datum, tekst en knoppen naast elkaar: de
      regel wordt een kaartje met de datum boven en de knoppen onderaan. */
   .ag-row { flex-wrap: wrap; gap: 4px 12px; }
   .ag-date { width: auto; flex: 1 1 100%; display: flex; gap: 8px; align-items: baseline; }
   .ag-date b { display: inline; }
   .ag-body { flex: 1 1 100%; }
-  .ag-acts { flex: 1 1 100%; justify-content: flex-end; margin-top: 2px; }
-  .stats-view { padding: 16px 14px 28px; }
-  .users-view { padding: 16px 14px 120px; }
+  .ag-acts { flex: 1 1 100%; justify-content: flex-end; margin: 0 -8px -6px 0; }
   .u-row { gap: 8px; }
   .u-who, .u-role, .u-scope { flex: 1 1 100%; }
   .s-filters { width: 100%; }
   /* flex-basis 0 zou betekenen dat de balken nooit afbreken maar buiten het
      scherm lopen; met 100% krijgt elke balk een eigen regel. */
   .s-seg { flex: 1 1 100%; }
-  .s-seg button { flex: 1; padding: 0 8px; min-height: 40px; }
+  .s-seg button { flex: 1; padding: 0 8px; min-height: 36px; }
   .s-tiles { grid-template-columns: 1fr 1fr; }
-  .s-tile b { font-size: 24px; }
   .s-card { padding: 16px 14px; }
+  .s-table-wrap { margin: 0 -14px -16px; }
+  .s-table th:first-child, .s-table td:first-child { padding-left: 14px; }
   .s-bars { gap: 2px; }
-  .s-xlabel { font-size: 9.5px; }
   .s-hrow { grid-template-columns: minmax(80px, 42%) 1fr 30px; gap: 6px; }
-  .s-status span { font-size: 10.5px; }
 
   .toast { white-space: normal; text-align: center; max-width: calc(100% - 32px); }
 }
-@keyframes sheet-up { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { dialog[open] { animation: none; } }
+
+/* ---------- beweging ---------- */
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+@keyframes slide-in { from { opacity: 0; transform: translateX(16px); } }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+@keyframes sheet-up { from { transform: translateY(40px); opacity: 0; } }
+/* Wie beweging uit heeft staan, krijgt er geen: alles staat er meteen. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
 
 /* ---------- afdrukken ---------- */
 /* Op papier is er geen kaart, geen menu en niets om op te klikken: wat
@@ -721,9 +1025,11 @@ label.field textarea:focus-visible,
    filter als "stil gevallen" op papier af te werken. */
 @media print {
   @page { margin: 14mm; }
+  :root { color-scheme: light; }
   html, body { height: auto; background: #fff; }
   body { display: block; font-size: 10.5pt; }
   .layout { display: block; min-height: 0; }
+  * { animation: none !important; transition: none !important; }
 
   /* De bediening hoort op het scherm, niet op papier. */
   .topbar, .tabbar, .banner, .toast, .login, .map-wrap, dialog,
@@ -736,9 +1042,11 @@ label.field textarea:focus-visible,
     position: static; width: auto; max-width: none; height: auto;
     overflow: visible; border: 0; box-shadow: none; background: #fff;
   }
+  .agenda-view, .stats-view, .users-view { overflow: visible; padding: 0; }
   /* De kop plakt op het scherm bovenaan; op papier zou hij over de tekst
      kunnen vallen of zich herhalen. */
-  .fiche-head { position: static; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .fiche-head { position: static; background: none; }
+  .fiche-title { height: auto; font-size: 16pt; }
   /* "Locatie op kaart" is alleen een paar knoppen: zonder die knoppen blijft
      er een kopje boven het niets staan. */
   .field:has([data-act="place"]), .field:has([data-act="drag"]) { display: none; }
@@ -749,36 +1057,41 @@ label.field textarea:focus-visible,
     display: flex; width: auto; border: 0;
   }
   .list { overflow: visible; }
+  .list li.selected { background: none; box-shadow: none; }
 
   /* Invulvelden zijn op papier gewoon tekst: geen randjes, geen pijltjes.
      Vinkjes houden hun vorm, anders staat er niet meer wát er aangevinkt is. */
   input:not([type="checkbox"]), select, textarea {
-    border: 0 !important; padding: 0 !important; background: none !important;
-    color: var(--ink); appearance: none; -webkit-appearance: none;
+    border: 0 !important; padding: 0 !important; background: none !important; box-shadow: none !important;
+    min-height: 0 !important; color: var(--ink); appearance: none; -webkit-appearance: none;
   }
   select, textarea { font-family: inherit; font-size: inherit; }
   textarea { height: auto; min-height: 0; overflow: visible; resize: none; }
+  /* Een uitklapper is op papier de tekst die erop staat. */
+  .pick > summary { border: 0; padding: 0; min-height: 0; }
+  .pick > summary::after, .pick-list { display: none; }
 
   /* Kleur draagt hier betekenis — de stip, het merkje, de soort contactmoment.
      Zonder dit laat de browser die vlakjes bij het afdrukken gewoon weg. */
-  .dot, .badge, .tag, .type-pill, input[type="checkbox"], .status-pick button.active {
+  .dot, .badge, .tag, .type-pill, input[type="checkbox"], .status-pick button.active,
+  .cal-dots i, .cal-day, .cal-grid, .cal-wd, .s-tiles, .s-stack div, .s-hbar div, .s-progress, .s-progress div, .s-legend i, .s-target-head i, .toggles label {
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   /* Op de statistiekpagina zegt de gekozen filter wat de cijfers betekenen;
      de niet-gekozen knoppen zeggen op papier niets. */
-  .s-seg { border: 0; }
+  .s-seg { border: 0; background: none; padding: 0; }
   .s-seg button:not(.active) { display: none; }
-  .s-seg button.active { background: none !important; color: var(--ink) !important; padding: 0 6px; }
+  .s-seg button.active { background: none !important; color: var(--ink) !important; padding: 0 6px; box-shadow: none; }
 
   /* Van de drie statusknoppen blijft alleen de gekozene over, als tekst. */
-  .status-pick { display: block; }
+  .status-pick { display: block; background: none; padding: 0; }
   .status-pick button.active {
-    border: 0 !important; background: none !important; padding: 0 !important;
-    width: auto; color: var(--ink); font-weight: 600;
+    border: 0 !important; background: none !important; padding: 0 !important; box-shadow: none;
+    width: auto; min-height: 0; color: var(--ink); font-weight: 600;
   }
 
   /* Niets halverwege doorsnijden. */
-  .section, .contact, .timeline li, .stat { break-inside: avoid; }
+  .section, .contact, .timeline li, .stat, .ag-row, .s-card { break-inside: avoid; }
   /* Op papier altijd alle contactmomenten: vijf regels en een knop die je niet
      kunt aanklikken zijn minder dan de lange lijst. */
   .timeline.capped li.extra { display: flex; }

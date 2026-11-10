@@ -96,6 +96,8 @@ window.FollowUpStats = (() => {
   function columns(buckets, series) {
     const max = niceMax(Math.max(1, ...buckets.map((b) => sum(series, (s) => b.values[s] || 0))));
     const ticks = [max, max / 2, 0];
+    // Lege assen zeggen niets: één zin is eerlijker dan een grafiek zonder balken.
+    if (!buckets.some((b) => sum(series, (x) => b.values[x] || 0))) return `<p class="muted s-empty">${esc(t("stats.empty"))}</p>`;
     return `
       <div class="s-cols">
         <div class="s-yaxis">${ticks.map((v) => `<span>${fmt(v)}</span>`).join("")}</div>

@@ -148,6 +148,25 @@ window.FollowUpDomain = (() => {
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+  // De pictogrammen, op één plaats en als SVG. Vroeger stonden hier tekens uit
+  // het lettertype (✎ ✓ ★ ☎): die zien er op elk toestel anders uit, lijnen
+  // nergens mee uit en kleuren niet mee in de donkere weergave. Dit is onze
+  // eigen opmaak en geen invoer van een gebruiker, dus hier hoeft geen esc().
+  const ICONS = {
+    close: '<path d="M6 6l12 12M18 6 6 18"/>',
+    check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="m13 7 4 4"/>',
+    star: '<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 16.9l-5.2 2.8 1-5.9-4.3-4.1 5.9-.8L12 3.5Z"/>',
+    phone: '<path d="M5 4h4l1.5 4.5-2 1.5a12 12 0 0 0 5.5 5.5l1.5-2L20 15v4a1 1 0 0 1-1 1A15 15 0 0 1 4 5a1 1 0 0 1 1-1Z"/>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/>',
+    note: '<path d="M5 4h14v11l-5 5H5V4Z"/><path d="M14 20v-5h5M8.5 9h7M8.5 12.5h4"/>',
+    arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+    prev: '<path d="m14.5 6-6 6 6 6"/>',
+    next: '<path d="m9.5 6 6 6-6 6"/>',
+  };
+  const icon = (name, cls) =>
+    `<svg class="ic${cls ? " " + cls : ""}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+
   // De uitklapper met vinkjes. Staat hier omdat vijf schermen hem gebruiken:
   // de drie filters in de zijbalk, de producten van een contactpersoon, het
   // product van een contactmoment en van een gepland moment, het bereik van
@@ -244,6 +263,6 @@ window.FollowUpDomain = (() => {
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
-    esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
+    esc, icon, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
   };
 })();
