@@ -211,6 +211,17 @@ into `planned[]` the same way: `normalize()` turns it into a planned moment of t
 `demo` and drops the field, and the "demo's gepland" KPI and the CSV column both read
 `planned[]` now. There is one place to plan a demo, and it clears itself when ticked off.
 
+**The logbook.** The agenda page has two tabs: what is planned (`planned[]`) and the
+logbook, every contact moment across hospitals, newest first and grouped per week
+(`renderLog()`). It is not a view of its own — `state.agenda.tab` chooses — so the tab
+bar, `setView()` and the print rules did not have to learn anything. Product, country,
+owner and the search term are the map's own (`state.filter`), in both directions;
+period, type and "entered by" exist only here (`state.log`). The filter row is drawn
+once and only the list below it is redrawn (`renderLogBody()`), or an open dropdown
+would close on every tick. Editing goes through `activityDialog()`, the same one the
+record uses; adding stays in the record. The wall needs nothing extra: the database
+only sends the contact moments within scope.
+
 **Gone quiet.** `isQuiet()` finds the hospitals nobody is chasing: contact has
 happened, `planned[]` is empty and the newest `activities[]` entry is at least
 `QUIET_DAYS` (90) old. A hospital with something planned is never quiet — it is
