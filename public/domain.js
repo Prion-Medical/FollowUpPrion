@@ -87,6 +87,31 @@ window.FollowUpDomain = (() => {
   };
   // Een doelcijferrij met elk product op nul.
   const emptyTargets = () => Object.fromEntries(PRODUCTS.map((p) => [p, 0]));
+  // Eén lijst van fases voor alle producten — zo blijven de pijplijn en de
+  // filters in één taal spreken — maar niet elk product doorloopt ze
+  // allemaal. Een RFA-product wordt niet geïnstalleerd, en moet wél langs het
+  // Comité Medisch Materiaal voor het besteld mag worden: vandaar "purchasing"
+  // daar, en "demo_installed" hier. Blijkt EndoQ of Ainex die stap ook te
+  // hebben, dan volstaat het de filter hieronder weg te halen.
+  const stagesFor = (p) => STAGES.filter((s) => s !== (productKind(p) === "procedure" ? "demo_installed" : "purchasing"));
+  // De opvolging staat per product in h.pipeline: { fase, kleur, wie }. Wat er
+  // op het ziekenhuis zelf staat (h.status, h.stage) is daarvan afgeleid: het
+  // product dat het verst staat. "Verst" is eerst de kleur, dan de fase; on
+  // hold en niet geïnteresseerd staan achter prospect, zodat een afgehaakt
+  // product een lopend dossier nooit verbergt.
+  const STATUS_RANK = { green: 2, orange: 1, red: 0 };
+  const stageRank = (st) => (st === "on_hold" || st === "not_interested" ? -1 : STAGES.indexOf(st));
+  const furthest = (entries) => entries.reduce((best, e) =>
+    ((STATUS_RANK[e.status] - STATUS_RANK[best.status]) || (stageRank(e.stage) - stageRank(best.stage))) > 0 ? e : best);
+  // Wat je van een ziekenhuis toont, gegeven de producten waarop gefilterd is.
+  // Geen filter: het geheel, zoals het op het ziekenhuis staat. Wel een filter:
+  // het verste van díe producten — en is er voor geen van die producten iets,
+  // dan is het ziekenhuis daarvoor gewoon nog een prospect.
+  const pipelineView = (h, products) => {
+    if (!products || !products.length) return h;
+    const entries = products.filter((p) => h.products.includes(p) && h.pipeline && h.pipeline[p]).map((p) => h.pipeline[p]);
+    return entries.length ? furthest(entries) : { status: "red", stage: "prospect", owner: "" };
+  };
   const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "other"];
   // De toren staat los van de scopes — daar hangt EndoQ of
   // Ainex aan, dus
@@ -98,6 +123,9 @@ window.FollowUpDomain = (() => {
   // beslissen mee: ICT, aankoop en de biomedische dienst evengoed.
   const DEPARTMENTS = ["physician", "endoscopy", "it", "purchasing", "biomed", "admin", "other"];
   const SECTORS = ["public", "private", "university"];
+  // De taal waarin je een contactpersoon aanspreekt. Codes, geen vertaalde
+  // namen: ze zijn in beide talen van de app gelijk.
+  const LANGUAGES = ["NL", "FR", "DE", "EN"];
   const COUNTRIES = ["BE", "NL", "LU"];
   // Rollen, van veel naar weinig rechten. In de databank staat de sleutel; wat
   // elke rol precies mag staat in storage.js (RIGHTS) en wordt afgedwongen in
@@ -201,7 +229,7 @@ window.FollowUpDomain = (() => {
 
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
-    esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, emptyTargets,
+    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
+    esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
   };
 })();

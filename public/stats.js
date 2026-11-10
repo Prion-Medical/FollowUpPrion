@@ -80,6 +80,9 @@ window.FollowUpStats = (() => {
     return db.hospitals.filter((h) => !view.products.length || view.products.some((p) => h.products.includes(p)));
   }
 
+  // Fase en kleur van een ziekenhuis, voor de producten waarop gefilterd is.
+  const shown = (h) => pipelineView(h, view.products);
+
   // ---------- bouwstenen ----------
   function tile(value, label, sub) {
     return `<div class="s-tile"><b>${esc(value)}</b><span>${esc(label)}</span>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`;
@@ -290,9 +293,9 @@ window.FollowUpStats = (() => {
           ${orders.length ? `<th class="num">${esc(t("stats.ordersTile"))}</th>` : ""}
         </tr></thead>
         <tbody>${list.map((h) => `<tr>
-          <td><i class="dot ${esc(h.status)}"></i> ${esc(h.name)}</td>
+          <td><i class="dot ${esc(shown(h).status)}"></i> ${esc(h.name)}</td>
           <td>${esc(h.country ? t("country." + h.country + ".short") : "—")}</td>
-          <td>${esc(t("stage." + h.stage))}</td>
+          <td>${esc(t("stage." + shown(h).stage))}</td>
           <td>${esc(h.products.join(", ") || "—")}</td>${metSubs ? `
           <td class="num">${esc(h.unit.rooms ?? "—")}</td>
           <td class="num">${esc(h.unit.roomsDemo ?? "—")}</td>

@@ -10,7 +10,8 @@
   // zo moet een nieuwe fase of een nieuw merk maar op één plaats bij.
   const {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
-    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
+    DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
+    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
     productKind, wantsQuantity,
     esc, pickBox, syncPick, myProducts,
   } = window.FollowUpDomain;
@@ -306,6 +307,7 @@
     c.products = [...new Set(c.products.filter((p) => typeof p === "string" && p))];
     // De dienst is een vaste sleutel; de functie ernaast blijft vrije tekst.
     c.department = DEPARTMENTS.includes(c.department) ? c.department : "";
+    c.language = LANGUAGES.includes(c.language) ? c.language : "";
     c.primary = !!c.primary;
     return c;
   }
@@ -333,6 +335,77 @@
     stampFields(p);
     return p;
   }
+  // De opvolging per product. Elk product dat bij het ziekenhuis aangevinkt
+  // staat krijgt een eigen fase, kleur en verantwoordelijke; wat op het
+  // ziekenhuis zelf staat volgt daaruit (zie pipelineView in domain.js).
+  //
+  // Vroeger was er één fase per ziekenhuis. Die wordt hier de fase van elk
+  // product dat er toen aangevinkt stond — de app wist niet beter, en twee
+  // keer dezelfde fase is juister dan één van de twee op prospect zetten. Een
+  // product dat er láter bijkomt begint vooraan: prospect, of eerste contact
+  // als er al een contactmoment voor bestaat.
+  //
+  // Een rij verdwijnt hier nooit, ook niet als het vinkje weggaat. Wie
+  // afgeschermd is krijgt h.products gesnoeid op zijn eigen bereik, en zou
+  // anders de opvolging van een collega wissen bij de eerste opslag.
+  function syncPipeline(h) {
+    if (!h.pipeline || typeof h.pipeline !== "object" || Array.isArray(h.pipeline)) h.pipeline = {};
+    for (const [p, e] of Object.entries(h.pipeline)) {
+      if (!e || typeof e !== "object") { delete h.pipeline[p]; continue; }
+      e.stage = STAGES.includes(e.stage) ? e.stage : "prospect";
+      e.status = STATUSES.includes(e.status) ? e.status : "red";
+      e.owner = str(e.owner);
+    }
+    const eerste = !Object.keys(h.pipeline).length;
+    for (const p of h.products) {
+      if (h.pipeline[p]) continue;
+      const contacted = h.activities.some((a) => a.product === p);
+      const e = eerste ? { stage: h.stage, status: h.status, owner: "" }
+        : { stage: contacted ? "first_contact" : "prospect", status: contacted ? "orange" : "red", owner: "" };
+      // Een fase die dit product niet kent, schuift naar de dichtste die het
+      // wel kent: allebei liggen ze net voor of net na de evaluatie.
+      if (!stagesFor(p).includes(e.stage)) e.stage = "evaluation";
+      h.pipeline[p] = e;
+    }
+    if (h.products.length) {
+      const f = furthest(h.products.map((p) => h.pipeline[p]));
+      h.status = f.status;
+      h.stage = f.stage;
+    } else if (!stagesFor("").includes(h.stage)) {
+      // Zonder product geldt de keuzelijst van het ziekenhuis zelf, en die
+      // kent niet elke fase.
+      h.stage = "evaluation";
+    }
+  }
+  // Het laatste product is afgevinkt. De kleur en de fase op het ziekenhuis
+  // waren die van dat product; ze laten staan zou zeggen dat een ziekenhuis
+  // zonder product klant is. Terug naar wat de contactmomenten zeggen. Wat er
+  // per product stond blijft bewaard en komt terug als het vinkje terugkomt.
+  function zonderProduct(h) {
+    if (h.products.length) return;
+    const contacted = h.activities.length > 0;
+    h.status = contacted ? "orange" : "red";
+    h.stage = contacted ? "first_contact" : "prospect";
+  }
+  // Wat de kaart, de lijst en de tellers van een ziekenhuis tonen: het volgt
+  // de productfilter in de zijbalk.
+  const shown = (h) => pipelineView(h, state.filter.products);
+  // Wie verantwoordelijk kan zijn: iedereen met een account, op naam. Eén
+  // lijst voor de keuzelijst in de fiche en voor de filter in de zijbalk.
+  function owners() {
+    const list = new Map(people);
+    const me = store.me();
+    if (me.id && me.name) list.set(me.id, me.name);
+    return [...list].sort((a, b) => a[1].localeCompare(b[1]));
+  }
+  // Een id dat we niet (meer) kennen blijft als keuze staan, anders wist een
+  // opslag het.
+  function ownerOptions(current) {
+    const list = owners();
+    if (current && !list.some(([id]) => id === current)) list.push([current, "?"]);
+    return [opt("", "—", current), ...list.map(([id, name]) => opt(id, name, current))].join("");
+  }
+
   function normalize(h) {
     h.id = str(h.id) || uid();
     h.name = str(h.name).trim() || "—";
@@ -874,7 +947,13 @@
     if (d.field) {
       h[d.field] = el.value;
       if (d.field === "name" && !el.value.trim()) { h.name = "—"; el.value = h.name; }
-      if (d.field === "stage") stageStatus(h);
+      if (d.field === "stage") stageStatus(h, h.activities.length > 0);
+    } else if (d.pstage && h.pipeline[d.pstage]) {
+      h.pipeline[d.pstage].stage = el.value;
+      stageStatus(h.pipeline[d.pstage], h.activities.some((a) => a.product === d.pstage));
+      syncPipeline(h);
+    } else if (d.powner && h.pipeline[d.powner]) {
+      h.pipeline[d.powner].owner = el.value;
     } else if (d.unit) {
       h.unit[d.unit] = el.type === "number" ? num(el.value) : el.value;
     } else if (d.unitBool) {
@@ -886,6 +965,8 @@
         : list.filter((x) => x !== d.brand);
     } else if (d.product) {
       h.products = el.checked ? [...new Set([...h.products, d.product])] : h.products.filter((x) => x !== d.product);
+      if (!el.checked) zonderProduct(h);
+      syncPipeline(h);
     } else return;
     scheduleSave();
     renderList();
@@ -1160,7 +1241,7 @@
         const mine = myProducts();
         const keuze = picked(form);
         Object.assign(rec, {
-          name: data.name.trim(), department: data.department, role: data.role.trim(),
+          name: data.name.trim(), department: data.department, role: data.role.trim(), language: data.language,
           phone: data.phone.trim(), email: data.email.trim(), address: data.address.trim(),
           products: [...new Set([...had.filter((p) => !mine.includes(p)), ...keuze])],
           notes: data.notes.trim(), primary: !!data.primary,
@@ -1170,6 +1251,7 @@
         for (const p of rec.products) if (!h.products.includes(p)) h.products.push(p);
         syncProducts(h, had.filter((p) => !rec.products.includes(p)));
       }
+      syncPipeline(h);
       scheduleSave();
       renderAll();
     });
@@ -1222,6 +1304,10 @@
         });
         stamp(rec, !a);
         if (!a) h.activities.push(rec);
+        // Een contactmoment voor een product zet dat product bij het
+        // ziekenhuis: anders is er geen opvolging om bij te werken.
+        if (rec.product && !h.products.includes(rec.product)) h.products.push(rec.product);
+        syncPipeline(h);
         // Ook bij een wijziging: een contactmoment dat nú een installatie of
         // een bestelling is, zet de kleur en de fase mee goed.
         if (!a || before.type !== rec.type) autoStatus(h, rec);
@@ -1309,14 +1395,25 @@
   }
 
   // Kleur automatisch mee laten evolueren; manueel aanpassen blijft altijd mogelijk.
+  // Een contactmoment hoort bij één product, dus het is de opvolging van dát
+  // product die meebeweegt — een bestelling voor het ene maakt het andere niet
+  // groen.
   function autoStatus(h, act) {
-    if ((act.type === "installation" || act.type === "order") && h.status !== "green") {
-      h.status = "green";
-      if (PRE_SALE.includes(h.stage)) h.stage = "customer";
+    // Zonder product op het contactmoment: hangt er precies één product aan
+    // het ziekenhuis, dan is het dat. Hangen er meer aan, dan valt niet te
+    // raden welk — en dan blijft alles staan, liever dan het verkeerde product
+    // groen te maken. Hangt er geen aan, dan is het het ziekenhuis zelf.
+    const rows = myProducts().filter((p) => h.products.includes(p) && h.pipeline[p]);
+    const x = (act.product && h.pipeline[act.product])
+      || (rows.length === 1 ? h.pipeline[rows[0]] : rows.length ? null : h);
+    if (!x) return;
+    if ((act.type === "installation" || act.type === "order") && x.status !== "green") {
+      x.status = "green";
+      if (PRE_SALE.includes(x.stage)) x.stage = "customer";
       toast(t("status.toGreen"));
-    } else if (h.status === "red") {
-      h.status = "orange";
-      if (h.stage === "prospect") h.stage = "first_contact";
+    } else if (x.status === "red") {
+      x.status = "orange";
+      if (x.stage === "prospect") x.stage = "first_contact";
       toast(t("status.toOrange"));
     }
     if (act.type === "demo" && ["prospect", "first_contact", "meeting", "demo_planned"].includes(h.stage)) h.stage = "demo_installed";
@@ -1449,12 +1546,17 @@
           [t("col.name"), t("col.country"), t("col.sector"), t("col.status"), t("col.stage"), t("col.products"),
             t("col.lastContact"), t("col.demos"), t("col.installations"), t("unit.roomsInstalled"),
             t("col.demoDate"), t("col.nextAction"), t("col.nextActionDate"), t("col.primaryContact"),
-            t("col.address"), t("col.createdAt"), t("col.notes")],
+            t("col.address"), t("col.createdAt"), t("col.notes"),
+            ...myProducts().flatMap((p) => [`${t("col.stage")} ${p}`, `${t("col.owner")} ${p}`])],
           ...hs.map((h) => [h.name, h.country && t("country." + h.country), h.sector && t("sector." + h.sector),
             t("status." + h.status), t("stage." + h.stage), h.products.join(", "), lastContact(h),
             countType(h, "demo"), countType(h, "installation"), h.unit.roomsInstalled ?? "",
             demoDate(h), h.nextAction, h.nextActionDate, (h.contacts.find((c) => c.primary) || {}).name,
-            h.address, h.createdAt, h.notes]),
+            h.address, h.createdAt, h.notes,
+            ...myProducts().flatMap((p) => {
+              const e = h.products.includes(p) && h.pipeline[p];
+              return e ? [t("stage." + e.stage), personName(e.owner)] : ["", ""];
+            })]),
         ]), "text/csv");
       } else if (kind === "contacts") {
         download(`contacts-${d}.csv`, csv([
