@@ -145,30 +145,35 @@ window.FollowUpStats = (() => {
   }
 
   // ---------- secties ----------
-  function targetsCard(db, events) {
+  // Het doelcijfer per product en per jaar, in de eenheid van dat product:
+  // kamers live bij een abonnement (wat erbij kwam min wat er stopte), bestelde
+  // stuks bij een product per ingreep. events zijn de installaties en
+  // stopzettingen, orders de bestellingen — allebei over alle jaren, het jaar
+  // wordt hier gekozen.
+  function targetsCard(db, events, orders) {
     const year = view.year === "all" ? String(new Date().getFullYear()) : view.year;
     const goals = targetsFor(db, year);
-    const byYear = events.filter((a) => a.date.startsWith(year));
-    // Het doelcijfer telt kamers, en dat zegt alleen iets over een product dat
-    // per abonnement gaat. Een product per ingreep krijgt hier voorlopig geen
-    // rij — liever geen doel dan één in de verkeerde eenheid.
-    const products = (view.products.length ? view.products : myProducts())
-      .filter((p) => productKind(p) === "subscription");
-    if (!products.length) return "";
+    const inYear = (list) => list.filter((a) => a.date.startsWith(year));
+    const byYear = inYear(events);
+    const ordersByYear = inYear(orders);
+    const products = view.products.length ? view.products : myProducts();
+    const kinds = new Set(products.map(productKind));
     return card(`${t("stats.target")} ${year}`, products.map((p) => {
-      // Netto voor dat jaar: wat erbij kwam min wat er weer stopte.
-      const done = Math.max(0, sum(byYear.filter((a) => a.product === p), signedRooms));
+      const perOrder = productKind(p) === "procedure";
+      const done = perOrder
+        ? sum(ordersByYear.filter((a) => a.product === p), units)
+        : Math.max(0, sum(byYear.filter((a) => a.product === p), signedRooms));
       const goal = Number(goals[p]) || 0;
       const pct = goal ? Math.min(100, (done / goal) * 100) : 0;
       return `<div class="s-target">
         <div class="s-target-head">
           <span><i style="background:${productColor(p)}"></i>${esc(p)}</span>
-          <span><b>${fmt(done)}</b> / <input type="number" min="0" data-target-year="${esc(year)}" data-target-product="${esc(p)}" value="${goal}" ${canWrite() ? "" : "readonly"} aria-label="${esc(t("stats.target"))} ${esc(p)} ${esc(year)}"> ${esc(t("stats.roomsLive").toLowerCase())}</span>
+          <span><b>${fmt(done)}</b> / <input type="number" min="0" data-target-year="${esc(year)}" data-target-product="${esc(p)}" value="${goal}" ${canWrite() ? "" : "readonly"} aria-label="${esc(t("stats.target"))} ${esc(p)} ${esc(year)}"> ${esc(perOrder ? t("stats.unitsOrdered") : t("stats.roomsLive").toLowerCase())}</span>
         </div>
         <div class="s-progress"><div style="width:${pct}%;background:${productColor(p)}"></div></div>
         <small class="muted">${goal ? `${fmt((done / goal) * 100)}% ${esc(t("stats.reached"))}` : "—"}</small>
       </div>`;
-    }).join("") + `<p class="muted">${esc(t("stats.targetsSub"))}</p>`);
+    }).join("") + `<p class="muted">${esc([kinds.has("subscription") && t("stats.targetsSub"), kinds.has("procedure") && t("stats.targetsSubOrders")].filter(Boolean).join(" · "))}</p>`);
   }
 
   // Twaalf maanden: het gekozen jaar, of de laatste twaalf bij "alle jaren".
@@ -344,6 +349,8 @@ window.FollowUpStats = (() => {
     const installs = rows(db, { types: ["installation"] }).filter(isSub);
     const subsEvents = rows(db, { types: ["installation", "cancellation"], ignoreYear: true }).filter(isSub);
     const orders = metOrders ? rows(db, { types: ["order"] }).filter((a) => !isSub(a)) : [];
+    // Voor het doelcijfer: over alle jaren, want die kaart kiest zelf haar jaar.
+    const orderEvents = metOrders ? rows(db, { types: ["order"], ignoreYear: true }).filter((a) => !isSub(a)) : [];
     const acts = rows(db);
     const hs = hospitals(db);
     const live = hs.filter((h) => h.unit.roomsInstalled);
@@ -383,7 +390,7 @@ window.FollowUpStats = (() => {
         ${!metSubs ? "" : (view.chart === "subs" ? subscriptionsCard(subsEvents) : installationsCard(installs))}
         ${!metOrders ? "" : ordersCard(orders)}
         ${!metOrders ? "" : cmmCard(db, keuze)}
-        ${targetsCard(db, subsEvents)}
+        ${targetsCard(db, subsEvents, orderEvents)}
         ${!metSubs ? "" : hospitalsCard(db)}
         ${pipelineCard(db)}
         ${countryCard(db)}

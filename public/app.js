@@ -1708,7 +1708,7 @@
         ]), "text/csv");
       } else if (kind === "activities") {
         download(`activities-${d}.csv`, csv([
-          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.rooms"), t("col.note"), t("col.addedBy")],
+          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.quantity"), t("col.note"), t("col.addedBy")],
           ...hs.flatMap((h) => h.activities.map((a) => [a.date, h.name, t("act." + a.type), a.product, contactName(h, a.contactId), a.rooms ?? "", a.note, personName(a.createdBy)]))
             .sort((a, b) => b[0].localeCompare(a[0])),
         ]), "text/csv");
