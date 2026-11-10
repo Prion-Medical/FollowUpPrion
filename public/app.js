@@ -33,6 +33,9 @@
     // betekenis als een leeg bereik op een gebruiker. derived is er één van
     // twee vragen over de opvolging en sluit zichzelf uit.
     filter: { statuses: [], products: [], countries: [], owners: [], derived: "", query: "" },
+    // Van welk ziekenhuis de lijst contactmomenten helemaal openstaat. Eén id
+    // en geen vlag: zo klapt ze vanzelf weer dicht bij een ander ziekenhuis.
+    actsOpen: null,
     placing: null, // {id} wanneer we op de kaart een locatie kiezen
     dragId: null,
     // Welke maand de agenda toont, en eventueel één gekozen dag.
@@ -413,6 +416,11 @@
   // Wat de kaart, de lijst en de tellers van een ziekenhuis tonen: het volgt
   // de productfilter in de zijbalk.
   const shown = (h) => pipelineView(h, state.filter.products);
+  // Zoveel contactmomenten toont de fiche standaard, de recentste eerst. Wie
+  // ze allemaal wil zien klapt de lijst open. Dit gaat enkel over tonen:
+  // activities[] blijft volledig, en daar rekenen de kleur, de fase en de
+  // statistieken op.
+  const ACT_CAP = 5;
   // De endoscopie-afdeling — scopes, torens, kamers, coloscopieën — beschrijft
   // waar een product per abonnement op aangesloten wordt. Voor een ziekenhuis
   // dat enkel voor RFA gevolgd wordt zegt ze niets, en voor wie enkel RFA mag
@@ -780,6 +788,8 @@
 
   // ---------- selectie ----------
   function select(id, fly) {
+    // Een ander ziekenhuis begint weer met de korte lijst contactmomenten.
+    if (id !== state.selectedId) state.actsOpen = null;
     state.selectedId = id;
     state.ficheOpen = true;
     if (state.dragId && state.dragId !== id) state.dragId = null;
@@ -917,12 +927,12 @@
 
       <div class="section">
         <h3>${esc(t("section.activities"))} <button class="btn small primary" data-act="add-activity">${esc(t("btn.addActivity"))}</button></h3>
-        ${acts.length ? `<ul class="timeline">${acts.map((a) => {
+        ${acts.length ? `<ul class="timeline ${state.actsOpen === h.id ? "" : "capped"}">${acts.map((a, i) => {
           const c = h.contacts.find((x) => x.id === a.contactId);
           const by = personName(a.createdBy);
           const sub = [a.product, c && c.name, a.rooms ? `${a.rooms} ${t(productKind(a.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
             by && t("by", { name: by })].filter(Boolean).join(" · ");
-          return `<li>
+          return `<li${i >= ACT_CAP ? ' class="extra"' : ""}>
             <div class="t-date">${esc(fmtDate(a.date))}</div>
             <div class="t-body">
               <div class="t-type"><span class="type-pill" style="background:${ACT_TYPES[a.type] || "#999"}"></span>${esc(t("act." + a.type))}</div>
@@ -931,7 +941,11 @@
             </div>
             <div><button class="icon-btn" data-act="edit-activity" data-id="${esc(a.id)}" title="${esc(t("btn.edit"))}">✎</button></div>
           </li>`;
-        }).join("")}</ul>` : `<p class="muted">${esc(t("empty.activities"))}</p>`}
+        }).join("")}</ul>${acts.length > ACT_CAP
+          // Geen data-act: wat een rol niet mag wordt daarop verborgen, en
+          // openklappen is lezen — dat mag ook wie alleen mag kijken.
+          ? `<button class="btn small more-acts" data-acts-toggle>${esc(state.actsOpen === h.id ? t("acts.showLess") : t("acts.showAll", { n: acts.length }))}</button>` : ""}`
+          : `<p class="muted">${esc(t("empty.activities"))}</p>`}
       </div>
 
       <div class="section">
@@ -1106,6 +1120,11 @@
     if (!h) return;
     const sb = e.target.closest("[data-status]");
     if (sb) { setStatus(h, sb.dataset.status, sb.dataset.pproduct); return; }
+    if (e.target.closest("[data-acts-toggle]")) {
+      state.actsOpen = state.actsOpen === h.id ? null : h.id;
+      renderFiche();
+      return;
+    }
     const b = e.target.closest("[data-act]");
     if (!b) return;
     const id = b.dataset.id;
