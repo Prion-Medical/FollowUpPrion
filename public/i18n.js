@@ -354,7 +354,7 @@ window.FollowUpI18n = (() => {
       "col.yes": "ja",
 
       // login + start
-      "store.localFail": "Kan de data niet laden. Start de website met: python3 server.py en open http://localhost:8080",
+      "store.localFail": "Kan de data niet laden. Start de website met: python3 server.py en open http://localhost:8081",
       "login.intro": "Meld je aan om verder te gaan.",
       "login.email": "E-mail",
       "login.password": "Wachtwoord",
@@ -779,7 +779,7 @@ window.FollowUpI18n = (() => {
       "col.note": "Note",
       "col.yes": "yes",
 
-      "store.localFail": "Cannot load the data. Start the site with: python3 server.py and open http://localhost:8080",
+      "store.localFail": "Cannot load the data. Start the site with: python3 server.py and open http://localhost:8081",
       "login.intro": "Sign in to continue.",
       "login.email": "E-mail",
       "login.password": "Password",

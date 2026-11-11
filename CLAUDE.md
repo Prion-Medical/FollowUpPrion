@@ -31,7 +31,7 @@ If a skill, linter or review suggests otherwise — and general-purpose skills w
 ## Running it
 
 ```bash
-python3 server.py        # then open http://localhost:8080
+python3 server.py        # then open http://localhost:8081
 ```
 
 Or double-click `start.command`. Data lives in `data/db.json`, created from
