@@ -382,6 +382,12 @@ for `data/seed.json`, which **is** committed: it keeps 40 hospitals with empty
 `contacts[]` and `activities[]`, and no clinician's name, phone number or e-mail
 address may be added to it. `data/backups/` is ignored for the same reason.
 
+An assistant connected through the connector is a new recipient of that data:
+clinicians' names, numbers and the notes about them go to it and into that chat's
+history, outside the database. That was already true of the workbook it replaces,
+but it is now something this project does on purpose, and it belongs in whatever
+record of processing Prion keeps.
+
 What protects the data is the login, not the repository. Sign-up is disabled on the
 Supabase project, so only users created by hand under Authentication → Users can sign
 in; keep it that way, and keep 2FA on the accounts that can reach the dashboard.
@@ -555,6 +561,32 @@ off**: an assistant without a token must get the function's own 401, which says 
 to sign in. The token is still checked on every call, and a failure to check it
 answers 503 and not 401 — a 401 makes the assistant throw its token away.
 
+Free text reaches a language model, and that is the connector's own kind of risk.
+Names, notes and addresses are written by every colleague, across the product wall
+and whatever their role, so a note could be phrased as an instruction to somebody
+else's assistant. Every result that carries such text says it is data
+(`NOT_INSTRUCTIONS`), the tools that overwrite are marked destructive so the
+assistant asks first, and `docs/agent-instructions.md` says the same. None of that
+is a lock. What holds regardless is the database: a `contributor` cannot remove, and
+nobody reaches another product.
+
+Arguments are checked against each tool's own schema before the tool runs
+(`checkArgs()`): known names only, the right kind, text of at most 4,000
+characters. Stored product names are looked up with `rowOf()`, never through the
+prototype.
+
+The assistant's key is the user's own sign-in, so on its own it could do whatever
+the app can. Two things are therefore closed to it in the database
+(`followup.via_assistant()`, which recognises the `client_id` a Supabase OAuth
+token carries): managing users and restoring a backup. `whoami` reports whether the
+key is recognised that way. Even so, do not connect an `admin` account on the live
+project.
+
+The consent page always shows who is asking and under which account, also when
+consent was given before, and only continues on a click: on a shared browser a
+remembered consent would otherwise hand a second person the first one's account
+without a single screen.
+
 Removing a record always takes two calls: the first returns what would go and a
 code, the second removes. The code is tied to the user, the record and the document's
 timestamp. It forces the two steps; it cannot prove a person said yes, and in Claude's
@@ -591,7 +623,14 @@ Not bugs; decisions. Reviewers will flag them, so the reasoning is recorded here
   adopting the new timestamp and `store.accept()` adopts it only after a successful
   merge (adopting first and failing to merge would let a stale document overwrite a
   colleague's work); a changed role or scope is never merged, only reloaded; and an
-  import is never merged, since it replaces everything on purpose. The merge is in
+  import is never merged, since it replaces everything on purpose — a failed import
+  clears the base, so nothing merges until a reload. Three things the merge decides
+  per hospital rather than per field (`settleHospital()`): the colour and stage are
+  only skipped as derived while a product is ticked, since without one they are set
+  by hand; installed rooms are a counter, so two installations logged at once add
+  up, but only when each side's change is explained by its own contact moments; and
+  of two newly chosen main contacts the saver's stays. Stamps never count as a
+  change. The merge is in
   the browser, not in the database, so the check per hospital that would make this a
   property of the data itself is still not there.
 - **The app refreshes itself quietly.** When the tab regains focus, and every thirty
