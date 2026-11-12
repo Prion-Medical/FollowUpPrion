@@ -1948,6 +1948,7 @@
         <button class="btn" value="hospitals">${esc(t("export.hospitals"))}</button>
         <button class="btn" value="contacts">${esc(t("export.contacts"))}</button>
         <button class="btn" value="activities">${esc(t("export.activities"))}</button>
+        <button class="btn" value="planned">${esc(t("export.planned"))}</button>
         ${endoAccount() ? `<button class="btn" value="units">${esc(t("export.units"))}</button>` : ""}
         <button class="btn" value="json">${esc(t("export.json"))}</button>
       </div>
@@ -1988,6 +1989,16 @@
         ]), "text/csv");
       } else if (kind === "activities") {
         download(`activities-${d}.csv`, activitiesCsv(hs.flatMap((h) => h.activities.map((a) => ({ h, a })))), "text/csv");
+      } else if (kind === "planned") {
+        // De agenda, eerst wat het eerst komt. Voor wie het is staat er
+        // altijd: zonder toewijzing is dat wie het invoerde.
+        download(`planned-${d}.csv`, csv([
+          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("col.owner"), t("col.addedBy")],
+          ...hs.flatMap((h) => h.planned.map((p) => ({ h, p })))
+            .sort((x, y) => x.p.date.localeCompare(y.p.date) || x.h.name.localeCompare(y.h.name))
+            .map(({ h, p }) => [p.date, h.name, t("act." + p.type), p.product,
+              (h.contacts.find((c) => c.id === p.contactId) || {}).name, p.note, personName(assigneeOf(p)), personName(p.createdBy)]),
+        ]), "text/csv");
       } else if (kind === "units") {
         download(`units-${d}.csv`, csv([
           [t("col.name"), t("col.country"), t("unit.scopeBrands"), t("unit.scopeNotes"),
