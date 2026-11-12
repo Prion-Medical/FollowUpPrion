@@ -19,10 +19,10 @@ window.FollowUpDomain = (() => {
   // In de databank staat de sleutel, niet de vertaalde tekst.
   const STAGES = [
     "prospect", "first_contact", "meeting", "demo_planned", "demo_installed",
-    "evaluation", "customer", "on_hold", "not_interested",
+    "evaluation", "purchasing", "customer", "on_hold", "not_interested",
   ];
   // Fases vóór de verkoop: een installatie of bestelling maakt er "customer" van.
-  const PRE_SALE = ["prospect", "first_contact", "meeting", "demo_planned", "demo_installed", "evaluation"];
+  const PRE_SALE = ["prospect", "first_contact", "meeting", "demo_planned", "demo_installed", "evaluation", "purchasing"];
   const ACT_TYPES = {
     prospecting: "#7b61ff",
     email: "#3a8dde",
@@ -46,7 +46,27 @@ window.FollowUpDomain = (() => {
   // alles wat per product bestaat (kleur, doelcijfer) wordt eruit afgeleid.
   // Komt er een derde bij, dan volstaat deze regel — plus followup.producten()
   // in supabase/schema.sql, want de databank kan dit bestand niet lezen.
-  const PRODUCTS = ["EndoQ", "Ainex"];
+  const PRODUCTS = ["EndoQ", "Ainex", "Thyroid RFA", "Fibroid RFA"];
+  // Niet elk product wordt op dezelfde manier verkocht. EndoQ en Ainex gaan
+  // per abonnement, per kamer: daar tel je kamers en actieve abonnementen. De
+  // RFA-producten worden per ingreep verbruikt — er is geen installatie en
+  // geen abonnement, er worden elektroden besteld. Wat hier niet in staat is
+  // een abonnement: zo gedraagt een product dat de app nog niet kent zich
+  // zoals alles zich tot nu toe gedroeg.
+  // De lijst hierboven blijft een lijst van namen, en dat is met opzet: die
+  // naam is wat er in de databank staat, bij elk contactmoment en in elk
+  // bereik. Wat een product ís, hangt er hier naast.
+  const PRODUCT_KINDS = { "Thyroid RFA": "procedure", "Fibroid RFA": "procedure" };
+  const productKind = (p) => PRODUCT_KINDS[p] || "subscription";
+  // Bij welk contactmoment hoort een aantal? Een contactmoment draagt één
+  // getal, en wat het telt hangt af van het product: kamers bij een product
+  // per abonnement (demo, installatie, bestelling, stopzetting), bestelde
+  // stuks bij een product per ingreep — en dan alleen bij een bestelling,
+  // want een demo of een installatie in kamers bestaat daar niet. Dat blijft
+  // een verkoopcijfer per ziekenhuis: wat er besteld is, nooit wie er
+  // behandeld is.
+  const wantsQuantity = (type, product) =>
+    (productKind(product) === "procedure" ? type === "order" : ROOM_TYPES.includes(type));
   // Welke producten deze gebruiker mag gebruiken. Een leeg bereik betekent
   // onbeperkt, dus dan zijn het ze allemaal. De databank schermt het document
   // al af; dit is er zodat de app geen keuze aanbiedt die toch geweigerd wordt.
@@ -67,6 +87,38 @@ window.FollowUpDomain = (() => {
   };
   // Een doelcijferrij met elk product op nul.
   const emptyTargets = () => Object.fromEntries(PRODUCTS.map((p) => [p, 0]));
+  // Eén lijst van fases voor alle producten — zo blijven de pijplijn en de
+  // filters in één taal spreken — maar niet elk product doorloopt ze
+  // allemaal. Een RFA-product wordt niet geïnstalleerd, en moet wél langs het
+  // Comité Medisch Materiaal voor het besteld mag worden: vandaar "purchasing"
+  // daar, en "demo_installed" hier. Blijkt EndoQ of Ainex die stap ook te
+  // hebben, dan volstaat het de filter hieronder weg te halen.
+  const stagesFor = (p) => STAGES.filter((s) => s !== (productKind(p) === "procedure" ? "demo_installed" : "purchasing"));
+  // De opvolging staat per product in h.pipeline: { fase, kleur, wie }. Wat er
+  // op het ziekenhuis zelf staat (h.status, h.stage) is daarvan afgeleid: het
+  // product dat het verst staat. "Verst" is eerst de kleur, dan de fase; on
+  // hold en niet geïnteresseerd staan achter prospect, zodat een afgehaakt
+  // product een lopend dossier nooit verbergt.
+  const STATUS_RANK = { green: 2, orange: 1, red: 0 };
+  const stageRank = (st) => (st === "on_hold" || st === "not_interested" ? -1 : STAGES.indexOf(st));
+  const furthest = (entries) => entries.reduce((best, e) =>
+    ((STATUS_RANK[e.status] - STATUS_RANK[best.status]) || (stageRank(e.stage) - stageRank(best.stage))) > 0 ? e : best);
+  // Wat je van een ziekenhuis toont, gegeven de producten waarop gefilterd is.
+  // Geen filter: het geheel, zoals het op het ziekenhuis staat. Wel een filter:
+  // het verste van díe producten — en is er voor geen van die producten iets,
+  // dan is het ziekenhuis daarvoor gewoon nog een prospect.
+  const pipelineView = (h, products) => {
+    if (!products || !products.length) return h;
+    const entries = products.filter((p) => h.products.includes(p) && h.pipeline && h.pipeline[p]).map((p) => h.pipeline[p]);
+    return entries.length ? furthest(entries) : { status: "red", stage: "prospect", owner: "" };
+  };
+  // Wat je van een ziekenhuis moet weten voor een product per ingreep — de
+  // tegenhanger van de endoscopie-afdeling bij EndoQ en Ainex. CMM is het
+  // Comité Medisch Materiaal: zolang dat het product niet goedgekeurd heeft,
+  // mag het ziekenhuis niet bestellen. Sleutels, zoals overal: de tekst komt
+  // uit i18n.js.
+  const CMM_STATES = ["not_ok", "requested", "ok"];
+  const YES_NO = ["yes", "no", "unknown"];
   const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "other"];
   // De toren staat los van de scopes — daar hangt EndoQ of
   // Ainex aan, dus
@@ -76,9 +128,31 @@ window.FollowUpDomain = (() => {
   const PROCESSOR_BRANDS = SCOPE_BRANDS;
   // Diensten waar een contactpersoon toe behoort. Niet alleen de artsen
   // beslissen mee: ICT, aankoop en de biomedische dienst evengoed.
-  const DEPARTMENTS = ["physician", "endoscopy", "it", "purchasing", "biomed", "admin", "other"];
+  // De volgorde is die van de keuzelijst: eerst de artsen per discipline, dan
+  // de diensten eromheen. "physician" is de gastro-enteroloog — de sleutel is
+  // ouder dan de RFA-producten en blijft zo heten, anders verliezen bestaande
+  // contactpersonen hun dienst.
+  const DEPARTMENTS = [
+    "physician", "endoscopy", "radiology", "endocrinology", "nuclear", "ent", "surgery", "gynaecology",
+    "pharmacy", "it", "purchasing", "biomed", "admin", "secretariat", "other",
+  ];
   const SECTORS = ["public", "private", "university"];
-  const COUNTRIES = ["BE", "NL", "LU"];
+  // De taal waarin je een contactpersoon aanspreekt. Codes, geen vertaalde
+  // namen: ze zijn in beide talen van de app gelijk.
+  const LANGUAGES = ["NL", "FR", "DE", "EN"];
+  // Regio's: welke landen samen een werkgebied vormen, en welk stuk kaart
+  // daarbij hoort ([[zuid, west], [noord, oost]]). Een ziekenhuis draagt zelf
+  // geen regio: ze volgt uit zijn land (regionOf), zodat de twee elkaar nooit
+  // kunnen tegenspreken en bestaande data niets hoeft bij te krijgen. Een
+  // regio toevoegen is hier één regel, plus de namen in i18n.js ("region.x"
+  // en "country.XX"). Zolang er maar één is, toont de app geen regiofilter.
+  const REGIONS = {
+    benelux: { countries: ["BE", "NL", "LU"], bounds: [[49.3, 2.3], [53.7, 7.4]] },
+    australia: { countries: ["AU"], bounds: [[-44, 112], [-10, 154]] },
+  };
+  const REGION_KEYS = Object.keys(REGIONS);
+  const COUNTRIES = REGION_KEYS.flatMap((r) => REGIONS[r].countries);
+  const regionOf = (country) => REGION_KEYS.find((r) => REGIONS[r].countries.includes(country)) || "";
   // Rollen, van veel naar weinig rechten. In de databank staat de sleutel; wat
   // elke rol precies mag staat in storage.js (RIGHTS) en wordt afgedwongen in
   // supabase/schema.sql.
@@ -121,31 +195,44 @@ window.FollowUpDomain = (() => {
   // De regel zelf, op één plaats: de namen van wat aanstaat achter elkaar, en
   // anders de lege tekst. Hij wordt twee keer toegepast — bij het opbouwen op
   // de rijen, en daarna op de pagina — en moet dus ook maar één keer bestaan.
-  const pickSamenvatting = (namen, leeg) => (namen.length ? namen.join(", ") : leeg);
-  const pickBox = (rows, leeg, open) =>
-    `<details class="pick" data-pick-empty="${esc(leeg)}" ${open ? "open" : ""}><summary><span class="pick-label">${
-      esc(pickSamenvatting(rows.filter((r) => r.checked).map((r) => r.label), leeg))}</span></summary>
-       <div class="pick-list">${rows.map(pickRow).join("")}</div></details>`;
+  // voor is wat er vóór de namen komt te staan, voor een uitklapper waarvan de
+  // keuzes zelf niet zeggen waar ze over gaan: "Toegewezen aan: Anna" leest
+  // als een filter, "Anna" alleen niet. De lege tekst zegt het al zelf.
+  const pickSamenvatting = (namen, leeg, voor) => (namen.length ? (voor ? voor + ": " : "") + namen.join(", ") : leeg);
+  const pickBox = (rows, leeg, open, voor) =>
+    // De samenvatting ook als title: op een smalle knop wordt ze afgekapt, en
+    // dan is dit de enige plek waar ze nog helemaal staat.
+    ((tekst) => `<details class="pick" data-pick-empty="${esc(leeg)}" data-pick-prefix="${esc(voor || "")}" ${open ? "open" : ""}><summary><span class="pick-label" title="${esc(tekst)}">${
+      esc(tekst)}</span></summary>
+       <div class="pick-list">${rows.map(pickRow).join("")}</div></details>`)(pickSamenvatting(rows.filter((r) => r.checked).map((r) => r.label), leeg, voor));
   // Dezelfde samenvatting, nu uit de pagina gelezen in plaats van uit de
   // gegevens: elke rij draagt zijn eigen tekst al, dus de teksten van de
   // aangevinkte vakjes achter elkaar geven precies hetzelfde antwoord.
   const syncPick = (box) => {
     const sum = box.querySelector(".pick-label");
     if (!sum) return;
-    sum.textContent = pickSamenvatting(
+    sum.title = sum.textContent = pickSamenvatting(
       [...box.querySelectorAll(".pick-list input:checked")]
         .map((i) => (i.closest("label") || { textContent: "" }).textContent.trim())
         .filter(Boolean),
-      box.dataset.pickEmpty || "");
+      box.dataset.pickEmpty || "", box.dataset.pickPrefix || "");
   };
   // <details> gaat uit zichzelf nooit dicht: je moest er twee keer op klikken.
   // Eén luisteraar op het document doet dat voor alle uitklappers samen, ook
   // die in een dialoog en die er bij een volgende render bijkomen. Een klik ín
   // de uitklapper telt niet mee — anders sloeg het vakje dat je net aanvinkte
   // de uitklapper meteen weer dicht.
+  // Dichtklappen gaat zacht, via leave() in ui.js; dat bestand wordt na dit
+  // geladen, maar hier komen we pas bij een klik. Is het er niet (buiten een
+  // browser), dan klapt de lijst gewoon dicht.
+  const sluitPick = (d) => {
+    const ui = window.FollowUpUI, list = d.querySelector(".pick-list");
+    if (ui && list) ui.leave(list, () => { d.open = false; }, { ms: 90 });
+    else d.open = false;
+  };
   const sluitPicks = (behalve) => {
     for (const d of document.querySelectorAll("details.pick[open]")) {
-      if (d !== behalve && !d.contains(behalve)) d.open = false;
+      if (d !== behalve && !d.contains(behalve)) sluitPick(d);
     }
   };
   // De twee luisteraars hieronder zijn het enige in dit bestand dat de pagina
@@ -159,7 +246,13 @@ window.FollowUpDomain = (() => {
     // statistiekpagina tekent zichzelf opnieuw zodra je een vinkje zet; liep
     // dit daarna, dan was het aangeklikte vakje al uit het document verdwenen
     // en sloot de verse uitklapper zich alsnog.
-    document.addEventListener("click", (e) => sluitPicks(e.target), true);
+    document.addEventListener("click", (e) => {
+      sluitPicks(e.target);
+      // Een klik op de eigen knop van een open uitklapper: de browser zou hem
+      // in één klap sluiten. Dat doen we zelf, even zacht als de andere.
+      const knop = e.target.closest && e.target.closest("details.pick[open] > summary");
+      if (knop) { e.preventDefault(); sluitPick(knop.parentElement); }
+    }, true);
     // En hier houdt het component zijn eigen samenvatting bij. Eén luisteraar
     // voor alle uitklappers samen, ook die in een dialoog en die er bij een
     // volgende render bijkomen. Een scherm dat de vinkjes zelf verzet, roept
@@ -179,9 +272,147 @@ window.FollowUpDomain = (() => {
     });
   }
 
+  // ---------- twee mensen tegelijk ----------
+  // Het document is één geheel en de databank weigert een opslag zodra iemand
+  // anders ondertussen iets bewaarde, wat het ook was. Hiermee hoeft dat geen
+  // "herlaad en doe het opnieuw" meer te zijn: we leggen drie versies naast
+  // elkaar — basis (wat we laatst van de databank kenden), mine (wat hier nu
+  // staat) en theirs (wat de databank nu heeft) — en nemen van elk stuk de
+  // kant die veranderd is. Pas als allebei hetzelfde stuk anders veranderden
+  // is er echt een conflict, en dat komt in de lijst terecht.
+  //
+  // Zuiver rekenwerk op gewone JSON, zodat het zonder browser na te kijken is.
+  const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  const deepEqual = (a, b) => {
+    if (a === b) return true;
+    if (Array.isArray(a) || Array.isArray(b)) {
+      return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));
+    }
+    if (!isObj(a) || !isObj(b)) return false;
+    // De volgorde van de sleutels telt niet: de app en de databank bouwen
+    // hetzelfde object niet altijd in dezelfde volgorde op.
+    const ka = Object.keys(a).filter((k) => a[k] !== undefined);
+    const kb = Object.keys(b).filter((k) => b[k] !== undefined);
+    return ka.length === kb.length && ka.every((k) => deepEqual(a[k], b[k]));
+  };
+  // Een lijst van records met een id (ziekenhuizen, contactpersonen,
+  // contactmomenten, geplande momenten) of een lijst van losse waarden
+  // (producten, merken). Een lege lijst past bij allebei.
+  const isRecords = (v) => Array.isArray(v) && v.every((x) => isObj(x) && typeof x.id === "string" && x.id);
+  const isValues = (v) => Array.isArray(v) && v.every((x) => !isObj(x) && !Array.isArray(x));
+  // De stempel zet de databank zelf, op wie bewaart: daarover valt niet te
+  // twisten. nextAction volgt altijd uit planned[], en normalize() rekent het
+  // na het samenvoegen opnieuw uit.
+  const STAMP_KEYS = ["createdBy", "createdAt", "updatedBy", "updatedAt"];
+  const DERIVED_KEYS = ["nextAction", "nextActionDate"];
+  const isHospital = (path) => path.length === 2 && path[0] === "hospitals";
+  const settled = (path) => STAMP_KEYS.includes(path[path.length - 1])
+    || (path.length === 3 && path[0] === "hospitals" && DERIVED_KEYS.includes(path[2]));
+  // Een record zonder zijn stempel. De app zet de stempel zelf en de databank
+  // zet hem opnieuw, en die twee zijn niet altijd letterlijk gelijk (de dag
+  // van de browser tegenover die van Brussel). Wie daarop vergelijkt, ziet
+  // een wijziging van de collega waar er geen is.
+  const bare = (r) => {
+    if (!isObj(r)) return r;
+    const o = {};
+    for (const k of Object.keys(r)) if (!STAMP_KEYS.includes(k)) o[k] = r[k];
+    return o;
+  };
+  const untouched = (now, before) => deepEqual(bare(now), bare(before));
+  // Kamers die een contactmoment bijtelt of aftrekt: dezelfde regel als
+  // syncRooms() in app.js, hier nodig om te zien of een gewijzigd aantal
+  // geïnstalleerde kamers uit contactmomenten volgt of met de hand is getypt.
+  const roomsFrom = (h) => ((h && h.activities) || []).reduce((n, a) => {
+    if (!a || !a.rooms || productKind(a.product) !== "subscription") return n;
+    return n + (a.type === "installation" ? a.rooms : a.type === "cancellation" ? -a.rooms : 0);
+  }, 0);
+  // Wat alleen op het niveau van één ziekenhuis te beslissen valt.
+  function settleHospital(base, mine, theirs, out, conflicts, path) {
+    const drop = (key) => {
+      const i = conflicts.findIndex((c) => c.length === path.length + key.length && key.every((k, n) => c[path.length + n] === k));
+      if (i >= 0) conflicts.splice(i, 1);
+    };
+    // Geïnstalleerde kamers zijn een teller: een installatie telt erbij, en
+    // twee mensen die er elk een invoeren moeten bij de som uitkomen, niet bij
+    // één van de twee. Volgt de wijziging aan elke kant precies uit de
+    // contactmomenten van die kant, dan tellen we de twee verschillen op. Is
+    // het getal met de hand gezet, dan blijft het wat het algemene
+    // samenvoegen ervan maakte: gelijk is gelijk, anders een conflict.
+    const n = (h) => Number(h && h.unit && h.unit.roomsInstalled) || 0;
+    const dm = n(mine) - n(base), dt = n(theirs) - n(base);
+    if (dm && dt && dm === roomsFrom(mine) - roomsFrom(base) && dt === roomsFrom(theirs) - roomsFrom(base) && isObj(out.unit)) {
+      out.unit = { ...out.unit, roomsInstalled: Math.max(0, n(base) + dm + dt) };
+      drop(["unit", "roomsInstalled"]);
+    }
+    // Eén hoofdcontact. Kozen twee mensen elk een ander, dan zouden er na het
+    // samenvoegen twee zijn; die regel woont in de dialoog en niet in
+    // normalize(). Wie nu bewaart heeft het laatste woord.
+    if (Array.isArray(out.contacts) && out.contacts.filter((c) => c && c.primary).length > 1) {
+      const keep = ((mine.contacts || []).find((c) => c && c.primary) || {}).id;
+      out.contacts = out.contacts.map((c) => (c && c.primary && c.id !== keep ? { ...c, primary: false } : c));
+    }
+  }
+  function merge3(base, mine, theirs, conflicts = [], path = []) {
+    if (deepEqual(mine, theirs)) return mine;
+    if (deepEqual(mine, base)) return theirs;
+    if (deepEqual(theirs, base)) return mine;
+    // Vanaf hier veranderden allebei, en niet naar hetzelfde.
+    if (isRecords(mine) && isRecords(theirs) && (base == null || isRecords(base))) {
+      const b = new Map((base || []).map((r) => [r.id, r]));
+      const m = new Map(mine.map((r) => [r.id, r]));
+      const out = [];
+      // Hun volgorde, met wat alleen hier bestaat erachter.
+      for (const r of theirs) {
+        if (m.has(r.id)) out.push(merge3(b.get(r.id), m.get(r.id), r, conflicts, [...path, r.id]));
+        else if (!b.has(r.id)) out.push(r); // door hen toegevoegd
+        // Hier verwijderd. Bleef het bij hen zoals het was, dan is het weg;
+        // werkten zij er net aan, dan mag het niet stil verdwijnen.
+        else if (!untouched(r, b.get(r.id))) { conflicts.push([...path, r.id]); out.push(r); }
+      }
+      const seen = new Set(theirs.map((r) => r.id));
+      for (const r of mine) {
+        if (seen.has(r.id)) continue;
+        if (!b.has(r.id)) out.push(r); // hier toegevoegd
+        // Door hen verwijderd terwijl het hier veranderde.
+        else if (!untouched(r, b.get(r.id))) { conflicts.push([...path, r.id]); out.push(r); }
+      }
+      return out;
+    }
+    if (isValues(mine) && isValues(theirs) && (base == null || isValues(base))) {
+      // Vinkjes: wat zij hebben, plus wat hier bijkwam, min wat hier wegging.
+      const b = base || [];
+      const gone = b.filter((x) => !mine.includes(x));
+      const added = mine.filter((x) => !b.includes(x));
+      return [...theirs.filter((x) => !gone.includes(x)), ...added.filter((x) => !theirs.includes(x))];
+    }
+    if (isObj(mine) && isObj(theirs) && (base == null || isObj(base))) {
+      const out = {};
+      const keys = [...new Set([...Object.keys(theirs), ...Object.keys(mine)])];
+      // products eerst: daar hangt van af of de kleur en de fase van het
+      // ziekenhuis afgeleid zijn.
+      if (isHospital(path)) keys.sort((a, b) => (b === "products") - (a === "products"));
+      for (const k of keys) {
+        // Een sleutel met deze naam vervangt het prototype in plaats van een
+        // waarde te zetten. In echte gegevens komt hij niet voor.
+        if (k === "__proto__") continue;
+        // Met een product aangevinkt volgen kleur en fase uit de opvolging per
+        // product en rekent normalize() ze opnieuw uit. Zonder product zijn ze
+        // met de hand gezet, en dan is twee keer anders gewoon een conflict.
+        if (isHospital(path) && (k === "status" || k === "stage") && (out.products || []).length) { out[k] = mine[k]; continue; }
+        const v = merge3(base == null ? undefined : base[k], mine[k], theirs[k], conflicts, [...path, k]);
+        if (v !== undefined) out[k] = v;
+      }
+      if (isHospital(path)) settleHospital(base, mine, theirs, out, conflicts, path);
+      return out;
+    }
+    if (!settled(path)) conflicts.push(path);
+    return mine;
+  }
+
   return {
+    merge3, deepEqual,
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
-    esc, pickBox, syncPick, myProducts, productColor, emptyTargets,
+    ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
+    esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
   };
 })();

@@ -1,7 +1,9 @@
 # FollowUp Prion — working notes
 
 Sales follow-up for **EndoQ** (ScopeWatch) and **Ainex** (ENAD), two AI-assisted
-colonoscopy systems Prion Medical distributes in the **Benelux**. A map of hospitals,
+colonoscopy systems Prion Medical distributes in the **Benelux**, and since November
+2026 also for **Thyroid RFA** and **Fibroid RFA**, which are sold per procedure
+rather than per subscription. A map of hospitals,
 a record per hospital with contacts, contact moments and endoscopy-unit details, and a
 statistics page. Bilingual Dutch / English.
 
@@ -29,7 +31,7 @@ If a skill, linter or review suggests otherwise — and general-purpose skills w
 ## Running it
 
 ```bash
-python3 server.py        # then open http://localhost:8080
+python3 server.py        # then open http://localhost:8081
 ```
 
 Or double-click `start.command`. Data lives in `data/db.json`, created from
@@ -39,24 +41,71 @@ day holding the state at that day's **first** change — deliberately not
 overwritten, so a bad save cannot take the day's only copy with it.
 
 With `public/config.js` filled in, the app talks to Supabase instead and asks for a
-login. `supabase/schema.sql` creates the tables.
+login. `supabase/schema.sql` creates the tables. There are two such projects — see
+Two databases below.
 
 Pushing to `main` deploys: GitHub Pages serves the repository root, where `index.html`
 redirects to `public/`. Browsers keep the old files until the `?v=` stamp changes, so a
 deploy that skips the stamp bump ships nothing.
 
+## Two databases
+
+There are two Supabase projects: the live one and a development one. `public/config.js`
+holds both key pairs and chooses between them by **hostname** — `localhost`,
+`127.0.0.1`, `[::1]` and a page opened as a file get development, everything else gets
+live. The choice is made at runtime, not per branch, so the published app cannot reach
+the development database, a deploy cannot carry a development key, and merging `dev`
+into `main` leaves nothing to strip. Comment the two development lines out and
+`localhost` falls back to `data/db.json` through `server.py`, which is still the
+quickest way to work on anything that is not about the database.
+
+The development project exists so that a schema change can be tried before it reaches
+anyone's work: run `schema.sql` there first, then `versie.sql`, `toegang.sql` and
+`controle.sql`, and only then the same against the live project — from disk, as ever.
+
+It holds **invented data only**: the forty hospitals from `data/seed.json` plus made-up
+clinicians on `example.com`. Never an export from the live database. That would put
+real contact details in a second database with its own user list, and the convenience
+is not worth it. Sign-up is off there too, because the project URL sits in a public
+repository. It is on the free plan, so it **pauses after a week without traffic** —
+restoring it is one click and nothing is lost.
+
+Four accounts cover every rule: an `admin`, a `viewer`, a `contributor` limited to
+Ainex and an `editor` limited to EndoQ. The last two are the point, because the product
+wall can only be judged from both sides at once. Give each one a name in `app_users`
+first: the user screen shows names and no e-mail addresses, so fresh accounts are four
+identical blank rows.
+
+Two things that cost an evening to find out:
+
+- **Part C of `controle.sql` wants a uuid in five places.** It can look itself up
+  instead: `set_config('request.jwt.claims', …, true)` does what the `set local` line
+  there does and accepts a subquery. Look the uuid up *before* switching role, since
+  `authenticated` may not read `auth.users`. Run those blocks one at a time — the first
+  failure stops the whole transaction, and three of them are supposed to fail.
+- **Seeding by writing to `app_state` directly** leaves a document that never went
+  through `write_state()`, and C2b then reports FOUT for no good reason:
+  `merge_hospital()` always writes a `planned` key and `seed.json` has none, so the
+  first save legitimately changes 32 hospitals. Push such a document through
+  `write_state()` once as an unrestricted user before trusting `controle.sql` on it.
+
 ## Layout
 
 | File | What it is |
 |---|---|
-| `public/domain.js` | Fixed values both app.js and stats.js need, plus `esc()` |
+| `public/domain.js` | Fixed values both app.js and stats.js need, plus `esc()` and `pickBox()` |
+| `public/ui.js` | What the page does without knowing about hospitals: icons, `leave()`, `ask()`, row motion, the sliding switch, the select list |
 | `public/app.js` | The whole app: map, list, record, agenda, dialogs, export/import (~1,500 lines) |
 | `public/i18n.js` | NL/EN dictionaries and `t()` |
 | `public/stats.js` | Statistics page, charts as plain HTML |
 | `public/storage.js` | Two backends: local `server.py`, or Supabase with login |
-| `public/styles.css` | Prion Medical house style — ink/paper/Jost, amber accent `#d97b2a` |
+| `public/theme.js` | Light, dark or system: sets `data-theme` on `<html>` before anything is drawn |
+| `public/styles.css` | The look: white panels on cool grey, system font, one blue accent `#2563eb`, light and dark |
 | `server.py` | Local static server + `GET`/`PUT /api/data` |
 | `data/seed.json` | 40 starter hospitals (BE/NL/LU), no contacts, approximate coordinates |
+| `public/consent.html`, `consent.js` | The page where someone allows an assistant to act as them (see The assistant connector) |
+| `supabase/functions/agent/index.ts` | The connector an assistant such as Claude talks to: a Supabase Edge Function, one file, no imports |
+| `docs/agent-instructions.md` | What to paste into the assistant's project so it behaves like a colleague who keeps the log |
 
 ## Conventions
 
@@ -72,6 +121,32 @@ interpolated value that could come from a user **must** be wrapped in `esc()`. T
 a discipline, not a guarantee — when editing a template, check it. Translated strings
 and numbers are ours and safe.
 
+**The look.** `styles.css` opens with every token: surfaces, ink, one accent, the
+three status colours each as a full colour (dots, pins), an `-ink` (text) and a
+`-soft` (the ground behind it), and `--series-1` … `--series-6`. The accent is one
+value, `--accent` (light and dark each have theirs), with `--on-accent` for the text
+on top of it; hover, soft, line, ink and focus ring are derived with `color-mix()`.
+There are five
+font sizes (`--t-xs` … `--t-lg`, 11/12/13/15/18) and `--t-xl` for the figures on the
+statistics page; pick one of those rather than writing a pixel value. The phone block
+remaps the same tokens one step larger, so inputs reach 16px and iOS does not zoom.
+Dark mode is the same token names under `:root[data-theme="dark"]` inside `@media
+screen` — `screen`, so a print is always light. `public/theme.js` sets that attribute
+from the choice in the menu (system, light or dark, kept in `localStorage`); it loads
+in the `<head>` so the page does not flash white first, and it is a file of its own
+because the CSP allows no inline script. A rule that needs a different value in
+the dark gets a token, not a second rule: a rule inside that block that also exists
+further down the file loses to it. Icons are `icon("edit")` from `ui.js`, inline
+SVG in the colour of the text beside them; no glyphs from the font. Motion is short
+and all of it is switched off under `prefers-reduced-motion`. The one piece with
+JavaScript behind it is the highlight that slides between the buttons of an `.s-seg`
+(`segSlide()` in `ui.js`): the screens rebuild their `innerHTML` on the click, so
+it measures where the highlight is in the capture phase and re-creates it in the new
+markup. The movement itself is a CSS transition on `transform` with `--spring`, which
+is what makes a click halfway turn it round. The font is the
+device's own, so nothing is fetched from Google Fonts any more; the CSP still allows
+it and was left alone.
+
 **The dropdown.** `pickBox()` in `public/domain.js` is the one multi-select in this
 app: the three sidebar filters, a contact's products, a contact moment's and a planned
 moment's product, a user's scope and the statistics filter. It takes its rows as
@@ -80,10 +155,37 @@ whole point: it therefore knows what is ticked and what each row is called, so i
 the summary on the button, both when first rendered and on every tick. Five screens
 each kept that summary themselves before, with five different data attributes. A screen
 that moves ticks itself calls `syncPick()`, because a checkbox set from JavaScript
-fires no `change`. `attrs` goes into the tag unescaped — they are attributes and not
+fires no `change`. A fourth argument is what goes in front of the names once
+something is ticked — "Assigned to: Anna" — for a dropdown whose rows are people and
+do not say what they stand for; filters carry their wording inside the field and
+never as a label in front of it. `attrs` goes into the tag unescaped — they are attributes and not
 text — so the caller wraps its own values in `esc()`, as everywhere else here. A row
 called "all" is a row like any other, which is why "all products" is also automatically
 the text on the button. `type: "radio"` makes it a choice of one.
+
+**Questions and messages.** No `confirm()` or `alert()`: `ask(msg)` in `ui.js` opens
+the app's own dialog (`#ask`) and promises true or false, `tell(msg)` is the same box
+with one button. A form dialog with a delete button passes its question as the third
+argument of `openDialog()`, which asks it with the form still open underneath, so
+"Annuleer" puts you back where you were. The banner under the top bar takes a tone,
+`showBanner(msg, reload, "error" | "warn" | "info")`, and is red unless told otherwise.
+
+**Making things go away.** Anything that closes with a fade goes through
+`leave(el, after, opts)` in `ui.js`: it fades the element and only then runs `after`,
+which is what really removes it (set `hidden`, close the dialog, drop the node).
+`stay(el)` calls a leave off when the thing is reopened meanwhile. One mechanism for
+the record, the menu, the toast, both dialogs and both kinds of dropdown — no CSS
+exit rules, and no timer elsewhere that has to match a duration. It runs on a clock
+rather than on an animation event, because that event waits for the next frame and a
+window that is not being drawn never sends it.
+
+**Select lists.** A `<select>` stays a `<select>`, but with a mouse its list is drawn
+by `selShow()` in `ui.js` (`.sel-list` in `styles.css`): the system's own list
+opens over the field on a Mac and hides which field you are in. One listener on the
+document holds the native list back and shows ours under the field, or above it; a
+choice sets the select's value and fires an ordinary `change`, so no screen had to be
+converted and a new select joins in by existing. On a touch screen nothing is
+intercepted and the device shows its own picker.
 
 **Data shape.** One document: `{ version, hospitals: [...] }`. Each hospital carries
 `contacts[]`, `activities[]`, `planned[]` and a `unit` object (scope brands and notes,
@@ -125,6 +227,43 @@ sorts last rather than being refused, so an app that already knows a new product
 does not break against a database that has not been updated yet. So: two lines,
 one per side, and a seventh product also wants a `--series-7`.
 
+**Regions.** `REGIONS` in `public/domain.js` says which countries make up a
+region and which piece of map belongs to it; `COUNTRIES` is derived from it. A
+hospital stores no region: `regionOf(h.country)` works it out, so the two cannot
+disagree and old data needs nothing. The chosen regions live in `state.regions`,
+beside `state.filter` rather than in it, and are remembered per browser
+(`followup-regions` in `localStorage`): it is where you work, not a search, so
+"clear filters" leaves it alone. It narrows the list, the map, the counters, the
+logbook and the statistics, decides which countries the country filter offers and
+where the map opens. Exports are not narrowed. **A region only counts once a
+hospital lies in it** (`liveRegions()` in `app.js`): the table lists the Benelux
+and Australia, but while every hospital is in the Benelux no region filter is
+drawn and the map opens there, and the first hospital given an Australian
+address brings the filter with it. The country field in the record and in the
+new-hospital dialog always offers every country, or that first one could never
+be entered. Adding a region is one line there plus `region.x` and `country.XX`
+in both languages; mind that `normalize()` empties a country that is not on the
+list. It is a filter and not a wall — nothing in
+the database knows about it. If it ever has to become one, it would key on
+`country` in `read_state()`, with its own copy of the table as `producten()` is of
+`PRODUCTS`, and it would end "every hospital stays visible to everyone".
+
+**Two kinds of product.** `productKind()` in `public/domain.js` says how a product is
+sold: `"subscription"` (EndoQ, Ainex: per room, counted in rooms and active
+subscriptions) or `"procedure"` (Thyroid RFA, Fibroid RFA: used up per procedure, no
+installation, counted in units ordered). Anything not listed is a subscription, so an
+unknown product behaves as everything did before. `PRODUCTS` deliberately stays a list
+of names — the name is what is stored on every record and in every scope — and what a
+product *is* hangs beside it. Three things follow from the kind and should keep doing
+so instead of naming products: `wantsQuantity()` (the one number on a contact moment
+is rooms for a subscription product and units for a procedure product, and there only
+on an order), `stagesFor()` (one shared list of stages, of which a procedure product
+skips "demo installed" and a subscription product skips "purchase started"), and the
+statistics page, which shows subscriptions, rooms and towers for the one kind and
+orders per month for the other. `syncRooms()` ignores procedure products. Units
+ordered is a sales figure per hospital per month — never a record per patient or per
+procedure.
+
 **One product or several.** A contact moment and a planned moment carry one
 `product`; a contact carries `products[]`, because the same clinician is often the
 point of contact for both. `normalizeContact()` migrates the old single `product`
@@ -151,6 +290,42 @@ into `planned[]` the same way: `normalize()` turns it into a planned moment of t
 `demo` and drops the field, and the "demo's gepland" KPI and the CSV column both read
 `planned[]` now. There is one place to plan a demo, and it clears itself when ticked off.
 
+**Assigned to, and planned for.** Two things belong to a person, and they have two
+words on purpose. A product at a hospital is *assigned to* someone: `owner` in that
+product's row in `h.pipeline` (the field kept its name; the label became "Assigned
+to"). A planned moment is *planned for* someone: `assignee` on the entry in
+`planned[]`. They shared "Assigned to" for a day, until the agenda page showed both
+filters, one per tab, with the same label and a different meaning. The connector
+follows the same split: `assign_to` on a product's follow-up, `planned_for` on a
+planned moment. A planned moment is for whoever entered it unless someone
+else is chosen, so `assigneeOf()` falls back to `createdBy`, and **the field is only
+stored when it differs from the author**. That is not tidiness: writing an empty
+`assignee` onto every older moment would make the first person to save the last
+editor of the whole agenda. The dialog offers only colleagues whose scope includes
+the moment's product — a convenience and not a wall, since the database hides the
+moment from anyone else anyway. Ticking a moment off drops the assignment. Lists of
+people put the signed-in user first, marked "(me)" (`personLabel()`).
+
+**Where you were.** A reload reopens the same screen: `pagehide` writes the view,
+the open hospital, the agenda tab and the map's position to `sessionStorage`
+(`followup-place`) — per tab, so opening the app afresh still starts on the map.
+`showPlaceEarly()` restores it before the data is there, with `state.loading`
+making `setView()` draw placeholders (`skelAgenda()`, `skelStats()`, `skelFiche()`)
+instead of an empty screen; `restoreSelection()` and `restoreView()` finish the job
+around the first `renderAll()`. The users screen waits for the data, because who may
+see it is not known before sign-in.
+
+**The logbook.** The agenda page has two tabs: what is planned (`planned[]`) and the
+logbook, every contact moment across hospitals, newest first and grouped per week
+(`renderLog()`). It is not a view of its own — `state.agenda.tab` chooses — so the tab
+bar, `setView()` and the print rules did not have to learn anything. Product, country,
+owner and the search term are the map's own (`state.filter`), in both directions;
+period, type and "entered by" exist only here (`state.log`). The filter row is drawn
+once and only the list below it is redrawn (`renderLogBody()`), or an open dropdown
+would close on every tick. Editing goes through `activityDialog()`, the same one the
+record uses; adding stays in the record. The wall needs nothing extra: the database
+only sends the contact moments within scope.
+
 **Gone quiet.** `isQuiet()` finds the hospitals nobody is chasing: contact has
 happened, `planned[]` is empty and the newest `activities[]` entry is at least
 `QUIET_DAYS` (90) old. A hospital with something planned is never quiet — it is
@@ -160,6 +335,29 @@ instead. Derived like `isOverdue()`, so nothing is stored and nothing migrates.
 **Status and stage.** Red → orange on first contact; green on installation or order.
 `autoStatus()` and `stageStatus()` hold the rules. Manual override must always remain
 possible.
+
+**Follow-up per product.** `h.pipeline` holds one row per product:
+`{ stage, status, owner }`, where `owner` is a uuid from `app_users`. A hospital can
+be an EndoQ customer and a Thyroid RFA prospect at once. `h.status` and `h.stage` on
+the hospital are **derived** from it — the product that is furthest along, colour
+first, then stage (`furthest()` in `domain.js`) — exactly as `nextAction` is derived
+from `planned[]`; do not write to them while a product is ticked. Only a hospital with
+no product ticked keeps a status and stage of its own. `syncPipeline()` keeps all this
+in step and is called wherever `h.products` or a row changes. A row is never deleted
+when its tick goes: it is ignored while unticked and comes back with the tick.
+`pipelineView(h, products)` is what the map, the list, the counters and the statistics
+show: with a product filter, the furthest of *those* products; without, the hospital
+as a whole. "Overdue", "gone quiet" and "demo planned" follow the same filter through
+`inFilter()`. A contact moment moves the row of its own product; one without a product
+moves the only row there is, and nothing when there are several.
+
+**What you need to know for an RFA product** — CMM approval, priority, whether they
+already perform RFA, the current system and a note — is the counterpart of the
+endoscopy unit, and shows as a section of its own per product. It is stored in that
+product's row in `h.pipeline` (`normalizeFacts()`), not in a block on the hospital
+like `unit`: Thyroid and Fibroid each have their own approval at the same hospital,
+and a row is already inside the product wall, so these facts never reach an account
+without the product. `h.network` and `h.sites` are ordinary shared hospital fields.
 
 **Printing.** `@media print` at the foot of `styles.css` strips the furniture —
 map, menu, tab bar, every button — and prints whichever pane is open: the
@@ -187,6 +385,12 @@ commit it and do not paste its contents into issues or commit messages. The same
 for `data/seed.json`, which **is** committed: it keeps 40 hospitals with empty
 `contacts[]` and `activities[]`, and no clinician's name, phone number or e-mail
 address may be added to it. `data/backups/` is ignored for the same reason.
+
+An assistant connected through the connector is a new recipient of that data:
+clinicians' names, numbers and the notes about them go to it and into that chat's
+history, outside the database. That was already true of the workbook it replaces,
+but it is now something this project does on purpose, and it belongs in whatever
+record of processing Prion keeps.
 
 What protects the data is the login, not the repository. Sign-up is disabled on the
 Supabase project, so only users created by hand under Authentication → Users can sign
@@ -270,7 +474,7 @@ rules are worth knowing:
   `products` is the exception: `(stored − yours) ∪ (payload ∩ yours)`, so you cannot
   strip the other product and push a hospital out of a colleague's view.
 - Outside an import, at most one hospital and five records may disappear in a single
-  save. The app deletes one thing at a time behind a `confirm()`, so no real save ever
+  save. The app deletes one thing at a time behind a confirmation, so no real save ever
   reaches that cap. It catches the case that no merge rule can: a user whose scope was
   just widened sends the small document they were holding, which would otherwise count
   as a wholesale replace.
@@ -284,6 +488,24 @@ when the demo activities themselves changed: the field is also typed by hand in 
 record, and recomputing on every save would wipe what someone put there.
 `unit.roomsInstalled` is not: `syncRooms()` applies a *difference*, not a sum, so it is
 already safe.
+
+`pipeline` sits inside the wall like a contact moment. `scope_hospital()` passes only
+the rows within scope and recomputes the hospital's status and stage on what is left
+(`fix_overall()`), so that "green, customer" does not give away how far the other
+product is. `merge_hospital()` keeps the colleague's rows as stored and recomputes on
+the full set, because a restricted browser computed the whole from the half it could
+see. `followup.fases()` is the database's copy of `STAGES`, as `producten()` is of
+`PRODUCTS`. A restricted user gets no hospital-level status or stage controls at all:
+where a colleague's product is attached the database would discard the click.
+
+Going from one stage per hospital to a row per product is done **in the database, for
+every product at once** (`followup.opvolging_aanvullen()`): once on the stored
+document at the foot of `schema.sql`, and again in `read_state()` and `write_state()`
+for an old document that still turns up. Leaving it to the app is what goes wrong — a
+restricted user's app knows one product, creates one row, and the colleague then finds
+a hospital "with follow-up" in which his product is missing. Run `schema.sql` on the
+live project at the moment the new app is deployed, not days before: the previous app
+writes `h.status` directly and the new one would overrule it from `pipeline`.
 
 Run `supabase/controle.sql` in the SQL editor after any change to these functions. It
 reports OK or FOUT per check and needs no eyeballing; the one that matters is "laden en
@@ -301,9 +523,84 @@ materially, or it stops guarding anything.
 `supabase/toegang.sql` is the third one, and the one to run now and then rather than
 after a change: it checks that the grants, the RLS and the roles are still what the
 schema intends — `app_state` and `app_state_backups` unreachable, no `usage` on
-`followup`, the two RPCs executable, every account with a row, at least one admin. It
+`followup`, the three RPCs executable, every account with a row, at least one admin. It
 cannot see whether sign-up is disabled or whether 2FA is on, because neither lives in
 the database; the file names both at the foot.
+
+## The assistant connector
+
+`supabase/functions/agent/index.ts` lets an assistant such as Claude work in
+FollowUp on someone's behalf: look hospitals up, log and plan moments, keep contacts
+and follow-up up to date, and answer questions about the agenda, the logbook and the
+figures. It speaks the Model Context Protocol over plain JSON-RPC and is hand-written
+for the same reason everything else is: one file, no imports, no packages. **It has
+run against the development project only.** Nothing of it exists on the live project
+yet.
+
+Three rules it rests on:
+
+- **Narrow tools, never the document.** The function reads, changes and writes; the
+  model only names a hospital and a field. A language model must not carry hundreds
+  of records back and forth.
+- **The signed-in user's own token, never the service key.** It is passed unchanged
+  to `read_state()` and `write_state()`, so the role, the product wall, the stamp and
+  the cap on deletions apply exactly as in the app. `controle.sql` therefore still
+  says everything there is to say about what an assistant can reach.
+- **The rules now exist in a third place.** What a contact moment does to the colour
+  and the stage (`autoStatus`, `stageStatus`, `syncPipeline`, `syncRooms`,
+  `syncNextAction`, `syncProducts`), the fixed lists from `domain.js` and the counting
+  rules from `stats.js` are copied into the function. Change one in `app.js` and it
+  must change there too. If the connector stays, these belong in the database, where
+  the app and the assistant would share them and `controle.sql` could check them.
+
+Signing in goes through Supabase Auth acting as an OAuth server. In the dashboard:
+OAuth Server on, authorization path `/consent.html`, dynamic client registration off,
+and one hand-registered public client for Claude with both
+`https://claude.ai/api/mcp/auth_callback` and the `claude.com` variant as redirect
+URIs. Supabase sends the user to `public/consent.html`, which reuses the app's
+session in that browser — hence the "not you?" link — and loads a newer supabase-js
+than `index.html`, because only that one knows `auth.oauth`. The function is deployed
+by pasting it into the dashboard's editor (there is no CLI here), with **Verify JWT
+off**: an assistant without a token must get the function's own 401, which says where
+to sign in. The token is still checked on every call, and a failure to check it
+answers 503 and not 401 — a 401 makes the assistant throw its token away.
+
+Free text reaches a language model, and that is the connector's own kind of risk.
+Names, notes and addresses are written by every colleague, across the product wall
+and whatever their role, so a note could be phrased as an instruction to somebody
+else's assistant. Every result that carries such text says it is data
+(`NOT_INSTRUCTIONS`), the tools that overwrite are marked destructive so the
+assistant asks first, and `docs/agent-instructions.md` says the same. None of that
+is a lock. What holds regardless is the database: a `contributor` cannot remove, and
+nobody reaches another product.
+
+Arguments are checked against each tool's own schema before the tool runs
+(`checkArgs()`): known names only, the right kind, text of at most 4,000
+characters. Stored product names are looked up with `rowOf()`, never through the
+prototype.
+
+The assistant's key is the user's own sign-in, so on its own it could do whatever
+the app can. Two things are therefore closed to it in the database
+(`followup.via_assistant()`, which recognises the `client_id` a Supabase OAuth
+token carries): managing users and restoring a backup. `whoami` reports whether the
+key is recognised that way. Even so, do not connect an `admin` account on the live
+project.
+
+The consent page always shows who is asking and under which account, also when
+consent was given before, and only continues on a click: on a shared browser a
+remembered consent would otherwise hand a second person the first one's account
+without a single screen.
+
+Removing a record always takes two calls: the first returns what would go and a
+code, the second removes. The code is tied to the user, the record and the document's
+timestamp. It forces the two steps; it cannot prove a person said yes, and in Claude's
+Auto mode nothing else does either. The real limit is the database's: a `contributor`
+cannot remove anything, which is the role to give anyone who only dictates.
+
+Open at the time of writing: the first connection dropped within forty minutes and
+the cause was not found, so whether the token renews by itself after an hour is
+unproven; and signing out of the app ends every session of that account, which as
+far as we know includes the assistant's.
 
 ## Git
 
@@ -312,19 +609,39 @@ the database; the file names both at the foot.
 - Commits are authored `Dante Kerstens <dante@prionmedical.be>`, set per-repo.
 - **No AI attribution** in commit messages or PR descriptions — no `Co-Authored-By`
   trailer, no "Generated with" footer.
-- Commit messages in Dutch, matching the code comments.
+- Commit messages in Dutch or English, either is fine. **Branch names and pull request
+  titles in English.**
 - `.claude/` is gitignored, skills included.
 
 ## Known and accepted
 
 Not bugs; decisions. Reviewers will flag them, so the reasoning is recorded here.
 
-- **One JSON document, last-write-wins** with an `updated_at` check. A conflict is
-  detected and reported rather than silently lost, but two people editing at once means
-  one of them redoes their work. Fine for a handful of users; it does not scale further.
-- **Two people editing at once still collide.** The conflict check is per document,
-  not per hospital, so an Ainex and an EndoQ user saving in the same second means one
-  of them redoes their work — even though they touched different records.
+- **One JSON document, with an `updated_at` check per document.** The database
+  still refuses a save when anyone saved in between, whatever they touched. The app
+  no longer passes that on to the user: on a refused save it fetches the current
+  document, lays the local change on top (`merge3()` in `public/domain.js`, driven by
+  `pull()` in `app.js`) and saves again. Only when both sides changed the *same* field
+  of the same record differently does the banner appear, and that person redoes one
+  change. Three things keep this safe and must stay: `store.peek()` reads without
+  adopting the new timestamp and `store.accept()` adopts it only after a successful
+  merge (adopting first and failing to merge would let a stale document overwrite a
+  colleague's work); a changed role or scope is never merged, only reloaded; and an
+  import is never merged, since it replaces everything on purpose — a failed import
+  clears the base, so nothing merges until a reload. Three things the merge decides
+  per hospital rather than per field (`settleHospital()`): the colour and stage are
+  only skipped as derived while a product is ticked, since without one they are set
+  by hand; installed rooms are a counter, so two installations logged at once add
+  up, but only when each side's change is explained by its own contact moments; and
+  of two newly chosen main contacts the saver's stays. Stamps never count as a
+  change. The merge is in
+  the browser, not in the database, so the check per hospital that would make this a
+  property of the data itself is still not there.
+- **The app refreshes itself quietly.** When the tab regains focus, and every thirty
+  seconds while it is open, it asks `state_version()` whether anything was saved and
+  merges it in if so. Not while a dialog is open or a save is under way. The function
+  returns a timestamp and nothing else, so it needs no wall; if it is missing from the
+  database the app simply behaves as before.
 - **"No importing" stops a deletion, not a rewrite.** `mode` comes from the client, so
   a `contributor` with the developer console can send an old backup as an ordinary save:
   if no id disappears, the inventory lets it through and every field is rolled back

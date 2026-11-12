@@ -95,7 +95,62 @@ nieuwzh as (
                 "contacts":[{"id":"c7","name":"Dr Nieuw","products":["EndoQ","Ainex"]}],
                 "activities":[],"planned":[]}]'::jsonb),
          '{Ainex}'::text[], false) as n
-  from mijn)
+  from mijn),
+
+-- De opvolging per product, op een eigen testdocument: het grote hierboven
+-- heeft geen pipeline, en moet dat zo houden — het bewijst dat een document
+-- van vóór de opvolging er bij laden en opslaan niets bij krijgt.
+-- k1 loopt voor allebei, EndoQ staat het verst. k2 is enkel van EndoQ.
+opv as (select $j${
+  "version": 1,
+  "hospitals": [
+    { "id": "k1", "name": "UZ Opvolging", "products": ["EndoQ", "Ainex"],
+      "status": "orange", "stage": "evaluation",
+      "pipeline": { "EndoQ": { "stage": "evaluation", "status": "orange", "owner": "U1" },
+                    "Ainex": { "stage": "meeting",    "status": "orange", "owner": "U2" } },
+      "nextAction": "", "nextActionDate": "", "unit": {},
+      "contacts": [], "activities": [], "planned": [] },
+    { "id": "k2", "name": "AZ Enkel EndoQ", "products": ["EndoQ"],
+      "status": "green", "stage": "customer",
+      "pipeline": { "EndoQ": { "stage": "customer", "status": "green", "owner": "U1" } },
+      "nextAction": "", "nextActionDate": "", "unit": {},
+      "contacts": [], "activities": [], "planned": [] }
+  ]}$j$::jsonb as d),
+opvmijn as (select d, followup.scope_doc(d, '{Ainex}'::text[]) as s from opv),
+-- Ainex zet zijn eigen product op klant, en stuurt daarbij drie dingen mee die
+-- niet van hem zijn: een EndoQ-rij (die hij niet eens gekregen heeft), en een
+-- kleur en een fase voor het ziekenhuis die niet kloppen.
+opvwijzig as (
+  select d, followup.merge_doc(d,
+           jsonb_set(jsonb_set(jsonb_set(s,
+             '{hospitals,0,pipeline}',
+             '{"Ainex": {"stage": "customer", "status": "green", "owner": "U2"},
+               "EndoQ": {"stage": "not_interested", "status": "red", "owner": "U2"}}'::jsonb),
+             '{hospitals,0,status}', '"red"'::jsonb),
+             '{hospitals,0,stage}', '"prospect"'::jsonb),
+         '{Ainex}'::text[], false) as n
+  from opvmijn),
+
+-- Een document van vóór de opvolging per product: één fase per ziekenhuis.
+-- o1 heeft twee producten en is klant, o2 heeft er geen.
+oud as (select $j${
+  "version": 1,
+  "hospitals": [
+    { "id": "o1", "name": "UZ Van Vroeger", "products": ["EndoQ", "Ainex"],
+      "status": "green", "stage": "customer",
+      "nextAction": "", "nextActionDate": "", "unit": {},
+      "contacts": [], "activities": [], "planned": [] },
+    { "id": "o2", "name": "AZ Zonder Product", "products": [],
+      "status": "orange", "stage": "meeting",
+      "nextAction": "", "nextActionDate": "", "unit": {},
+      "contacts": [], "activities": [], "planned": [] }
+  ]}$j$::jsonb as d),
+om as (select d, followup.opvolging_aanvullen(d) as m from oud),
+-- De weg die write_state volgt: eerst omzetten, dan de opslag van een
+-- afgeschermde gebruiker ermee samenvoegen. Hij stuurt terug wat hij kreeg.
+omrond as (
+  select m, followup.merge_doc(m, followup.scope_doc(m, '{Ainex}'::text[]), '{Ainex}'::text[], false) as n
+  from om)
 
 select nr, controle,
        case when verwacht is not distinct from gekregen then 'OK' else '>>> FOUT' end as uitslag,
@@ -250,6 +305,47 @@ from (
          '["Ainex"]'::jsonb,
          (select c -> 'products' from jsonb_array_elements(n #> '{hospitals,4,contacts}') c
            where c ->> 'id' = 'c7') from nieuwzh
+
+  -- --- de opvolging per product ---------------------------------------------
+  union all select 38, 'opvolging: enkel de rij van het eigen product komt door',
+         '["Ainex"]'::jsonb,
+         (select jsonb_agg(k) from jsonb_object_keys(s #> '{hospitals,0,pipeline}') k) from opvmijn
+  union all select 39, 'opvolging: kleur en fase van het ziekenhuis zijn die van het eigen product',
+         '["orange", "meeting"]'::jsonb,
+         jsonb_build_array(s #> '{hospitals,0,status}', s #> '{hospitals,0,stage}') from opvmijn
+  union all select 40, 'opvolging: een klant van EndoQ is voor Ainex gewoon een prospect',
+         '["red", "prospect", {}]'::jsonb,
+         jsonb_build_array(s #> '{hospitals,1,status}', s #> '{hospitals,1,stage}', s #> '{hospitals,1,pipeline}') from opvmijn
+  union all select 41, 'opvolging: laden en opslaan verandert niets',
+         to_jsonb(true), to_jsonb(followup.merge_doc(d, s, '{Ainex}'::text[], false) = d) from opvmijn
+  union all select 42, 'opvolging: Ainex kan de rij van EndoQ niet overschrijven',
+         '{"stage": "evaluation", "status": "orange", "owner": "U1"}'::jsonb,
+         n #> '{hospitals,0,pipeline,EndoQ}' from opvwijzig
+  union all select 43, 'opvolging: zijn eigen rij is wel bijgewerkt',
+         '{"stage": "customer", "status": "green", "owner": "U2"}'::jsonb,
+         n #> '{hospitals,0,pipeline,Ainex}' from opvwijzig
+  union all select 44, 'opvolging: de kleur van het ziekenhuis rekent de databank zelf uit',
+         '["green", "customer"]'::jsonb,
+         jsonb_build_array(n #> '{hospitals,0,status}', n #> '{hospitals,0,stage}') from opvwijzig
+  union all select 45, 'opvolging: een ziekenhuis met een EndoQ-rij is niet van Ainex om te verwijderen',
+         to_jsonb(true), to_jsonb(followup.vreemde_data(d #> '{hospitals,1}', '{Ainex}'::text[])) from opv
+
+  -- --- van één fase per ziekenhuis naar een fase per product -----------------
+  union all select 46, 'omzetten: elk aangevinkt product krijgt de fase van het ziekenhuis',
+         '{"EndoQ": {"stage": "customer", "status": "green", "owner": ""},
+           "Ainex": {"stage": "customer", "status": "green", "owner": ""}}'::jsonb,
+         m #> '{hospitals,0,pipeline}' from om
+  union all select 47, 'omzetten: een ziekenhuis zonder product blijft zoals het was',
+         d #> '{hospitals,1}', m #> '{hospitals,1}' from om
+  union all select 48, 'omzetten: een tweede keer verandert niets',
+         to_jsonb(true), to_jsonb(followup.opvolging_aanvullen(m) = m) from om
+  union all select 49, 'omzetten: een document dat al om is blijft onaangeroerd',
+         to_jsonb(true), to_jsonb(followup.opvolging_aanvullen(d) = d) from opv
+  union all select 50, 'omzetten: na de opslag van Ainex is EndoQ nog altijd klant',
+         '{"stage": "customer", "status": "green", "owner": ""}'::jsonb,
+         n #> '{hospitals,0,pipeline,EndoQ}' from omrond
+  union all select 51, 'omzetten: laden en opslaan verandert het omgezette document niet',
+         to_jsonb(true), to_jsonb(n = m) from omrond
 ) q(nr, controle, verwacht, gekregen)
 order by nr;
 

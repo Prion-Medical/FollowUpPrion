@@ -15,8 +15,8 @@ window.FollowUpStats = (() => {
   const t = (k, v) => I18N.t(k, v);
 
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
-  const { PRODUCTS, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS,
-          esc, pickBox, myProducts, productColor, emptyTargets } = window.FollowUpDomain;
+  const { PRODUCTS, CMM_STATES, STAGES, STATUSES, COUNTRIES, regionOf, SCOPE_BRANDS, PROCESSOR_BRANDS,
+          esc, pickBox, myProducts, productColor, productKind, pipelineView, emptyTargets } = window.FollowUpDomain;
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Een doelcijfer aanpassen is schrijven. Zonder dat recht staat het getal er
   // nog wel — het hoort bij de cijfers — maar op slot. storage.js is op dit
@@ -43,6 +43,9 @@ window.FollowUpStats = (() => {
   const rooms = (a) => Number(a.rooms) || 1;   // een installatie zonder aantal telt als één kamer
   // Een stopzetting telt negatief, zodat "actief" echt actief blijft.
   const signedRooms = (a) => (a.type === "cancellation" ? -rooms(a) : rooms(a));
+  // Bestelde stuks. Zonder aantal telt een bestelling als één, maar een
+  // ingevulde nul is nul: een gratis proefzending is geen verkoop.
+  const units = (a) => (a.rooms == null || a.rooms === "" ? 1 : Math.max(0, Number(a.rooms) || 0));
   const sum = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
   const months = () => Array.from({ length: 12 }, (_, i) => new Date(2021, i, 1).toLocaleDateString(I18N.locale, { month: "short" }));
   const productLabel = (p) => p || t("stats.noProduct");
@@ -62,6 +65,7 @@ window.FollowUpStats = (() => {
   function rows(db, { types, ignoreYear } = {}) {
     const out = [];
     for (const h of db.hospitals) {
+      if (!inRegion(h)) continue;
       for (const a of h.activities) {
         if (types && !types.includes(a.type)) continue;
         if (!ignoreYear && view.year !== "all" && !a.date.startsWith(view.year)) continue;
@@ -72,10 +76,19 @@ window.FollowUpStats = (() => {
     return out;
   }
 
-  // Ziekenhuizen, gefilterd op het gekozen product.
+  // De regio's van de kaart gelden hier ook: wie de Benelux volgt, wil geen
+  // cijfers waar de rest van de wereld in zit. app.js geeft ze mee bij render().
+  let regions = [];
+  const inRegion = (h) => !regions.length || regions.includes(regionOf(h.country));
+
+  // Ziekenhuizen, gefilterd op regio en op het gekozen product.
   function hospitals(db) {
-    return db.hospitals.filter((h) => !view.products.length || view.products.some((p) => h.products.includes(p)));
+    return db.hospitals.filter((h) => inRegion(h) &&
+      (!view.products.length || view.products.some((p) => h.products.includes(p))));
   }
+
+  // Fase en kleur van een ziekenhuis, voor de producten waarop gefilterd is.
+  const shown = (h) => pipelineView(h, view.products);
 
   // ---------- bouwstenen ----------
   function tile(value, label, sub) {
@@ -90,6 +103,8 @@ window.FollowUpStats = (() => {
   function columns(buckets, series) {
     const max = niceMax(Math.max(1, ...buckets.map((b) => sum(series, (s) => b.values[s] || 0))));
     const ticks = [max, max / 2, 0];
+    // Lege assen zeggen niets: één zin is eerlijker dan een grafiek zonder balken.
+    if (!buckets.some((b) => sum(series, (x) => b.values[x] || 0))) return `<p class="muted s-empty">${esc(t("stats.empty"))}</p>`;
     return `
       <div class="s-cols">
         <div class="s-yaxis">${ticks.map((v) => `<span>${fmt(v)}</span>`).join("")}</div>
@@ -139,25 +154,35 @@ window.FollowUpStats = (() => {
   }
 
   // ---------- secties ----------
-  function targetsCard(db, events) {
+  // Het doelcijfer per product en per jaar, in de eenheid van dat product:
+  // kamers live bij een abonnement (wat erbij kwam min wat er stopte), bestelde
+  // stuks bij een product per ingreep. events zijn de installaties en
+  // stopzettingen, orders de bestellingen — allebei over alle jaren, het jaar
+  // wordt hier gekozen.
+  function targetsCard(db, events, orders) {
     const year = view.year === "all" ? String(new Date().getFullYear()) : view.year;
     const goals = targetsFor(db, year);
-    const byYear = events.filter((a) => a.date.startsWith(year));
+    const inYear = (list) => list.filter((a) => a.date.startsWith(year));
+    const byYear = inYear(events);
+    const ordersByYear = inYear(orders);
     const products = view.products.length ? view.products : myProducts();
+    const kinds = new Set(products.map(productKind));
     return card(`${t("stats.target")} ${year}`, products.map((p) => {
-      // Netto voor dat jaar: wat erbij kwam min wat er weer stopte.
-      const done = Math.max(0, sum(byYear.filter((a) => a.product === p), signedRooms));
+      const perOrder = productKind(p) === "procedure";
+      const done = perOrder
+        ? sum(ordersByYear.filter((a) => a.product === p), units)
+        : Math.max(0, sum(byYear.filter((a) => a.product === p), signedRooms));
       const goal = Number(goals[p]) || 0;
       const pct = goal ? Math.min(100, (done / goal) * 100) : 0;
       return `<div class="s-target">
         <div class="s-target-head">
           <span><i style="background:${productColor(p)}"></i>${esc(p)}</span>
-          <span><b>${fmt(done)}</b> / <input type="number" min="0" data-target-year="${esc(year)}" data-target-product="${esc(p)}" value="${goal}" ${canWrite() ? "" : "readonly"} aria-label="${esc(t("stats.target"))} ${esc(p)} ${esc(year)}"> ${esc(t("stats.roomsLive").toLowerCase())}</span>
+          <span><b>${fmt(done)}</b> / <input type="number" min="0" data-target-year="${esc(year)}" data-target-product="${esc(p)}" value="${goal}" ${canWrite() ? "" : "readonly"} aria-label="${esc(t("stats.target"))} ${esc(p)} ${esc(year)}"> ${esc(perOrder ? t("stats.unitsOrdered") : t("stats.roomsLive").toLowerCase())}</span>
         </div>
         <div class="s-progress"><div style="width:${pct}%;background:${productColor(p)}"></div></div>
         <small class="muted">${goal ? `${fmt((done / goal) * 100)}% ${esc(t("stats.reached"))}` : "—"}</small>
       </div>`;
-    }).join("") + `<p class="muted">${esc(t("stats.targetsSub"))}</p>`);
+    }).join("") + `<p class="muted">${esc([kinds.has("subscription") && t("stats.targetsSub"), kinds.has("procedure") && t("stats.targetsSubOrders")].filter(Boolean).join(" · "))}</p>`);
   }
 
   // Twaalf maanden: het gekozen jaar, of de laatste twaalf bij "alle jaren".
@@ -204,6 +229,36 @@ window.FollowUpStats = (() => {
     return card(t("stats.perMonth"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [myProducts()[0]]), "wide");
   }
 
+  // Bestellingen per maand, voor de producten die per ingreep verbruikt worden.
+  // Geen stand zoals de abonnementen maar een optelsom per maand: wat er die
+  // maand besteld is. Een bestelling zonder aantal telt als één.
+  function ordersCard(orders) {
+    const buckets = monthBuckets();
+    for (const a of orders) {
+      const b = buckets.find((x) => x.key === (a.date || "").slice(0, 7));
+      if (b) b.values[a.product || ""] = (b.values[a.product || ""] || 0) + units(a);
+    }
+    const series = seriesIn(orders);
+    return card(t("stats.orders"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [myProducts().find((p) => productKind(p) === "procedure")]), "wide");
+  }
+
+  // Hoe ver staat de goedkeuring door het Comité Medisch Materiaal, voor de
+  // producten per ingreep in de keuze. Geteld per ziekenhuis en per product:
+  // een ziekenhuis met Thyroid RFA én Fibroid RFA telt twee keer, want het
+  // zijn twee aanvragen.
+  function cmmCard(db, keuze) {
+    const procedure = keuze.filter((p) => productKind(p) === "procedure");
+    const rows = hospitals(db).flatMap((h) => procedure.filter((p) => h.products.includes(p) && h.pipeline && h.pipeline[p]).map((p) => ({ p, cmm: h.pipeline[p].cmm || "" })));
+    const items = ["ok", "requested", "not_ok", ""].map((k) => {
+      const hit = rows.filter((r) => r.cmm === k);
+      const values = {};
+      for (const r of hit) values[r.p] = (values[r.p] || 0) + 1;
+      return { label: k ? t("rfa.cmm." + k) : t("rfa.cmm.unknown"), total: hit.length, values };
+    }).filter((i) => i.total);
+    const series = procedure.filter((p) => rows.some((r) => r.p === p));
+    return card(t("stats.cmm"), (series.length > 1 ? legend(series) : "") + hbars(items, series.length > 1 ? series : null, t("stats.noData")));
+  }
+
   function hospitalsCard(db) {
     const items = hospitals(db)
       .filter((h) => h.unit.roomsInstalled)
@@ -222,8 +277,8 @@ window.FollowUpStats = (() => {
   function pipelineCard(db) {
     const hs = hospitals(db);
     const statusTiles = `<div class="s-status">${STATUSES.map((k) =>
-      `<div><i class="dot ${k}"></i><b>${hs.filter((h) => h.status === k).length}</b><span>${esc(t("status." + k + ".short"))}</span></div>`).join("")}</div>`;
-    const items = STAGES.map((s) => ({ label: t("stage." + s), total: hs.filter((h) => h.stage === s).length })).filter((i) => i.total);
+      `<div><i class="dot ${k}"></i><b>${hs.filter((h) => shown(h).status === k).length}</b><span>${esc(t("status." + k + ".short"))}</span></div>`).join("")}</div>`;
+    const items = STAGES.map((s) => ({ label: t("stage." + s), total: hs.filter((h) => shown(h).stage === s).length })).filter((i) => i.total);
     return card(t("stats.pipeline"), statusTiles + hbars(items, null, t("stats.noData")));
   }
 
@@ -251,34 +306,41 @@ window.FollowUpStats = (() => {
   const scopesCard = (db) => brandCard(db, t("stats.scopes"), SCOPE_BRANDS, "scopeBrands");
   const processorsCard = (db) => brandCard(db, t("stats.processors"), PROCESSOR_BRANDS, "processorBrands");
 
-  function tableCard(db) {
+  // De kolommen volgen de soort product in de keuze: kamers en coloscopieën
+  // zeggen alleen iets bij een abonnement, bestellingen alleen bij een product
+  // per ingreep.
+  function tableCard(db, metSubs, orders) {
+    const besteld = (h) => sum(orders.filter((a) => a.hospital === h), units);
     const list = hospitals(db).slice().sort((a, b) =>
-      (b.unit.roomsInstalled || 0) - (a.unit.roomsInstalled || 0) || a.name.localeCompare(b.name));
+      (metSubs ? (b.unit.roomsInstalled || 0) - (a.unit.roomsInstalled || 0) : besteld(b) - besteld(a)) || a.name.localeCompare(b.name));
     if (!list.length) return card(t("stats.table"), `<p class="muted">${esc(t("stats.noData"))}</p>`, "wide");
     return card(`${t("stats.table")} (${list.length})`, `
       <div class="s-table-wrap"><table class="s-table">
         <thead><tr>
           <th>${esc(t("col.name"))}</th><th>${esc(t("col.country"))}</th><th>${esc(t("col.stage"))}</th>
-          <th>${esc(t("col.products"))}</th><th class="num">${esc(t("unit.rooms"))}</th>
+          <th>${esc(t("col.products"))}</th>${metSubs ? `<th class="num">${esc(t("unit.rooms"))}</th>
           <th class="num">${esc(t("unit.roomsDemo"))}</th><th class="num">${esc(t("unit.roomsInstalled"))}</th>
-          <th class="num">${esc(t("unit.colosPerYear"))}</th><th>${esc(t("unit.existingAI"))}</th>
+          <th class="num">${esc(t("unit.colosPerYear"))}</th><th>${esc(t("unit.existingAI"))}</th>` : ""}
+          ${orders.length ? `<th class="num">${esc(t("stats.ordersTile"))}</th>` : ""}
         </tr></thead>
         <tbody>${list.map((h) => `<tr>
-          <td><i class="dot ${esc(h.status)}"></i> ${esc(h.name)}</td>
+          <td><i class="dot ${esc(shown(h).status)}"></i> ${esc(h.name)}</td>
           <td>${esc(h.country ? t("country." + h.country + ".short") : "—")}</td>
-          <td>${esc(t("stage." + h.stage))}</td>
-          <td>${esc(h.products.join(", ") || "—")}</td>
+          <td>${esc(t("stage." + shown(h).stage))}</td>
+          <td>${esc(h.products.join(", ") || "—")}</td>${metSubs ? `
           <td class="num">${esc(h.unit.rooms ?? "—")}</td>
           <td class="num">${esc(h.unit.roomsDemo ?? "—")}</td>
           <td class="num">${esc(h.unit.roomsInstalled ?? "—")}</td>
           <td class="num">${h.unit.colosPerYear != null ? fmt(h.unit.colosPerYear) : "—"}</td>
-          <td>${esc(h.unit.existingAI || "—")}</td>
+          <td>${esc(h.unit.existingAI || "—")}</td>` : ""}
+          ${orders.length ? `<td class="num">${besteld(h) ? fmt(besteld(h)) : "—"}</td>` : ""}
         </tr>`).join("")}</tbody>
       </table></div>`, "wide");
   }
 
   // ---------- render ----------
-  function render(db, el, onTargetsChange) {
+  function render(db, el, onTargetsChange, inRegions = regions) {
+    regions = inRegions;
     // Buiten bereik geraakt (een beheerder heeft je afscherming aangepast):
     // terug naar alles, anders staan er nullen voor iets wat je niet ziet.
     // Is het bereik ondertussen versmald, dan vallen de vinkjes die er niet
@@ -286,8 +348,19 @@ window.FollowUpStats = (() => {
     view.products = view.products.filter((p) => myProducts().includes(p));
     const years = new Set([String(new Date().getFullYear()), ...Object.keys(DEFAULT_TARGETS)]);
     for (const h of db.hospitals) for (const a of h.activities) years.add(a.date.slice(0, 4));
-    const installs = rows(db, { types: ["installation"] });
-    const subsEvents = rows(db, { types: ["installation", "cancellation"], ignoreYear: true });
+    // Welke soorten product zitten er in de keuze? Daar hangt van af wat er te
+    // tonen valt: abonnementen, kamers en torens bij het ene, bestellingen bij
+    // het andere, en allebei als de keuze allebei bevat. Een contactmoment
+    // zonder product telt mee als abonnement, zoals het altijd deed.
+    const keuze = view.products.length ? view.products : myProducts();
+    const metSubs = keuze.some((p) => productKind(p) === "subscription");
+    const metOrders = keuze.some((p) => productKind(p) === "procedure");
+    const isSub = (a) => productKind(a.product) === "subscription";
+    const installs = rows(db, { types: ["installation"] }).filter(isSub);
+    const subsEvents = rows(db, { types: ["installation", "cancellation"], ignoreYear: true }).filter(isSub);
+    const orders = metOrders ? rows(db, { types: ["order"] }).filter((a) => !isSub(a)) : [];
+    // Voor het doelcijfer: over alle jaren, want die kaart kiest zelf haar jaar.
+    const orderEvents = metOrders ? rows(db, { types: ["order"], ignoreYear: true }).filter((a) => !isSub(a)) : [];
     const acts = rows(db);
     const hs = hospitals(db);
     const live = hs.filter((h) => h.unit.roomsInstalled);
@@ -311,27 +384,29 @@ window.FollowUpStats = (() => {
               attrs: `data-stat-product="${esc(p)}"`, label: p, checked: view.products.includes(p),
             })),
           ], t("stats.all"), view.pickOpen)}</label>
-          <div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}">${esc(t(key))}</button>`).join("")}</div>
+          ${!metSubs ? "" : `<div class="s-seg">${[["subs", "stats.chartSubs"], ["installs", "stats.chartInstalls"]].map(([k, key]) => `<button data-stat-chart="${k}" class="${view.chart === k ? "active" : ""}"><span>${esc(t(key))}</span></button>`).join("")}</div>`}
         </div>
       </div>
       <div class="s-tiles">
         ${tile(fmt(hs.length), t("stats.hospitals"))}
-        ${tile(fmt(hs.filter((h) => h.stage === "customer").length), t("stats.customers"))}
-        ${tile(fmt(roomsLive), t("stats.roomsLive"), roomsTotal ? `${t("stats.coverage")}: ${fmt((roomsLive / roomsTotal) * 100)}%` : "")}
-        ${tile(fmt(roomsDemo), t("stats.roomsDemo"))}
+        ${tile(fmt(hs.filter((h) => shown(h).stage === "customer").length), t("stats.customers"))}
+        ${!metSubs ? "" : tile(fmt(roomsLive), t("stats.roomsLive"), roomsTotal ? `${t("stats.coverage")}: ${fmt((roomsLive / roomsTotal) * 100)}%` : "")
+          + tile(fmt(roomsDemo), t("stats.roomsDemo"))}
+        ${!metOrders ? "" : tile(fmt(sum(orders, units)), t("stats.ordersTile"))}
         ${tile(fmt(acts.length), t("section.activities"))}
-        ${tile(colosCovered ? fmt(colosCovered) : "—", t("stats.colosCovered"), live.length ? `n = ${live.length}` : "")}
+        ${!metSubs ? "" : tile(colosCovered ? fmt(colosCovered) : "—", t("stats.colosCovered"), live.length ? `n = ${live.length}` : "")}
       </div>
       <div class="s-grid-cards">
-        ${view.chart === "subs" ? subscriptionsCard(subsEvents) : installationsCard(installs)}
-        ${targetsCard(db, subsEvents)}
-        ${hospitalsCard(db)}
+        ${!metSubs ? "" : (view.chart === "subs" ? subscriptionsCard(subsEvents) : installationsCard(installs))}
+        ${!metOrders ? "" : ordersCard(orders)}
+        ${!metOrders ? "" : cmmCard(db, keuze)}
+        ${targetsCard(db, subsEvents, orderEvents)}
+        ${!metSubs ? "" : hospitalsCard(db)}
         ${pipelineCard(db)}
         ${countryCard(db)}
-        ${scopesCard(db)}
-        ${processorsCard(db)}
+        ${!metSubs ? "" : scopesCard(db) + processorsCard(db)}
         ${activityCard(db)}
-        ${tableCard(db)}
+        ${tableCard(db, metSubs, orders)}
       </div>`;
 
     el.querySelector("[data-stat=year]").onchange = (e) => { view.year = e.target.value; render(db, el, onTargetsChange); };

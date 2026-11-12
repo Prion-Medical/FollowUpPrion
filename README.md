@@ -18,7 +18,7 @@ Geen installatie nodig, enkel Python 3 (staat standaard op je Mac).
 - in de terminal: `python3 server.py`, of
 - in VS Code: Run and Debug → "FollowUp Prion starten".
 
-Open daarna <http://localhost:8080>. Stoppen met `Ctrl+C` in de terminal.
+Open daarna <http://localhost:8081>. Stoppen met `Ctrl+C` in de terminal.
 
 ## Werken met de app
 

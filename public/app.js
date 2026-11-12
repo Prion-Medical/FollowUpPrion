@@ -9,10 +9,13 @@
   // Vaste waarden en esc() staan in domain.js: stats.js heeft ze ook nodig, en
   // zo moet een nieuwe fase of een nieuw merk maar op één plaats bij.
   const {
-    DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS, ROOM_TYPES,
-    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, COUNTRIES, ROLES,
-    esc, pickBox, syncPick, myProducts,
+    DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
+    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
+    CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
+    esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual,
   } = window.FollowUpDomain;
+  // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
+  const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
   // Welk product staat standaard in een nieuw contactmoment of een planning:
   // dat van het ziekenhuis als er maar één is, anders het jouwe als jij er maar
   // één mag.
@@ -22,20 +25,53 @@
   // Scope-merken zijn eigennamen; enkel "other" is een sleutel met vertaling.
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Benelux: west/zuid → oost/noord.
-  const REGION_BOUNDS = [[49.3, 2.3], [53.7, 7.4]];
-  const REGION_BBOX = [2.3, 49.3, 7.4, 53.7];
+  // In welke regio je werkt, onthouden per browser zoals het thema. Het is
+  // een filter als de andere, maar geen zoekvraag: "filters wissen" laat hem
+  // staan, anders stond wie alleen de Benelux volgt na één klik weer tussen
+  // de ziekenhuizen van de rest van de wereld.
+  const REGION_KEY = "followup-regions";
+  function savedRegions() {
+    try {
+      const v = JSON.parse(localStorage.getItem(REGION_KEY) || "[]");
+      return Array.isArray(v) ? v.filter((r) => REGION_KEYS.includes(r)) : [];
+    } catch (e) { return []; }
+  }
+  function keepRegions(list) {
+    try {
+      if (list.length) localStorage.setItem(REGION_KEY, JSON.stringify(list));
+      else localStorage.removeItem(REGION_KEY);
+    } catch (e) { /* privévenster */ }
+  }
 
+  // Geen enkel filter aan. Op één plaats: de begintoestand, de vraag of er
+  // iets gefilterd is en "filters wissen" lezen alle drie dit lijstje.
+  const noFilter = () => ({ statuses: [], products: [], countries: [], owners: [], derived: "", query: "" });
   const state = {
+    // De gekozen regio's; leeg is overal. Bewust buiten filter: zie hierboven.
+    regions: savedRegions(),
     db: { version: 1, hospitals: [] },
+    // Zolang de gegevens onderweg zijn. Een scherm dat dan al openstaat toont
+    // streepjes in plaats van "niets gepland" of nullen: leeg en nog-niet-er
+    // zijn niet hetzelfde.
+    loading: true,
     selectedId: null,
     // Elke filter is een lijst; leeg betekent geen beperking, dezelfde
     // betekenis als een leeg bereik op een gebruiker. derived is er één van
     // twee vragen over de opvolging en sluit zichzelf uit.
-    filter: { statuses: [], products: [], countries: [], derived: "", query: "" },
+    filter: noFilter(),
+    // Van welk ziekenhuis de lijst contactmomenten helemaal openstaat. Eén id
+    // en geen vlag: zo klapt ze vanzelf weer dicht bij een ander ziekenhuis.
+    actsOpen: null,
     placing: null, // {id} wanneer we op de kaart een locatie kiezen
     dragId: null,
     // Welke maand de agenda toont, en eventueel één gekozen dag.
-    agenda: { y: new Date().getFullYear(), m: new Date().getMonth(), day: "" },
+    // tab: "planned" is de agenda zelf, "log" het logboek ernaast.
+    agenda: { y: new Date().getFullYear(), m: new Date().getMonth(), day: "", tab: "planned", assignees: [], whoOpen: false },
+    // Het logboek: alle contactmomenten over de ziekenhuizen heen. Product,
+    // land, verantwoordelijke en de zoekterm deelt het met de kaart
+    // (state.filter); dit zijn de keuzes die alleen hier bestaan. hospitalId
+    // is gezet als je vanuit een fiche komt.
+    log: { period: "quarter", types: [], authors: [], hospitalId: "", limit: 50 },
   };
   const markers = new Map();
   const store = window.FollowUpStore;
@@ -68,8 +104,17 @@
   function countType(h, type) {
     return h.activities.filter((a) => a.type === type).length;
   }
+  // Hoort dit contactmoment of geplande moment bij de producten waarop
+  // gefilterd is? Zonder filter alles; een record zonder product hoort overal
+  // bij, zoals het ook voor iedereen zichtbaar is.
+  const inFilter = (r) => !state.filter.products.length || !r.product || state.filter.products.includes(r.product);
+  // "Te laat", "stil gevallen" en "demo gepland" volgen de productfilter, net
+  // als de kleur: wie op Thyroid RFA filtert wil niet de achterstallige actie
+  // van EndoQ zien. planned staat op datum, dus het eerste dat past is de
+  // volgende actie — zonder filter is dat gewoon nextActionDate.
   function isOverdue(h) {
-    return !!h.nextActionDate && h.nextActionDate < today();
+    const p = h.planned.find(inFilter);
+    return !!p && p.date < today();
   }
   // Stil gevallen: er is contact geweest, er staat niets gepland en het laatste
   // contactmoment is lang geleden. Zo'n ziekenhuis glipt door alle andere
@@ -78,8 +123,8 @@
   // nergens in de agenda op. Precies het ziekenhuis dat je wil terugvinden.
   const QUIET_DAYS = 90;
   function isQuiet(h) {
-    if (h.planned.length) return false;
-    const lc = lastContact(h);
+    if (h.planned.some(inFilter)) return false;
+    const lc = h.activities.filter(inFilter).reduce((max, a) => (a.date > max ? a.date : max), "");
     return !!lc && daysAgo(lc) >= QUIET_DAYS;
   }
   // Een datum als YYYY-MM-DD uit de losse delen. Niet via toISOString(): die
@@ -97,7 +142,7 @@
   // staat het gewoon in de agenda, zodat de teller en de agenda hetzelfde zien.
   function hasDemoPlanned(h) {
     const d = today();
-    return h.planned.some((p) => p.type === "demo" && p.date >= d);
+    return h.planned.some((p) => p.type === "demo" && p.date >= d && inFilter(p));
   }
   function relDays(d) {
     if (!d) return "";
@@ -111,11 +156,11 @@
   function toast(msg) {
     const el = $("#toast");
     el.textContent = msg;
+    stay(el); // stond ze net weg te gaan, dan blijft ze
     el.hidden = false;
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => (el.hidden = true), 2600);
+    toast._t = setTimeout(() => leave(el, () => { el.hidden = true; }, { ms: 160, shift: "translate(-50%, 6px)" }), 2600);
   }
-
   // ---------- opslag ----------
   let saveTimer = null;
   // Of er nog iets te bewaren is, houden we zelf bij. Eerder werd daarvoor de
@@ -128,6 +173,10 @@
     const el = $("#saveState");
     el.textContent = key ? t(key) : "";
     el.classList.toggle("error", error);
+    // Het vinkje ervoor tekent styles.css, op deze toestand; de uitleg staat
+    // in de tooltip, want "Opgeslagen" alleen zegt niet wát.
+    el.dataset.state = key.replace("save.", "");
+    el.title = key === "save.saved" ? t("save.savedTitle") : "";
   }
   function scheduleSave() {
     // Vangnet achter de knoppen. Een rol zonder schrijfrecht komt hier niet
@@ -140,23 +189,137 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, 400);
   }
+  // ---------- samen werken ----------
+  // base is het document zoals we het laatst van de databank kennen: wat we
+  // laadden, of wat we zelf met succes bewaarden. Daartegen meten we af wat
+  // hier veranderd is en wat bij een collega (merge3 in domain.js).
+  let base = null;
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  let saving = false;
+  // Tijdens een opslag kwam er nog een wijziging bij: die gaat in een volgende.
+  let saveAgain = false;
+  // De pull die onderweg is. Wie er intussen ook om vraagt krijgt dezelfde:
+  // een tweede naast de eerste zou op een verouderde basis samenvoegen, en
+  // "bezet, ga maar door" liet de opslag zonder samenvoegen opnieuw proberen.
+  let pulling = null;
+  // Het samengevoegde document overnemen zonder de objecten te vervangen waar
+  // een open dialoog of de fiche nog naar wijst: een ziekenhuis, een
+  // contactpersoon of een moment dat al bestond blijft hetzelfde object en
+  // krijgt alleen nieuwe inhoud. Anders bewaart een dialoog die openstond
+  // zijn wijziging in een object dat niet meer in het document zit.
+  function refill(target, src) {
+    for (const k of Object.keys(target)) if (!(k in src)) delete target[k];
+    for (const [k, v] of Object.entries(src)) {
+      if (k === "__proto__") continue;
+      const old = target[k];
+      if (Array.isArray(v) && Array.isArray(old) && v.every((r) => r && typeof r === "object" && r.id)) {
+        const known = new Map(old.filter((r) => r && r.id).map((r) => [r.id, r]));
+        target[k] = v.map((r) => (known.has(r.id) ? refill(known.get(r.id), r) : r));
+      } else target[k] = v;
+    }
+    return target;
+  }
+  // Ophalen wat er nu staat en het hier erbovenop leggen. Geeft terug:
+  //   "clean"    het document van de databank, hier is niets meer te bewaren
+  //   "dirty"    samengevoegd, met wijzigingen van hier die nog weg moeten
+  //   "conflict" allebei veranderden hetzelfde, of de toegang is veranderd
+  function pull() {
+    if (!pulling) pulling = doPull().finally(() => { pulling = null; });
+    return pulling;
+  }
+  async function doPull() {
+    // Zonder basis (het laden mislukte) valt niet te zeggen wat hier
+    // veranderd is: dan zou alles van hier winnen van alles van daar.
+    if (!base) return "conflict";
+    const fresh = await store.peek();
+    if (!fresh.sameAccess) return "conflict";
+    fresh.db.version = Math.max(Number(fresh.db.version) || 1, DB_VERSION);
+    fresh.db.hospitals.forEach(normalize);
+    const conflicts = [];
+    const merged = merge3(base, state.db, fresh.db, conflicts);
+    if (conflicts.length) return "conflict";
+    merged.hospitals.forEach(normalize);
+    const mineLeft = !deepEqual(merged, fresh.db);
+    refill(state.db, clone(merged));
+    base = clone(fresh.db);
+    store.accept(fresh.at);
+    // Wie in de fiche aan het typen is, houdt zijn veld: wat hij typt staat
+    // nog niet in het document en zou bij een hertekening weg zijn.
+    const a = document.activeElement;
+    if (a && a.closest && a.closest("#fiche") && a.matches("input, textarea, select")) {
+      renderFilters(); renderKpis(); renderList(); renderMarkers();
+    } else renderAll();
+    return mineLeft ? "dirty" : "clean";
+  }
+  // Stil bijwerken. Wanneer je naar het tabblad terugkeert, en af en toe
+  // terwijl het openstaat, vragen we of er iets veranderd is; zo ja, dan komt
+  // het erbij zonder dat je er iets van merkt. Niet terwijl er een dialoog
+  // openstaat of een opslag onderweg is: die regelen het zelf.
+  async function refreshQuietly() {
+    if (store.mode !== "supabase" || state.loading || document.hidden) return;
+    if (saving || pulling || dirty || document.querySelector("dialog[open]")) return;
+    // Ook niet terwijl je ergens typt, een lijstje openstaat of een speld
+    // versleept: het scherm hertekenen zou dat onder je handen wegnemen. Het
+    // komt een halve minuut later wel.
+    // Een veld dat de focus nog heeft maar niet meer te zien is (in een
+    // dialoog die al dicht is) telt niet: daar typt niemand.
+    const a = document.activeElement;
+    if (a && a.matches && a.matches("input, textarea, select") && a.offsetParent !== null) return;
+    if (state.dragId || state.placing || document.querySelector("details.pick[open]")) return;
+    try {
+      if (!(await store.changed())) return;
+      const result = await pull();
+      if (result === "conflict") showBanner(t("save.conflict"), true, "warn");
+    } catch (e) {
+      // Geen netwerk, even geen databank: dit was maar een beleefdheid, de
+      // eerstvolgende opslag merkt het vanzelf.
+    }
+  }
+  document.addEventListener("visibilitychange", refreshQuietly);
+  window.addEventListener("focus", refreshQuietly);
+  setInterval(refreshQuietly, 30000);
+
   // "import" geldt voor één opslag: de eerstvolgende. Daarna weer gewoon.
   let saveMode = "save";
   async function save() {
+    // Eén opslag tegelijk. Wat ondertussen verandert, gaat in de volgende.
+    if (saving) { saveAgain = true; return; }
     const mode = saveMode;
     saveMode = "save";
+    saving = true;
     try {
-      await store.save(state.db, mode);
-      dirty = false;
+      // Iemand anders bewaarde ondertussen: ophalen, samenvoegen en opnieuw
+      // proberen, zonder er de gebruiker mee lastig te vallen. Een paar keer,
+      // want in de tijd van het ophalen kan er nog iemand bewaard hebben. Een
+      // import voegen we niet samen: die zet bewust alles terug.
+      for (let attempt = 0; ; attempt++) {
+        const sent = clone(state.db);
+        try {
+          await store.save(state.db, mode);
+          base = sent;
+          break;
+        } catch (e) {
+          if (!(e instanceof store.ConflictError) || mode === "import" || attempt >= 3) throw e;
+          if ((await pull()) === "conflict") throw e;
+        }
+      }
+      dirty = saveAgain;
       showSaveState("save.saved");
     } catch (e) {
+      // Een import die niet doorging mag later niet als gewone opslag worden
+      // samengevoegd: dan zou de back-up half over de echte gegevens komen.
+      // Zonder basis weigert pull() alles tot je herlaadt.
+      if (mode === "import") base = null;
       showSaveState("save.failed", true);
       if (e instanceof store.ConflictError) {
-        showBanner(t("save.conflict"), true);
+        showBanner(t("save.conflict"), true, "warn");
       } else {
         const hint = store.mode === "local" ? t("save.errorLocal") : t("save.errorOnline");
         showBanner(t("save.errorBody", { hint, msg: e.message }));
       }
+    } finally {
+      saving = false;
+      if (saveAgain) { saveAgain = false; save(); }
     }
   }
   window.addEventListener("beforeunload", (e) => {
@@ -178,8 +341,12 @@
   if (printMedia.addEventListener) {
     printMedia.addEventListener("change", (e) => fitTextareasForPrint(e.matches));
   }
-  function showBanner(msg, reload = false) {
+  // tone: "error" (er ging iets mis), "warn" (opgelet) of "info" (ter info).
+  // styles.css kleurt de balk ernaar; een mislukte opslag mag er niet uitzien
+  // als een mededeling.
+  function showBanner(msg, reload = false, tone = "error") {
     const b = $("#banner");
+    b.dataset.tone = tone;
     b.textContent = msg;
     if (reload) {
       const btn = document.createElement("button");
@@ -206,7 +373,7 @@
     $("#usersBtn").hidden = !can.manageUsers;
     // Zonder profiel valt iedereen terug op "alleen lezen". Dat is veilig, maar
     // zonder uitleg lijkt het op een storing: zeg dus wat eraan hapert.
-    if (can.noProfile) showBanner(t("rights.noProfile"));
+    if (can.noProfile) showBanner(t("rights.noProfile"), false, "warn");
     // De productfilter biedt enkel aan wat je mag zien; renderFilters() leest
     // myProducts(). Stond er nog iets aangevinkt dat nu buiten bereik valt,
     // dan zou de lijst leeg blijven zonder dat je ziet waarom.
@@ -261,9 +428,17 @@
   }
   // Namen bij de uuid's uit app_users, één keer opgehaald bij het starten.
   const people = new Map();
+  // Per persoon de producten waartoe hij beperkt is; leeg is onbeperkt. Enkel
+  // om bij het toewijzen geen collega aan te bieden die het moment niet zou
+  // zien.
+  const peopleScope = new Map();
   async function loadPeople() {
     try {
-      for (const u of await store.users()) if (u.name) people.set(u.id, u.name);
+      for (const u of await store.users()) {
+        if (!u.name) continue;
+        people.set(u.id, u.name);
+        peopleScope.set(u.id, Array.isArray(u.products) ? u.products : []);
+      }
     } catch (e) {
       // Geen lijst (lokaal, of het schema is nog niet uitgevoerd): dan tonen we
       // gewoon geen namen. Dat is geen reden om de app te laten struikelen.
@@ -305,6 +480,7 @@
     c.products = [...new Set(c.products.filter((p) => typeof p === "string" && p))];
     // De dienst is een vaste sleutel; de functie ernaast blijft vrije tekst.
     c.department = DEPARTMENTS.includes(c.department) ? c.department : "";
+    c.language = LANGUAGES.includes(c.language) ? c.language : "";
     c.primary = !!c.primary;
     return c;
   }
@@ -315,7 +491,7 @@
     a.product = str(a.product);
     a.contactId = str(a.contactId);
     a.note = str(a.note);
-    a.rooms = ROOM_TYPES.includes(a.type) ? numOrNull(a.rooms) : null;
+    a.rooms = wantsQuantity(a.type, a.product) ? numOrNull(a.rooms) : null;
     stampFields(a);
     return a;
   }
@@ -329,9 +505,169 @@
     p.product = str(p.product);
     p.contactId = str(p.contactId);
     p.note = str(p.note);
+    // Aan wie het moment is toegewezen. Het veld staat er alleen als iemand
+    // gekozen is: schreven we bij elk ouder moment een lege waarde, dan zou
+    // wie als eerste opslaat de laatste bewerker van de hele agenda worden.
+    if (str(p.assignee)) p.assignee = str(p.assignee); else delete p.assignee;
     stampFields(p);
     return p;
   }
+  // Voor wie een gepland moment is. Zonder toewijzing is dat wie het invoerde:
+  // wie iets plant, volgt het bijna altijd ook op, en zo werkt de filter in de
+  // agenda meteen voor alles wat er al stond.
+  const assigneeOf = (p) => p.assignee || p.createdBy || "";
+  // De gegevens van een product per ingreep. Ze staan in de rij van dat
+  // product in h.pipeline en niet in een blok op het ziekenhuis zoals unit:
+  // Thyroid RFA en Fibroid RFA hebben elk hun eigen goedkeuring, prioriteit en
+  // concurrent in hetzelfde ziekenhuis, en zo vallen ze vanzelf binnen de
+  // productmuur — de databank schermt die rijen al af per product.
+  function normalizeFacts(e) {
+    e.cmm = CMM_STATES.includes(e.cmm) ? e.cmm : "";
+    e.prio = [1, 2, 3].includes(Number(e.prio)) ? Number(e.prio) : null;
+    e.doesAlready = YES_NO.includes(e.doesAlready) ? e.doesAlready : "";
+    e.currentSystem = str(e.currentSystem);
+    e.notes = str(e.notes);
+    return e;
+  }
+  // De opvolging per product. Elk product dat bij het ziekenhuis aangevinkt
+  // staat krijgt een eigen fase, kleur en verantwoordelijke; wat op het
+  // ziekenhuis zelf staat volgt daaruit (zie pipelineView in domain.js).
+  //
+  // Vroeger was er één fase per ziekenhuis. Die wordt hier de fase van elk
+  // product dat er toen aangevinkt stond — de app wist niet beter, en twee
+  // keer dezelfde fase is juister dan één van de twee op prospect zetten. Een
+  // product dat er láter bijkomt begint vooraan: prospect, of eerste contact
+  // als er al een contactmoment voor bestaat.
+  //
+  // Een rij verdwijnt hier nooit, ook niet als het vinkje weggaat. Wie
+  // afgeschermd is krijgt h.products gesnoeid op zijn eigen bereik, en zou
+  // anders de opvolging van een collega wissen bij de eerste opslag.
+  function syncPipeline(h) {
+    if (!h.pipeline || typeof h.pipeline !== "object" || Array.isArray(h.pipeline)) h.pipeline = {};
+    for (const [p, e] of Object.entries(h.pipeline)) {
+      if (!e || typeof e !== "object") { delete h.pipeline[p]; continue; }
+      e.stage = STAGES.includes(e.stage) ? e.stage : "prospect";
+      e.status = STATUSES.includes(e.status) ? e.status : "red";
+      e.owner = str(e.owner);
+      if (productKind(p) === "procedure") normalizeFacts(e);
+    }
+    const eerste = !Object.keys(h.pipeline).length;
+    for (const p of h.products) {
+      if (h.pipeline[p]) continue;
+      const contacted = h.activities.some((a) => a.product === p);
+      const e = eerste ? { stage: h.stage, status: h.status, owner: "" }
+        : { stage: contacted ? "first_contact" : "prospect", status: contacted ? "orange" : "red", owner: "" };
+      // Een fase die dit product niet kent, schuift naar de dichtste die het
+      // wel kent: allebei liggen ze net voor of net na de evaluatie.
+      if (!stagesFor(p).includes(e.stage)) e.stage = "evaluation";
+      if (productKind(p) === "procedure") normalizeFacts(e);
+      h.pipeline[p] = e;
+    }
+    if (h.products.length) {
+      const f = furthest(h.products.map((p) => h.pipeline[p]));
+      h.status = f.status;
+      h.stage = f.stage;
+    } else if (!stagesFor("").includes(h.stage)) {
+      // Zonder product geldt de keuzelijst van het ziekenhuis zelf, en die
+      // kent niet elke fase.
+      h.stage = "evaluation";
+    }
+  }
+  // Het laatste product is afgevinkt. De kleur en de fase op het ziekenhuis
+  // waren die van dat product; ze laten staan zou zeggen dat een ziekenhuis
+  // zonder product klant is. Terug naar wat de contactmomenten zeggen. Wat er
+  // per product stond blijft bewaard en komt terug als het vinkje terugkomt.
+  function zonderProduct(h) {
+    if (h.products.length) return;
+    const contacted = h.activities.length > 0;
+    h.status = contacted ? "orange" : "red";
+    h.stage = contacted ? "first_contact" : "prospect";
+  }
+  // Wat de kaart, de lijst en de tellers van een ziekenhuis tonen: het volgt
+  // de productfilter in de zijbalk.
+  const shown = (h) => pipelineView(h, state.filter.products);
+  // De regel onder een contactmoment of een gepland moment: product,
+  // contactpersoon, aantal, en wie het invoerde. De fiche, de agenda en het
+  // logboek tonen alle drie dezelfde; met type erbij waar de soort niet al
+  // apart boven de regel staat. Een gepland moment heeft geen aantal, dus dat
+  // valt daar vanzelf weg.
+  function momentLine(h, r, withType) {
+    const c = h.contacts.find((x) => x.id === r.contactId);
+    const by = personName(r.createdBy);
+    // Alleen bij een gepland moment, en alleen als het voor iemand anders is
+    // dan jij of dan wie het invoerde: anders staat er op elke regel een naam
+    // die niets zegt.
+    // Een account dat niet meer bestaat is "?", niet niets: anders lijkt het
+    // moment van wie het invoerde.
+    const to = r.assignee && r.assignee !== store.me().id && r.assignee !== r.createdBy && (personName(r.assignee) || "?");
+    return [withType && t("act." + r.type), r.product, c && c.name,
+      r.rooms ? `${r.rooms} ${t(productKind(r.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
+      to && t("for", { name: to }),
+      by && t("by", { name: by })].filter(Boolean).join(" · ");
+  }
+  // De contactmomenten als CSV, recentste eerst: voor de export van alles en
+  // voor "CSV van deze keuze" in het logboek.
+  function activitiesCsv(items) {
+    return csv([
+      [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.quantity"), t("col.note"), t("col.addedBy")],
+      ...[...items].sort((x, y) => y.a.date.localeCompare(x.a.date))
+        .map(({ h, a }) => [a.date, h.name, t("act." + a.type), a.product,
+          (h.contacts.find((c) => c.id === a.contactId) || {}).name, a.rooms ?? "", a.note, personName(a.createdBy)]),
+    ]);
+  }
+  // Zoveel contactmomenten toont de fiche standaard, de recentste eerst. Wie
+  // ze allemaal wil zien klapt de lijst open. Dit gaat enkel over tonen:
+  // activities[] blijft volledig, en daar rekenen de kleur, de fase en de
+  // statistieken op.
+  const ACT_CAP = 5;
+  // De endoscopie-afdeling — scopes, torens, kamers, coloscopieën — beschrijft
+  // waar een product per abonnement op aangesloten wordt. Voor een ziekenhuis
+  // dat enkel voor RFA gevolgd wordt zegt ze niets, en voor wie enkel RFA mag
+  // evenmin. Twee vragen dus: heeft dit account zo'n product, en hangt er een
+  // aan dit ziekenhuis. De regel is "een product per abonnement", niet twee
+  // namen, zodat een vijfde product vanzelf aan de juiste kant valt.
+  //
+  // Dit is tonen of niet tonen, geen muur: unit is een gedeeld veld van het
+  // ziekenhuis en bereikt de browser nog altijd. Moet dat niet, dan is dat
+  // werk voor scope_hospital() in schema.sql.
+  const endoAccount = () => myProducts().some((p) => productKind(p) === "subscription");
+  const endoFor = (h) => myProducts().some((p) => productKind(p) === "subscription" && h.products.includes(p));
+  // Wie verantwoordelijk kan zijn: iedereen met een account, op naam. Eén
+  // lijst voor de keuzelijst in de fiche en voor de filter in de zijbalk.
+  function owners() {
+    const list = new Map(people);
+    const me = store.me();
+    if (me.id && me.name) list.set(me.id, me.name);
+    // Jezelf vooraan: dat is de keuze die je het vaakst maakt. De rest op naam.
+    return [...list].sort((a, b) => (b[0] === me.id) - (a[0] === me.id) || a[1].localeCompare(b[1]));
+  }
+  // Een naam in een keuzelijst, met erbij wie jij bent. Alleen in lijsten
+  // waar je kiest: naast een contactmoment staat gewoon de naam.
+  const personLabel = (id) => {
+    const name = personName(id);
+    return name && id === store.me().id ? `${name} ${t("me.suffix")}` : name;
+  };
+  // Een id dat we niet (meer) kennen blijft als keuze staan, anders wist een
+  // opslag het.
+  // Aan wie je een gepland moment kunt toewijzen: wie het product van dat
+  // moment mag zien. Zonder product is dat iedereen. Een keuze, geen muur: de
+  // databank verbergt het moment sowieso voor wie het product niet heeft.
+  function assigneeOptions(product, current) {
+    const list = owners().filter(([id]) => {
+      const scope = id === store.me().id ? (store.can.products || []) : (peopleScope.get(id) || []);
+      return !product || !scope.length || scope.includes(product);
+    });
+    if (current && !list.some(([id]) => id === current)) list.push([current, personName(current) || "?"]);
+    // "—" alleen als er niemand bekend is (een moment van vóór de stempel):
+    // anders zou het stilzwijgend "wie het invoerde" betekenen.
+    return [...(current ? [] : [opt("", "—", "")]), ...list.map(([id, name]) => opt(id, personLabel(id) || name, current))].join("");
+  }
+  function ownerOptions(current) {
+    const list = owners();
+    if (current && !list.some(([id]) => id === current)) list.push([current, "?"]);
+    return [opt("", "—", current), ...list.map(([id, name]) => opt(id, personLabel(id) || name, current))].join("");
+  }
+
   function normalize(h) {
     h.id = str(h.id) || uid();
     h.name = str(h.name).trim() || "—";
@@ -343,9 +679,12 @@
     h.products = h.products.filter((p) => typeof p === "string");
     h.status = STATUSES.includes(h.status) ? h.status : "red";
     h.stage = STAGES.includes(h.stage) ? h.stage : "prospect";
+    syncPipeline(h);
     h.country = COUNTRIES.includes(h.country) ? h.country : "";
     h.sector = SECTORS.includes(h.sector) ? h.sector : "";
     h.address = str(h.address);
+    h.network = str(h.network);
+    h.sites = str(h.sites);
     h.notes = str(h.notes);
     h.nextAction = str(h.nextAction);
     h.nextActionDate = dateOrEmpty(h.nextActionDate);
@@ -396,7 +735,34 @@
   }
 
   // ---------- kaart ----------
-  const map = L.map("map", { zoomControl: true }).fitBounds(REGION_BOUNDS);
+  // De regio's waar je naar kijkt: de gekozen, of allemaal. Daaruit volgen de
+  // landen in de landenfilter en het stuk kaart waarop de app opent.
+  // Een regio telt pas mee als er een ziekenhuis in ligt. De tabel in
+  // domain.js mag dus vooruitlopen op de data: zolang alles in de Benelux
+  // ligt is er geen regiofilter te zien en opent de kaart daar, en met het
+  // eerste ziekenhuis elders komt de filter er vanzelf bij.
+  const liveRegions = () => REGION_KEYS.filter((r) => state.db.hospitals.some((h) => regionOf(h.country) === r));
+  // Een onthouden keuze voor een regio waar (nog) niets in ligt geldt niet:
+  // de filter om ze uit te zetten staat er dan niet.
+  const pickedRegions = () => { const live = liveRegions(); return live.length > 1 ? state.regions.filter((r) => live.includes(r)) : []; };
+  function activeRegions() {
+    const picked = pickedRegions();
+    if (picked.length) return picked;
+    const live = liveRegions();
+    return live.length ? live : REGION_KEYS.slice(0, 1);
+  }
+  const activeCountries = () => activeRegions().flatMap((r) => REGIONS[r].countries);
+  function regionBounds() {
+    const b = activeRegions().map((r) => REGIONS[r].bounds);
+    return [
+      [Math.min(...b.map((x) => x[0][0])), Math.min(...b.map((x) => x[0][1]))],
+      [Math.max(...b.map((x) => x[1][0])), Math.max(...b.map((x) => x[1][1]))],
+    ];
+  }
+  // Eén regio in beeld: noem ze ("Hele Benelux"). Meer dan één: "Alle landen".
+  const regionLabel = (one, many) => (activeRegions().length === 1
+    ? t(one, { region: t("region." + activeRegions()[0]) }) : t(many));
+  const map = L.map("map", { zoomControl: true }).fitBounds(regionBounds());
   // Zonder {s}: de subdomeinen a/b/c zijn de oude vorm en openen drie
   // verbindingen waar één volstaat. OpenStreetMap blokkeert daarop, en dan
   // staat de kaart vol "Access blocked"-tegels. Zet je de subdomeinen terug,
@@ -408,7 +774,7 @@
   }).addTo(map);
 
   function pinIcon(h) {
-    const cls = ["pin", h.status, h.id === state.selectedId ? "selected" : "", h.id === state.dragId ? "dragging" : ""].join(" ");
+    const cls = ["pin", shown(h).status, h.id === state.selectedId ? "selected" : "", h.id === state.dragId ? "dragging" : ""].join(" ");
     return L.divIcon({ className: "", html: `<div class="${esc(cls)}"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] });
   }
 
@@ -485,12 +851,15 @@
     map.getContainer().style.cursor = "";
   });
   $("#fitBtn").addEventListener("click", fitAll);
-  $("#regionBtn").addEventListener("click", () => map.fitBounds(REGION_BOUNDS));
+  $("#regionBtn").addEventListener("click", () => map.fitBounds(regionBounds()));
 
   // ---------- filter + lijst ----------
   function matchesQuery(h, q) {
     if (!q) return true;
-    const hay = [h.name, h.address, h.unit.scopeNotes, h.unit.processorNotes, h.unit.existingAI, h.notes,
+    // De nota's van de endoscopie-afdeling alleen voor wie die afdeling ook te
+    // zien krijgt: anders vind je een ziekenhuis op tekst die nergens staat.
+    const unit = endoAccount() ? [h.unit.scopeNotes, h.unit.processorNotes, h.unit.existingAI] : [];
+    const hay = [h.name, h.address, h.network, h.sites, ...unit, h.notes,
       ...h.contacts.flatMap((c) => [c.name, c.role, c.address, c.email, c.department && t("dept." + c.department)])]
       .join(" ").toLowerCase();
     return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
@@ -500,12 +869,28 @@
   // state.filter in plaats van tussen de producten te zitten — zo is er ook
   // geen naam die met een product kan botsen.
   const DERIVED_FILTERS = { overdue: isOverdue, quiet: isQuiet };
-  function visibleHospitals() {
-    const { statuses, products, countries, derived, query } = state.filter;
+  // De verantwoordelijken van een ziekenhuis, voor de producten waarop
+  // gefilterd is — of voor al zijn producten als er geen productfilter staat.
+  const ownersOf = (h) => h.products
+    .filter((p) => (!state.filter.products.length || state.filter.products.includes(p)) && h.pipeline[p])
+    .map((p) => h.pipeline[p].owner).filter(Boolean);
+  // Waar je naar kijkt: product, land en verantwoordelijke. Dat is ook waar de
+  // tellers bovenaan over gaan. De andere filters (kleur, te laat, stil
+  // gevallen, de zoekbalk) zoeken daarbinnen — telden de tellers die ook mee,
+  // dan stond er bij een filter op groen gewoon overal nul naast.
+  function scopedHospitals() {
+    const { products, countries, owners } = state.filter;
+    const regions = pickedRegions();
     return state.db.hospitals.filter((h) =>
-      (!statuses.length || statuses.includes(h.status)) &&
+      (!regions.length || regions.includes(regionOf(h.country))) &&
       (!products.length || products.some((p) => h.products.includes(p))) &&
       (!countries.length || countries.includes(h.country)) &&
+      (!owners.length || ownersOf(h).some((o) => owners.includes(o))));
+  }
+  function visibleHospitals() {
+    const { statuses, derived, query } = state.filter;
+    return scopedHospitals().filter((h) =>
+      (!statuses.length || statuses.includes(shown(h).status)) &&
       (!derived || DERIVED_FILTERS[derived](h)) &&
       matchesQuery(h, query));
   }
@@ -515,31 +900,55 @@
     const q = state.filter.query.toLowerCase();
     const nameHit = (h) => (q && h.name.toLowerCase().includes(q) ? 0 : 1);
     const items = visibleHospitals().sort((a, b) =>
-      nameHit(a) - nameHit(b) || order[a.status] - order[b.status] || a.name.localeCompare(b.name));
+      nameHit(a) - nameHit(b) || order[shown(a).status] - order[shown(b).status] || a.name.localeCompare(b.name));
     const ul = $("#list");
+    ul.removeAttribute("aria-busy"); // de streepjes van het laden gaan eruit
+    // Waar staat elke rij nu? Dat moet vóór het hertekenen gemeten worden;
+    // zie rowTops() en settleRows() in ui.js.
+    // De lijst meet alle rijen, ook onder de rand: het zijn er een veertigtal,
+    // en zo glijdt een ziekenhuis dat je opzoekt van onderaf naar boven in
+    // plaats van uit het niets op te komen.
+    const before = rowTops(ul, "li[data-id]", listKey);
     if (!items.length) {
-      ul.innerHTML = `<li class="empty">${esc(t("list.empty"))}</li>`;
+      // Staat er een filter aan, dan is dat bijna altijd de reden. Eén knop
+      // zet ze allemaal uit, in plaats van vier uitklappers na te lopen.
+      const filtered = Object.values(state.filter).some((v) => v.length);
+      ul.innerHTML = `<li class="empty"><span>${esc(t("list.empty"))}</span>${filtered
+        ? `<button class="btn small" data-clear-filters>${esc(t("list.clear"))}</button>` : ""}</li>`;
+      settleList(ul, before);
       return;
     }
     ul.innerHTML = items.map((h) => {
       const lc = lastContact(h);
       const primary = h.contacts.find((c) => c.primary);
-      const bits = [t("stage." + h.stage)];
+      const bits = [t("stage." + shown(h).stage)];
       if (h.country) bits.push(t("country." + h.country + ".short"));
-      if (h.unit.roomsInstalled) bits.push(`${h.unit.roomsInstalled}× ${t("stats.roomsLive").toLowerCase()}`);
-      if (lc) bits.push(t("rel.last") + " " + relDays(lc));
+      if (h.unit.roomsInstalled && endoAccount()) bits.push(`${h.unit.roomsInstalled}× ${t("stats.roomsLive").toLowerCase()}`);
       const chosen = h.id === state.selectedId;
       return `<li data-id="${esc(h.id)}" class="${chosen ? "selected" : ""}" tabindex="0"${chosen ? ' aria-current="true"' : ""}>
-        <i class="dot ${esc(h.status)}"></i>
+        <i class="dot ${esc(shown(h).status)}"></i>
         <div>
+          ${lc ? `<span class="age" title="${esc(t("rel.last") + " " + relDays(lc))}">${esc(daysAgo(lc) > 0 ? t("rel.short", { n: daysAgo(lc) }) : relDays(lc))}</span>` : ""}
           <div class="name">${esc(h.name)}${isOverdue(h) ? `<span class="badge">${esc(t("badge.overdue"))}</span>` : ""}${isQuiet(h) ? `<span class="badge quiet">${esc(t("badge.quiet"))}</span>` : ""}${h.lat == null ? `<span class="badge neutral">${esc(t("map.noLocation"))}</span>` : ""}</div>
           <div class="meta">${esc(bits.join(" · "))}</div>
-          ${primary ? `<div class="meta">★ ${esc(primary.name)}</div>` : ""}
+          ${primary ? `<div class="meta lead">${icon("star", "fill")}${esc(primary.name)}</div>` : ""}
         </div>
       </li>`;
     }).join("");
+    settleList(ul, before);
   }
+  const listKey = (li) => li.dataset.id;
+  const settleList = (ul, before) => settleRows(ul, "li", listKey, before, ul.getBoundingClientRect().bottom);
   $("#list").addEventListener("click", (e) => {
+    if (e.target.closest("[data-clear-filters]")) {
+      Object.assign(state.filter, noFilter());
+      $("#search").value = "";
+      renderFilters();
+      renderList();
+      renderMarkers();
+      renderKpis();
+      return;
+    }
     const li = e.target.closest("li[data-id]");
     if (li) select(li.dataset.id, true);
   });
@@ -554,9 +963,15 @@
   // De drie filters in de zijbalk. Ze staan hier en niet in index.html omdat
   // de lijsten van de taal afhangen en de producten van je bereik.
   const FILTERS = [
-    { key: "statuses",  leeg: "filter.all",          items: () => STATUSES,  label: (k) => t("status." + k + ".short") },
-    { key: "products",  leeg: "filter.allProducts",  items: myProducts,      label: (p) => p },
-    { key: "countries", leeg: "filter.allCountries", items: () => COUNTRIES, label: (c) => t("country." + c) },
+    { key: "statuses",  leeg: () => t("filter.allStatuses"), items: () => STATUSES,  label: (k) => t("status." + k + ".short") },
+    { key: "products",  leeg: () => t("filter.allProducts"), items: myProducts,      label: (p) => p },
+    // Regio staat er pas als er in meer dan één ziekenhuizen liggen; de landen volgen de regio.
+    { key: "regions",   leeg: () => t("filter.allRegions"), items: () => (liveRegions().length > 1 ? liveRegions() : []), label: (r) => t("region." + r) },
+    { key: "countries", leeg: () => regionLabel("filter.wholeRegion", "filter.allCountries"), items: activeCountries, label: (c) => t("country." + c) },
+    // Wie verantwoordelijk is. De lijst is die van de keuzelijst in de fiche:
+    // iedereen met een account. Zonder namen (lokaal, zonder localUser) is er
+    // niets om op te filteren en staat de uitklapper er niet.
+    { key: "owners",    leeg: () => t("filter.allOwners"), items: () => owners().map(([id]) => id), label: personLabel, voor: () => t("field.owner") },
   ];
   function renderDerived() {
     for (const b of $("#derivedFilters").querySelectorAll(".chip")) {
@@ -564,13 +979,36 @@
     }
   }
   function renderFilters() {
-    $("#pickFilters").innerHTML = FILTERS.map((f) => pickBox(
+    $("#pickFilters").innerHTML = FILTERS.filter((f) => f.items().length).map((f) => pickBox(
       f.items().map((k) => ({
         attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`,
         label: f.label(k),
-        checked: state.filter[f.key].includes(k),
-      })), t(f.leeg))).join("");
+        checked: chosen(f.key).includes(k),
+      })), f.leeg(), false, f.voor && f.voor())).join("");
+    $("#regionBtn").textContent = regionLabel("btn.wholeRegion", "btn.allRegions");
     renderDerived();
+  }
+  // Regio woont naast de andere filters (state.regions), de rest in state.filter.
+  const chosen = (key) => (key === "regions" ? state.regions : state.filter[key]);
+  // Een vinkje in een van de uitklappers, in de zijbalk of boven het logboek.
+  function setChosen(key, list) {
+    if (key !== "regions") { state.filter[key] = list; return; }
+    state.regions = list;
+    keepRegions(list);
+    // Een land buiten de gekozen regio's kan niet aangevinkt blijven: het
+    // staat niet meer in de lijst en zou onzichtbaar alles wegfilteren.
+    state.filter.countries = state.filter.countries.filter((c) => activeCountries().includes(c));
+    map.fitBounds(regionBounds());
+  }
+  // De landenlijst hangt van de regio af, dus na een regiovinkje moeten de
+  // uitklappers opnieuw getekend worden. Die van de regio zelf gaat daarna
+  // weer open: je bent er nog in bezig.
+  function redrawAfterRegion(root) {
+    renderFilters();
+    if (root !== $("#pickFilters")) renderLog();
+    const box = root.querySelector('[data-filter="regions"]');
+    const d = box && box.closest("details");
+    if (d) d.open = true;
   }
   // Niet hertekenen bij elk vinkje: dan klapt de uitklapper dicht. Enkel de
   // lijst en de kaart dus; de samenvatting op de knop is het werk van de
@@ -580,11 +1018,13 @@
     if (!box) return;
     const f = FILTERS.find((x) => x.key === box.dataset.filter);
     const v = box.dataset.value;
-    state.filter[f.key] = e.target.checked
-      ? [...state.filter[f.key], v]
-      : state.filter[f.key].filter((x) => x !== v);
+    setChosen(f.key, e.target.checked
+      ? [...chosen(f.key), v]
+      : chosen(f.key).filter((x) => x !== v));
+    if (f.key === "regions") redrawAfterRegion($("#pickFilters"));
     renderList();
     renderMarkers();
+    renderKpis();
   });
   // De twee opvolgingsknoppen. Nog eens klikken zet ze weer uit; ze sluiten
   // elkaar uit, want wie iets gepland heeft is nooit stilgevallen.
@@ -624,31 +1064,44 @@
   });
 
   function renderKpis() {
-    const hs = state.db.hospitals;
-    const n = (s) => hs.filter((h) => h.status === s).length;
+    // De tellers volgen product, land en verantwoordelijke (zie
+    // scopedHospitals), met de kleur van het gefilterde product.
+    const hs = scopedHospitals();
+    const n = (s) => hs.filter((h) => shown(h).status === s).length;
+    // Kamers zeggen niets als er enkel op producten per ingreep gefilterd is.
+    const kamers = state.filter.products.length
+      ? state.filter.products.some((p) => productKind(p) === "subscription")
+      : endoAccount();
     const sum = (f) => hs.reduce((s, h) => s + (f(h) || 0), 0);
     const demos = hs.filter(hasDemoPlanned).length;
     const late = hs.filter(isOverdue).length;
     const quiet = hs.filter(isQuiet).length;
+    $("#kpis").removeAttribute("aria-busy");
     $("#kpis").innerHTML = `
-      <div class="kpi"><b style="color:var(--green)">${n("green")}</b><span>${esc(t("status.green.short"))}</span></div>
-      <div class="kpi"><b style="color:var(--orange)">${n("orange")}</b><span>${esc(t("status.orange.short"))}</span></div>
-      <div class="kpi"><b style="color:var(--red)">${n("red")}</b><span>${esc(t("status.red.short"))}</span></div>
+      <div class="kpi"><b><i class="dot green"></i>${n("green")}</b><span>${esc(t("status.green.short"))}</span></div>
+      <div class="kpi"><b><i class="dot orange"></i>${n("orange")}</b><span>${esc(t("status.orange.short"))}</span></div>
+      <div class="kpi"><b><i class="dot red"></i>${n("red")}</b><span>${esc(t("status.red.short"))}</span></div>
+      <div class="kpi${late ? " alert" : ""}"><b>${late}</b><span>${esc(t("kpi.overdue"))}</span></div>
+      <div class="kpi${quiet ? " warn" : ""}"><b>${quiet}</b><span>${esc(t("kpi.quiet"))}</span></div>
       <div class="kpi"><b>${demos}</b><span>${esc(t("kpi.demosPlanned"))}</span></div>
-      <div class="kpi"><b>${sum((h) => h.unit.roomsDemo)}</b><span>${esc(t("kpi.roomsDemo"))}</span></div>
-      <div class="kpi"><b>${sum((h) => h.unit.roomsInstalled)}</b><span>${esc(t("kpi.roomsInstalled"))}</span></div>
-      <div class="kpi"><b style="${late ? "color:var(--red)" : ""}">${late}</b><span>${esc(t("kpi.overdue"))}</span></div>
-      <div class="kpi"><b style="${quiet ? "color:var(--orange)" : ""}">${quiet}</b><span>${esc(t("kpi.quiet"))}</span></div>`;
+      ${kamers ? `<div class="kpi"><b>${sum((h) => h.unit.roomsDemo)}</b><span>${esc(t("kpi.roomsDemo"))}</span></div>
+      <div class="kpi"><b>${sum((h) => h.unit.roomsInstalled)}</b><span>${esc(t("kpi.roomsInstalled"))}</span></div>` : ""}`;
   }
 
   // ---------- selectie ----------
   function select(id, fly) {
+    // Een ander ziekenhuis begint weer met de korte lijst contactmomenten.
+    if (id !== state.selectedId) state.actsOpen = null;
     state.selectedId = id;
     state.ficheOpen = true;
     if (state.dragId && state.dragId !== id) state.dragId = null;
     const h = sel();
     renderAll();
     if (fly && h) focusOn(h);
+    // Eén ring die uitdijt rond de gekozen speld, zodat je op een volle kaart
+    // ziet welke het is. Alleen bij het kiezen, niet bij elke hertekening.
+    const pin = document.querySelector("#map .pin.selected");
+    if (pin) pin.classList.add("pulse");
   }
   // Een verborgen kaart (gsm, ander tabblad) heeft geen grootte; dan pas inzoomen zodra ze zichtbaar is.
   function focusOn(h) {
@@ -693,51 +1146,90 @@
   function renderFiche() {
     const el = $("#fiche");
     const h = sel();
-    el.hidden = !h || !state.ficheOpen;
-    if (!h) { el.innerHTML = ""; return; }
+    // Sluiten gaat zacht: het paneel schuift weg en is daarna pas verborgen.
+    // De inhoud blijft tot dan staan (een leeg paneel zien wegschuiven is
+    // lelijker dan niets), en pas daarna is de kaart zo breed als ze wordt.
+    if (h && state.ficheOpen) {
+      stay(el);
+      el.hidden = false;
+    } else if (!el.hidden && !leaving(el)) {
+      leave(el, () => {
+        el.hidden = true;
+        if (!sel()) el.innerHTML = "";
+        map.invalidateSize();
+      }, { ms: 140, shift: window.matchMedia("(max-width: 760px)").matches ? "translateY(24px)" : "translateX(12px)" });
+    }
+    if (!h) { if (el.hidden) el.innerHTML = ""; return; }
 
     const lc = lastContact(h);
     const contacts = [...h.contacts].sort((a, b) => (b.primary - a.primary) || a.name.localeCompare(b.name));
     const acts = [...h.activities].sort((a, b) => b.date.localeCompare(a.date));
     const late = isOverdue(h);
+    // De producten waarvoor hier een opvolging te tonen valt: wat aangevinkt
+    // staat, binnen je eigen bereik. Is dat er geen, dan blijft de ene fase en
+    // de ene kleur van het ziekenhuis zelf staan, zoals vroeger.
+    const pipe = myProducts().filter((p) => h.products.includes(p) && h.pipeline[p]);
+    // Wie afgeschermd is, beslist enkel over zijn eigen product. De losse
+    // kleur en fase van het ziekenhuis krijgt hij niet te bedienen: hangt er
+    // een product van een collega aan, dan rekent de databank die zelf uit en
+    // ging zijn klik verloren zonder dat hij het zag.
+    const beperkt = store.can.products.length > 0;
 
     el.innerHTML = `
       <div class="fiche-head">
         <div class="row">
-          <i class="dot ${esc(h.status)}" style="width:14px;height:14px"></i>
-          <input class="fiche-title" data-field="name" value="${esc(h.name)}" aria-label="${esc(t("fiche.name"))}">
+          <i class="dot ${esc(shown(h).status)}" style="width:14px;height:14px"></i>
+          <input class="fiche-title" data-field="name" value="${esc(h.name)}" title="${esc(h.name)}" aria-label="${esc(t("fiche.name"))}">
           <button class="icon-btn show-on-map" data-act="show-map" title="${esc(t("map.showOnMap"))}" aria-label="${esc(t("map.showOnMap"))}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg></button>
-          <button class="icon-btn" data-act="close" title="${esc(t("btn.close"))}" aria-label="${esc(t("btn.close"))}">✕</button>
+          <button class="icon-btn" data-act="close" title="${esc(t("btn.close"))}" aria-label="${esc(t("btn.close"))}">${icon("close")}</button>
         </div>
-        <div class="status-pick">
-          ${STATUSES.map((k) => `<button class="${k} ${h.status === k ? "active" : ""}" data-status="${k}" title="${esc(t("status." + k))}"><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</button>`).join("")}
-        </div>
+        ${pipe.length || beperkt ? "" : `<div class="status-pick">
+          ${STATUSES.map((k) => `<button class="${k} ${h.status === k ? "active" : ""}" data-status="${k}" title="${esc(t("status." + k))}"><span><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</span></button>`).join("")}
+        </div>`}
       </div>
 
       <div class="section">
         <div class="stats">
           <div class="stat"><b>${esc(fmtDate(lc))}</b><span>${esc(t("fiche.lastContact"))} ${lc ? "· " + esc(relDays(lc)) : ""}</span></div>
           <div class="stat"><b>${countType(h, "demo")}</b><span>${esc(t("fiche.demos"))}</span></div>
-          <div class="stat"><b>${countType(h, "installation")}</b><span>${esc(t("fiche.installations"))}</span></div>
-          <div class="stat"><b>${h.unit.roomsInstalled ?? "—"}</b><span>${esc(t("fiche.roomsLive"))}</span></div>
+          ${endoAccount() ? `<div class="stat"><b>${countType(h, "installation")}</b><span>${esc(t("fiche.installations"))}</span></div>
+          <div class="stat"><b>${h.unit.roomsInstalled ?? "—"}</b><span>${esc(t("fiche.roomsLive"))}</span></div>` : ""}
         </div>
       </div>
 
       <div class="section">
         <h3>${esc(t("section.followup"))}</h3>
-        <div class="grid">
+        ${pipe.length ? pipe.map((p) => {
+          const e = h.pipeline[p];
+          return `<div class="pipe">
+            <div class="pipe-head">
+              <div class="pipe-name"><i class="dot ${esc(e.status)}"></i><b>${esc(p)}</b><span class="muted">${esc(t("status." + e.status + ".short"))}</span></div>
+              <div class="status-pick">
+                ${STATUSES.map((k) => `<button class="${k} ${e.status === k ? "active" : ""}" data-status="${k}" data-pproduct="${esc(p)}" title="${esc(t("status." + k))}"><span><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</span></button>`).join("")}
+              </div>
+            </div>
+            <div class="grid">
+              <label class="field"><span class="lbl">${esc(t("field.stage"))}</span>
+                <select data-pstage="${esc(p)}">${stagesFor(p).map((s) => opt(s, t("stage." + s), e.stage)).join("")}</select>
+              </label>
+              <label class="field"><span class="lbl">${esc(t("field.owner"))}</span>
+                <select data-powner="${esc(p)}">${ownerOptions(e.owner)}</select>
+              </label>
+            </div>
+          </div>`;
+        }).join("") : beperkt ? `<p class="muted">${esc(t("fiche.tickProduct"))}</p>` : `<div class="grid">
           <label class="field">${esc(t("field.stage"))}
-            <select data-field="stage">${STAGES.map((s) => opt(s, t("stage." + s), h.stage)).join("")}</select>
+            <select data-field="stage">${stagesFor("").map((s) => opt(s, t("stage." + s), h.stage)).join("")}</select>
           </label>
-        </div>
+        </div>`}
       </div>
 
       <div class="section">
-        <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small primary" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
+        <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
         ${h.planned.length ? `<ul class="timeline">${h.planned.map((p) => {
-          const c = h.contacts.find((x) => x.id === p.contactId);
-          const by = personName(p.createdBy);
-          const sub = [p.product, c && c.name, by && t("by", { name: by })].filter(Boolean).join(" · ");
+          // Dezelfde regel als in de agenda, zodat ook hier staat voor wie
+          // het moment is.
+          const sub = momentLine(h, p, false);
           return `<li class="${p.date < today() ? "late" : ""}">
             <div class="t-date">${esc(fmtDate(p.date))}<span class="t-rel">${esc(relDays(p.date))}</span></div>
             <div class="t-body">
@@ -746,30 +1238,32 @@
               ${p.note ? `<div class="t-note">${esc(p.note)}</div>` : ""}
             </div>
             <div class="t-acts">
-              <button class="icon-btn" data-act="done-planned" data-id="${esc(p.id)}" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">✓</button>
-              <button class="icon-btn" data-act="edit-planned" data-id="${esc(p.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">✎</button>
+              <button class="icon-btn" data-act="done-planned" data-id="${esc(p.id)}" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
+              <button class="icon-btn" data-act="edit-planned" data-id="${esc(p.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
             </div>
           </li>`;
         }).join("")}</ul>` : `<p class="muted">${esc(t("empty.planned"))}</p>`}
       </div>
 
       <div class="section">
-        <h3>${esc(t("section.activities"))} <button class="btn small primary" data-act="add-activity">${esc(t("btn.addActivity"))}</button></h3>
-        ${acts.length ? `<ul class="timeline">${acts.map((a) => {
-          const c = h.contacts.find((x) => x.id === a.contactId);
-          const by = personName(a.createdBy);
-          const sub = [a.product, c && c.name, a.rooms ? `${a.rooms} ${t("act.rooms")}` : "",
-            by && t("by", { name: by })].filter(Boolean).join(" · ");
-          return `<li>
+        <h3>${esc(t("section.activities"))} <button class="btn small" data-act="add-activity">${esc(t("btn.addActivity"))}</button></h3>
+        ${acts.length ? `<ul class="timeline ${state.actsOpen === h.id ? "" : "capped"}">${acts.map((a, i) => {
+          const sub = momentLine(h, a, false);
+          return `<li${i >= ACT_CAP ? ' class="extra"' : ""}>
             <div class="t-date">${esc(fmtDate(a.date))}</div>
             <div class="t-body">
               <div class="t-type"><span class="type-pill" style="background:${ACT_TYPES[a.type] || "#999"}"></span>${esc(t("act." + a.type))}</div>
               ${sub ? `<div class="t-sub">${esc(sub)}</div>` : ""}
               ${a.note ? `<div class="t-note">${esc(a.note)}</div>` : ""}
             </div>
-            <div><button class="icon-btn" data-act="edit-activity" data-id="${esc(a.id)}" title="${esc(t("btn.edit"))}">✎</button></div>
+            <div><button class="icon-btn" data-act="edit-activity" data-id="${esc(a.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button></div>
           </li>`;
-        }).join("")}</ul>` : `<p class="muted">${esc(t("empty.activities"))}</p>`}
+        }).join("")}</ul>${acts.length > ACT_CAP
+          // Geen data-act: wat een rol niet mag wordt daarop verborgen, en
+          // openklappen is lezen — dat mag ook wie alleen mag kijken.
+          ? `<button class="btn small more-acts" data-acts-toggle>${esc(state.actsOpen === h.id ? t("acts.showLess") : t("acts.showAll", { n: acts.length }))}</button>` : ""}
+          <button class="btn small more-acts" data-log-open>${esc(t("log.openHere"))}</button>`
+          : `<p class="muted">${esc(t("empty.activities"))}</p>`}
       </div>
 
       <div class="section">
@@ -777,19 +1271,85 @@
         ${contacts.length ? contacts.map((c) => `
           <div class="contact ${c.primary ? "primary" : ""}">
             <div class="c-actions">
-              <button class="icon-btn" data-act="primary" data-id="${esc(c.id)}" title="${esc(t("dlg.c.primary"))}">${c.primary ? "★" : "☆"}</button>
-              <button class="icon-btn" data-act="edit-contact" data-id="${esc(c.id)}" title="${esc(t("btn.edit"))}">✎</button>
+              <button class="icon-btn" data-act="primary" data-id="${esc(c.id)}" title="${esc(t("dlg.c.primary"))}" aria-label="${esc(t("dlg.c.primary"))}" aria-pressed="${c.primary}">${icon("star", c.primary ? "fill" : "")}</button>
+              <button class="icon-btn" data-act="edit-contact" data-id="${esc(c.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
             </div>
-            <div class="c-name">${esc(c.name)}${c.department ? `<span class="tag dept">${esc(t("dept." + c.department))}</span>` : ""}${c.primary ? `<span class="tag primary">${esc(t("tag.primary"))}</span>` : ""}${c.products.map((p) => `<span class="tag">${esc(p)}</span>`).join("")}</div>
+            <div class="c-name">${esc(c.name)}${c.department ? `<span class="tag dept">${esc(t("dept." + c.department))}</span>` : ""}${c.primary ? `<span class="tag primary">${esc(t("tag.primary"))}</span>` : ""}${c.language ? `<span class="tag dept">${esc(c.language)}</span>` : ""}${c.products.map((p) => `<span class="tag prod" style="--c:${productColor(p)}">${esc(p)}</span>`).join("")}</div>
             ${c.role ? `<div class="c-role">${esc(c.role)}</div>` : ""}
-            ${c.phone ? `<div class="c-line">☎ <a href="tel:${esc(c.phone.replace(/[^\d+]/g, ""))}">${esc(c.phone)}</a></div>` : ""}
-            ${c.email ? `<div class="c-line">✉ <a href="mailto:${esc(c.email)}">${esc(c.email)}</a></div>` : ""}
+            ${c.phone ? `<div class="c-line">${icon("phone")}<a href="tel:${esc(c.phone.replace(/[^\d+]/g, ""))}">${esc(c.phone)}</a></div>` : ""}
+            ${c.email ? `<div class="c-line">${icon("mail")}<a href="mailto:${esc(c.email)}">${esc(c.email)}</a></div>` : ""}
             ${c.address ? `<div class="c-line muted">${esc(c.address)}</div>` : ""}
-            ${c.notes ? `<div class="c-line muted">ⓘ ${esc(c.notes)}</div>` : ""}
+            ${c.notes ? `<div class="c-line muted">${icon("note")}<span>${esc(c.notes)}</span></div>` : ""}
           </div>`).join("") : `<p class="muted">${esc(t("empty.contacts"))}</p>`}
       </div>
 
       <div class="section">
+        <h3>${esc(t("section.data"))}</h3>
+        <div class="grid">
+          <label class="field">${esc(t("field.country"))}
+            <select data-field="country">${[opt("", "—", h.country), ...COUNTRIES.map((c) => opt(c, t("country." + c), h.country))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("field.sector"))}
+            <select data-field="sector">${[opt("", "—", h.sector), ...SECTORS.map((s) => opt(s, t("sector." + s), h.sector))].join("")}</select>
+          </label>
+          <div class="field full"><span class="field-label">${esc(t("field.products"))}</span>
+            <div class="toggles">${myProducts().map((p) => `<label><input type="checkbox" data-product="${esc(p)}" ${h.products.includes(p) ? "checked" : ""}>${esc(p)}</label>`).join("")}</div>
+          </div>
+          <label class="field full">${esc(t("field.address"))}
+            <input data-field="address" value="${esc(h.address)}">
+          </label>
+          <label class="field">${esc(t("field.network"))}
+            <input data-field="network" value="${esc(h.network)}">
+          </label>
+          <label class="field">${esc(t("field.sites"))}
+            <input data-field="sites" value="${esc(h.sites)}">
+          </label>
+          <div class="field full">
+            <span class="field-label">${esc(t("field.location"))}</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:3px">
+              ${h.lat == null
+                ? `<button class="btn small primary" data-act="place">${esc(t("btn.place"))}</button>`
+                : `<button class="btn small ${state.dragId === h.id ? "primary" : ""}" data-act="drag">${esc(state.dragId === h.id ? t("btn.dragDone") : t("btn.drag"))}</button>
+                   <button class="btn small" data-act="place">${esc(t("btn.placeNew"))}</button>`}
+            </div>
+          </div>
+          <label class="field full">${esc(t("field.notes"))}
+            <textarea data-field="notes" rows="4">${esc(h.notes)}</textarea>
+          </label>
+          <p class="muted full">${esc(t("field.createdAt"))}: ${esc(fmtDate(h.createdAt))}</p>
+        </div>
+      </div>
+
+      ${pipe.filter((p) => productKind(p) === "procedure").map((p) => {
+        // Eén sectie per product per ingreep, zoals de endoscopie-afdeling er
+        // één is voor EndoQ en Ainex. Ze staat er alleen als het product bij
+        // dit ziekenhuis aangevinkt is en binnen je bereik valt.
+        const e = h.pipeline[p];
+        const fact = (k) => `data-fact="${k}" data-fact-product="${esc(p)}"`;
+        return `<div class="section">
+        <h3>${esc(p)}</h3>
+        <p class="muted">${esc(t("unit.unknownOk"))}</p>
+        <div class="grid">
+          <label class="field">${esc(t("rfa.cmm"))}
+            <select ${fact("cmm")}>${[opt("", "—", e.cmm), ...CMM_STATES.map((k) => opt(k, t("rfa.cmm." + k), e.cmm))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("rfa.prio"))}
+            <select ${fact("prio")}>${[opt("", "—", String(e.prio ?? "")), ...[1, 2, 3].map((n) => opt(String(n), String(n), String(e.prio ?? "")))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("rfa.doesAlready"))}
+            <select ${fact("doesAlready")}>${[opt("", "—", e.doesAlready), ...YES_NO.map((k) => opt(k, t("yn." + k), e.doesAlready))].join("")}</select>
+          </label>
+          <label class="field">${esc(t("rfa.currentSystem"))}
+            <input ${fact("currentSystem")} value="${esc(e.currentSystem)}" placeholder="${esc(t("rfa.currentSystem.ph"))}">
+          </label>
+          <label class="field full">${esc(t("rfa.notes"))}
+            <textarea ${fact("notes")} rows="3">${esc(e.notes)}</textarea>
+          </label>
+        </div>
+      </div>`;
+      }).join("")}
+
+      ${!endoFor(h) ? "" : `<div class="section">
         <h3>${esc(t("section.unit"))}</h3>
         <p class="muted">${esc(t("unit.unknownOk"))}</p>
         <div class="grid">
@@ -814,38 +1374,7 @@
           </label>
           <label class="field full check"><input type="checkbox" data-unit-bool="screening" ${h.unit.screening ? "checked" : ""}>${esc(t("unit.screening"))}</label>
         </div>
-      </div>
-
-      <div class="section">
-        <h3>${esc(t("section.data"))}</h3>
-        <div class="grid">
-          <label class="field">${esc(t("field.country"))}
-            <select data-field="country">${[opt("", "—", h.country), ...COUNTRIES.map((c) => opt(c, t("country." + c), h.country))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("field.sector"))}
-            <select data-field="sector">${[opt("", "—", h.sector), ...SECTORS.map((s) => opt(s, t("sector." + s), h.sector))].join("")}</select>
-          </label>
-          <div class="field full"><span class="field-label">${esc(t("field.products"))}</span>
-            <div class="toggles">${myProducts().map((p) => `<label><input type="checkbox" data-product="${esc(p)}" ${h.products.includes(p) ? "checked" : ""}>${esc(p)}</label>`).join("")}</div>
-          </div>
-          <label class="field full">${esc(t("field.address"))}
-            <input data-field="address" value="${esc(h.address)}">
-          </label>
-          <div class="field full">
-            <span class="field-label">${esc(t("field.location"))}</span>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:3px">
-              ${h.lat == null
-                ? `<button class="btn small primary" data-act="place">${esc(t("btn.place"))}</button>`
-                : `<button class="btn small ${state.dragId === h.id ? "primary" : ""}" data-act="drag">${esc(state.dragId === h.id ? t("btn.dragDone") : t("btn.drag"))}</button>
-                   <button class="btn small" data-act="place">${esc(t("btn.placeNew"))}</button>`}
-            </div>
-          </div>
-          <label class="field full">${esc(t("field.notes"))}
-            <textarea data-field="notes" rows="4">${esc(h.notes)}</textarea>
-          </label>
-          <p class="muted full">${esc(t("field.createdAt"))}: ${esc(fmtDate(h.createdAt))}</p>
-        </div>
-      </div>
+      </div>`}
 
       <div class="fiche-foot">
         <button class="btn danger" data-act="delete">${esc(t("btn.delete"))}</button>
@@ -873,7 +1402,17 @@
     if (d.field) {
       h[d.field] = el.value;
       if (d.field === "name" && !el.value.trim()) { h.name = "—"; el.value = h.name; }
-      if (d.field === "stage") stageStatus(h);
+      if (d.field === "stage") stageStatus(h, h.activities.length > 0);
+    } else if (d.pstage && h.pipeline[d.pstage]) {
+      h.pipeline[d.pstage].stage = el.value;
+      stageStatus(h.pipeline[d.pstage], h.activities.some((a) => a.product === d.pstage));
+      syncPipeline(h);
+    } else if (d.powner && h.pipeline[d.powner]) {
+      h.pipeline[d.powner].owner = el.value;
+    } else if (d.fact && h.pipeline[d.factProduct]) {
+      // normalizeFacts houdt de vaste sleutels en het getal in de hand.
+      h.pipeline[d.factProduct][d.fact] = el.value;
+      normalizeFacts(h.pipeline[d.factProduct]);
     } else if (d.unit) {
       h.unit[d.unit] = el.type === "number" ? num(el.value) : el.value;
     } else if (d.unitBool) {
@@ -885,18 +1424,30 @@
         : list.filter((x) => x !== d.brand);
     } else if (d.product) {
       h.products = el.checked ? [...new Set([...h.products, d.product])] : h.products.filter((x) => x !== d.product);
+      if (!el.checked) zonderProduct(h);
+      syncPipeline(h);
     } else return;
     scheduleSave();
     renderList();
     renderKpis();
-    if (["name", "stage", "country"].includes(d.field)) { renderFiche(); renderMarkers(); }
+    if (["name", "stage", "country"].includes(d.field) || d.pstage || d.product) { renderFiche(); renderMarkers(); }
+    // Het eerste ziekenhuis in een andere regio brengt de regiofilter mee.
+    if (d.field === "country") renderFilters();
   });
 
   $("#fiche").addEventListener("click", (e) => {
     const h = sel();
     if (!h) return;
     const sb = e.target.closest("[data-status]");
-    if (sb) { setStatus(h, sb.dataset.status); return; }
+    if (sb) { setStatus(h, sb.dataset.status, sb.dataset.pproduct); return; }
+    if (e.target.closest("[data-log-open]")) {
+      return openLogFor(h);
+    }
+    if (e.target.closest("[data-acts-toggle]")) {
+      state.actsOpen = state.actsOpen === h.id ? null : h.id;
+      renderFiche();
+      return;
+    }
     const b = e.target.closest("[data-act]");
     if (!b) return;
     const id = b.dataset.id;
@@ -932,18 +1483,24 @@
         if (state.dragId) toast(t("map.dragHint"));
         return renderAll();
       case "delete":
-        if (confirm(t("confirm.deleteHospital", { name: h.name }))) {
+        ask(t("confirm.deleteHospital", { name: h.name })).then((yes) => {
+          if (!yes) return;
           state.db.hospitals = state.db.hospitals.filter((x) => x.id !== h.id);
           scheduleSave();
+          renderFilters(); // de regiofilter hangt af van waar er ziekenhuizen liggen
           closeFiche();
-        }
+        });
         return;
     }
   });
 
-  function setStatus(h, status) {
-    if (h.status === status) return;
-    h.status = status;
+  // Met een product: de kleur van dat product. Zonder: die van het ziekenhuis
+  // zelf, voor een ziekenhuis waar nog geen product aan hangt.
+  function setStatus(h, status, product) {
+    const x = (product && h.pipeline[product]) || h;
+    if (x.status === status) return;
+    x.status = status;
+    syncPipeline(h);
     scheduleSave();
     renderAll();
   }
@@ -999,11 +1556,12 @@
     async function search(q) {
       const my = ++seq;
       try {
-        // Eerst de Benelux; voorrang aan wat de kaart toont, anders rond Brussel.
+        // Eerst de eigen regio; voorrang aan wat de kaart toont, anders haar midden.
         // Niets gevonden? Dan pas wereldwijd zoeken.
         const c = map.getCenter();
-        const inRegion = c.lng >= REGION_BBOX[0] && c.lat >= REGION_BBOX[1] && c.lng <= REGION_BBOX[2] && c.lat <= REGION_BBOX[3];
-        const [lat, lon] = inRegion ? [c.lat.toFixed(3), c.lng.toFixed(3)] : [50.85, 4.35];
+        const [[south, west], [north, east]] = regionBounds();
+        const inRegion = c.lng >= west && c.lat >= south && c.lng <= east && c.lat <= north;
+        const [lat, lon] = inRegion ? [c.lat.toFixed(3), c.lng.toFixed(3)] : [((south + north) / 2).toFixed(3), ((west + east) / 2).toFixed(3)];
         // Photon kent enkel default, de, en en fr — "nl" geeft een 400. Met
         // "default" komen de namen in de plaatselijke taal, wat voor de Benelux
         // precies is wat we willen (Vlaams-Brabant, Hippokrateslaan, ...).
@@ -1014,7 +1572,7 @@
           if (!res.ok) throw new Error(`Photon ${res.status}`);
           return res.json();
         };
-        let json = await ask(`${url}&bbox=${REGION_BBOX.join(",")}`);
+        let json = await ask(`${url}&bbox=${[west, south, east, north].join(",")}`);
         if (my !== seq) return;
         if (!json.features.length) json = await ask(url);
         if (my !== seq) return;
@@ -1075,7 +1633,18 @@
   // bij de export de soort lijst). Geeft onSubmit KEEP_OPEN terug, dan blijft de
   // dialoog open — handig als je er meerdere dingen achter elkaar doet.
   const KEEP_OPEN = "keep-open";
-  function openDialog(html, onSubmit) {
+  // De formulierdialoog sluit zacht (softClose in ui.js), langs elke weg: een
+  // knop of Escape. Dit staat op de dialoog en loopt dus na de afhandeling op
+  // het formulier zelf; hield die het sluiten al tegen, dan blijft hij open.
+  $("#dialog").addEventListener("submit", (e) => {
+    if (e.defaultPrevented) return;
+    e.preventDefault();
+    softClose(e.currentTarget, e.submitter ? e.submitter.value : "");
+  });
+  $("#dialog").addEventListener("cancel", (e) => { e.preventDefault(); softClose(e.currentTarget); });
+  // askDelete is de vraag die de knop "Verwijder" eerst stelt; een dialoog
+  // zonder zo'n knop laat hem weg.
+  function openDialog(html, onSubmit, askDelete) {
     const dlg = $("#dialog");
     const form = $("#dialogForm");
     form.innerHTML = html;
@@ -1093,7 +1662,14 @@
       // het niet heeft; dit is het vangnet erachter, net als bij scheduleSave.
       if (submitter.value === "delete") {
         if (!store.can.remove) { toast(t("rights.notAllowed")); return; }
-        onSubmit(null, "delete");
+        // Eerst vragen. De dialoog blijft eronder openstaan: wie "Annuleer"
+        // kiest, staat terug waar hij was in plaats van alles kwijt te zijn.
+        e.preventDefault();
+        ask(askDelete).then((yes) => {
+          if (!yes) return;
+          softClose(dlg, "delete");
+          onSubmit(null, "delete");
+        });
         return;
       }
       if (!form.reportValidity()) { e.preventDefault(); return; }
@@ -1107,15 +1683,25 @@
   // contactpersoon of een contactmoment het nog gebruikt. Zo blijft het niet
   // eeuwig in de filters staan.
   function syncProducts(h, dropped) {
+    const had = h.products.length;
     for (const p of dropped) {
       if (!p || !h.products.includes(p)) continue;
-      const used = h.contacts.some((c) => c.products.includes(p)) || h.activities.some((a) => a.product === p);
+      // Ook wie het product opvolgt, gebruikt het: een fase, een kleur of
+      // een verantwoordelijke is werk dat niet mag verdwijnen omdat de laatste
+      // contactpersoon wegging.
+      const e = h.pipeline[p];
+      const followed = !!e && (!!e.owner || e.status !== "red" || e.stage !== "prospect"
+        || !!(e.cmm || e.prio || e.doesAlready || e.currentSystem || e.notes));
+      const used = followed || h.contacts.some((c) => c.products.includes(p)) || h.activities.some((a) => a.product === p);
       if (!used) h.products = h.products.filter((x) => x !== p);
     }
+    // Enkel als hier het laatste product wegviel — een ziekenhuis dat er al
+    // geen had, houdt de kleur die iemand het met de hand gaf.
+    if (had) zonderProduct(h);
   }
 
   function contactDialog(h, c) {
-    const v = c || { name: "", department: "", role: "", phone: "", email: "", address: "", products: [], notes: "", primary: false };
+    const v = c || { name: "", department: "", role: "", language: "", phone: "", email: "", address: "", products: [], notes: "", primary: false };
     // De vinkjes komen niet via FormData binnen: meerdere vakjes met dezelfde
     // naam houden er maar één over. We lezen ze bij het opslaan uit het
     // formulier zelf.
@@ -1138,6 +1724,9 @@
               attrs: `data-cproduct="${esc(p)}"`, label: p, checked: v.products.includes(p),
             })), "—")}
         </div>
+        <label class="field">${esc(t("dlg.c.language"))}
+          <select name="language">${[opt("", "—", v.language), ...LANGUAGES.map((l) => opt(l, l, v.language))].join("")}</select>
+        </label>
         <label class="field check" style="margin-top:16px"><input type="checkbox" name="primary" ${v.primary ? "checked" : ""}>${esc(t("dlg.c.primary"))}</label>
         <label class="field full">${esc(t("dlg.c.notes"))}<textarea name="notes" rows="3">${esc(v.notes)}</textarea></label>
       </div>
@@ -1147,7 +1736,6 @@
         <button class="btn primary" value="ok">${esc(t("btn.save"))}</button>
       </div>`, (data, action) => {
       if (action === "delete") {
-        if (!confirm(t("confirm.deleteContact", { name: c.name }))) return;
         h.contacts = h.contacts.filter((x) => x.id !== c.id);
         h.activities.forEach((a) => { if (a.contactId === c.id) a.contactId = ""; });
         syncProducts(h, c.products);
@@ -1159,7 +1747,7 @@
         const mine = myProducts();
         const keuze = picked(form);
         Object.assign(rec, {
-          name: data.name.trim(), department: data.department, role: data.role.trim(),
+          name: data.name.trim(), department: data.department, role: data.role.trim(), language: data.language,
           phone: data.phone.trim(), email: data.email.trim(), address: data.address.trim(),
           products: [...new Set([...had.filter((p) => !mine.includes(p)), ...keuze])],
           notes: data.notes.trim(), primary: !!data.primary,
@@ -1169,9 +1757,10 @@
         for (const p of rec.products) if (!h.products.includes(p)) h.products.push(p);
         syncProducts(h, had.filter((p) => !rec.products.includes(p)));
       }
+      syncPipeline(h);
       scheduleSave();
       renderAll();
-    });
+    }, c && t("confirm.deleteContact", { name: c.name }));
   }
 
   function activityDialog(h, a, plan) {
@@ -1193,7 +1782,7 @@
         <label class="field">${esc(t("dlg.a.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
-        <label class="field full" id="roomsField">${esc(t("dlg.a.rooms"))}<input type="number" min="0" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
+        <label class="field full" id="roomsField"><span id="roomsLabel">${esc(t("dlg.a.rooms"))}</span><input type="number" min="0" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
         <label class="field full">${esc(t("dlg.a.note"))}<textarea name="note" rows="4" placeholder="${esc(t("dlg.a.note.ph"))}">${esc(v.note)}</textarea></label>
       </div>
       ${stampLine(a)}
@@ -1203,7 +1792,6 @@
         <button class="btn primary" value="ok">${esc(t("btn.save"))}</button>
       </div>`, (data, action) => {
       if (action === "delete") {
-        if (!confirm(t("confirm.deleteActivity"))) return;
         h.activities = h.activities.filter((x) => x.id !== a.id);
         syncRooms(h, a, null);
       } else {
@@ -1212,15 +1800,19 @@
         // weet dat dit afvinken is en geen verwijderen. Niets verwijst naar een
         // id van een gepland moment, dus hergebruiken kan veilig.
         const rec = a || { id: plan ? plan.id : uid() };
-        const wantsRooms = ROOM_TYPES.includes(data.type);
+        const wantsRooms = wantsQuantity(data.type, data.product);
         // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
-        const before = a ? { type: rec.type, rooms: rec.rooms } : null;
+        const before = a ? { type: rec.type, rooms: rec.rooms, product: rec.product } : null;
         Object.assign(rec, {
           date: data.date, type: data.type, product: data.product, contactId: data.contactId,
           rooms: wantsRooms ? num(data.rooms) : null, note: data.note.trim(),
         });
         stamp(rec, !a);
         if (!a) h.activities.push(rec);
+        // Een contactmoment voor een product zet dat product bij het
+        // ziekenhuis: anders is er geen opvolging om bij te werken.
+        if (rec.product && !h.products.includes(rec.product)) h.products.push(rec.product);
+        syncPipeline(h);
         // Ook bij een wijziging: een contactmoment dat nú een installatie of
         // een bestelling is, zet de kleur en de fase mee goed.
         if (!a || before.type !== rec.type) autoStatus(h, rec);
@@ -1236,9 +1828,14 @@
       }
       scheduleSave();
       renderAll();
-    });
+    }, t("confirm.deleteActivity"));
+    // Het aantal hangt af van soort én product: kamers bij een abonnement,
+    // bestelde stuks bij een product per ingreep. Het veld is hetzelfde, het
+    // opschrift volgt het product.
     const sync = () => {
-      $("#roomsField", form).hidden = !ROOM_TYPES.includes(form.elements.type.value);
+      const product = form.elements.product.value;
+      $("#roomsField", form).hidden = !wantsQuantity(form.elements.type.value, product);
+      $("#roomsLabel", form).textContent = t(productKind(product) === "procedure" ? "dlg.a.quantity" : "dlg.a.rooms");
     };
     form.onchange = sync;
     sync();
@@ -1255,7 +1852,12 @@
       contactId: (h.contacts.find((c) => c.primary) || {}).id || "",
       note: "",
     };
-    openDialog(`
+    // Een nieuw moment is voor jezelf tot je iemand anders kiest; een bestaand
+    // toont wie het nu opvolgt.
+    const assignee = p ? assigneeOf(p) : store.me().id;
+    // Lokaal zonder naam is er niemand om aan toe te wijzen: dan geen veld.
+    const canAssign = owners().length > 0 || !!assignee;
+    const form = openDialog(`
       <h2>${esc(p ? t("dlg.plannedEdit") : t("dlg.plannedNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
         <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
@@ -1266,6 +1868,9 @@
         <label class="field">${esc(t("dlg.p.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
+        ${canAssign ? `<label class="field full">${esc(t("dlg.p.assignee"))}
+          <select name="assignee">${assigneeOptions(v.product, assignee)}</select>
+        </label>` : ""}
         <label class="field full">${esc(t("dlg.p.note"))}<textarea name="note" rows="3" placeholder="${esc(t("dlg.p.note.ph"))}">${esc(v.note)}</textarea></label>
       </div>
       ${stampLine(p)}
@@ -1275,7 +1880,6 @@
         <button class="btn primary" value="ok">${esc(t("btn.save"))}</button>
       </div>`, (data, action) => {
       if (action === "delete") {
-        if (!confirm(t("confirm.deletePlanned"))) return;
         h.planned = h.planned.filter((x) => x.id !== p.id);
       } else {
         const rec = p || { id: uid() };
@@ -1283,6 +1887,13 @@
           date: data.date, type: data.type, product: data.product,
           contactId: data.contactId, note: data.note.trim(),
         });
+        // Het veld komt er alleen bij als het moment voor iemand anders is dan
+        // wie het invoerde: voor die persoon volgt het al uit de stempel. Zo
+        // krijgt een moment dat je voor jezelf plant geen naam mee, en blijft
+        // een ouder moment waar niemand aan de toewijzing kwam onaangeroerd.
+        const chosen = canAssign ? data.assignee : "";
+        if (chosen && chosen !== (p ? p.createdBy || "" : store.me().id)) rec.assignee = chosen;
+        else delete rec.assignee;
         stamp(rec, !p);
         if (!p) h.planned.push(rec);
         h.planned.sort((a, b) => a.date.localeCompare(b.date));
@@ -1290,30 +1901,67 @@
       syncNextAction(h);
       scheduleSave();
       renderAll();
-    });
+    }, t("confirm.deletePlanned"));
+    // Een ander product, andere collega's: de lijst volgt de keuze. Wie
+    // gekozen was blijft staan als hij dat product ook heeft.
+    // onchange en geen luisteraar: #dialogForm wordt hergebruikt, en een
+    // luisteraar per geopende dialoog zou zich opstapelen (zie openDialog).
+    form.onchange = (e) => {
+      const pick = form.elements.assignee;
+      if (!pick || e.target.name !== "product") return;
+      const was = pick.value;
+      // Een collega die het nieuwe product niet heeft valt weg. Iemand die we
+      // niet (meer) kennen blijft staan: over hem valt niets te zeggen, en een
+      // ander product kiezen mag het moment niet stil aan jou toewijzen.
+      const unknown = !!was && !owners().some(([id]) => id === was);
+      pick.innerHTML = assigneeOptions(e.target.value, unknown ? was : "");
+      const has = (id) => [...pick.options].some((o) => o.value === id);
+      const next = has(was) ? was : has(store.me().id) ? store.me().id : "";
+      const blank = pick.querySelector('option[value=""]');
+      if (next && blank) blank.remove();
+      pick.value = next;
+    };
   }
 
   // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
-  function stageStatus(h) {
-    const before = h.status;
-    if (h.stage === "customer") h.status = "green";
-    else if (h.stage === "prospect") h.status = h.activities.length ? h.status : "red";
-    else if (h.stage !== "not_interested" && h.status !== "green") h.status = "orange";
-    if (h.status !== before) toast(h.status === "green" ? t("status.toGreen") : t("status.toOrange"));
+  // x is waar de fase en de kleur staan: de opvolging van één product, of het
+  // ziekenhuis zelf zolang er geen product aan hangt.
+  function stageStatus(x, contacted) {
+    const before = x.status;
+    if (x.stage === "customer") x.status = "green";
+    else if (x.stage === "prospect") x.status = contacted ? x.status : "red";
+    else if (x.stage !== "not_interested" && x.status !== "green") x.status = "orange";
+    if (x.status !== before) toast(x.status === "green" ? t("status.toGreen") : t("status.toOrange"));
   }
 
   // Kleur automatisch mee laten evolueren; manueel aanpassen blijft altijd mogelijk.
+  // Een contactmoment hoort bij één product, dus het is de opvolging van dát
+  // product die meebeweegt — een bestelling voor het ene maakt het andere niet
+  // groen.
   function autoStatus(h, act) {
-    if ((act.type === "installation" || act.type === "order") && h.status !== "green") {
-      h.status = "green";
-      if (PRE_SALE.includes(h.stage)) h.stage = "customer";
+    // Zonder product op het contactmoment: hangt er precies één product aan
+    // het ziekenhuis, dan is het dat. Hangen er meer aan, dan valt niet te
+    // raden welk — en dan blijft alles staan, liever dan het verkeerde product
+    // groen te maken. Hangt er geen aan, dan is het het ziekenhuis zelf.
+    const rows = myProducts().filter((p) => h.products.includes(p) && h.pipeline[p]);
+    const x = (act.product && h.pipeline[act.product])
+      || (rows.length === 1 ? h.pipeline[rows[0]] : rows.length ? null : h);
+    if (!x) return;
+    if ((act.type === "installation" || act.type === "order") && x.status !== "green") {
+      x.status = "green";
+      if (PRE_SALE.includes(x.stage)) x.stage = "customer";
       toast(t("status.toGreen"));
-    } else if (h.status === "red") {
-      h.status = "orange";
-      if (h.stage === "prospect") h.stage = "first_contact";
+    } else if (x.status === "red") {
+      x.status = "orange";
+      if (x.stage === "prospect") x.stage = "first_contact";
       toast(t("status.toOrange"));
     }
-    if (act.type === "demo" && ["prospect", "first_contact", "meeting", "demo_planned"].includes(h.stage)) h.stage = "demo_installed";
+    // Na een demo: geïnstalleerd bij een product per abonnement, in evaluatie
+    // bij een product per ingreep, waar niets geïnstalleerd wordt.
+    if (act.type === "demo" && ["prospect", "first_contact", "meeting", "demo_planned"].includes(x.stage)) {
+      x.stage = productKind(act.product) === "procedure" ? "evaluation" : "demo_installed";
+    }
+    syncPipeline(h);
   }
 
   // Kamers van de afdeling bijwerken na een demo, installatie of stopzetting.
@@ -1325,8 +1973,11 @@
   // Een demo overschrijft wél: dat is de huidige toestand, geen optelsom — we
   // nemen het aantal van de laatste demo waarvoor een aantal is ingevuld.
   function syncRooms(h, before, after) {
+    // Alleen voor een product per abonnement: het aantal bij een RFA-bestelling
+    // zijn stuks, geen kamers, en hoort dus niet bij de afdeling opgeteld.
+    const perKamer = (a) => !!a && productKind(a.product) === "subscription";
     const installed = (a) => {
-      if (!a || !a.rooms) return 0;
+      if (!perKamer(a) || !a.rooms) return 0;
       if (a.type === "installation") return a.rooms;
       if (a.type === "cancellation") return -a.rooms;
       return 0;
@@ -1335,8 +1986,8 @@
     if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
       h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);
     }
-    if ((before && before.type === "demo") || (after && after.type === "demo")) {
-      const demos = h.activities.filter((a) => a.type === "demo" && a.rooms);
+    if ((perKamer(before) && before.type === "demo") || (perKamer(after) && after.type === "demo")) {
+      const demos = h.activities.filter((a) => a.type === "demo" && a.rooms && perKamer(a));
       if (demos.length) h.unit.roomsDemo = demos.sort((a, b) => b.date.localeCompare(a.date))[0].rooms;
     }
   }
@@ -1371,6 +2022,7 @@
       });
       state.db.hospitals.push(h);
       scheduleSave();
+      renderFilters(); // de regiofilter hangt af van waar er ziekenhuizen liggen
       if (hasLoc) {
         select(h.id, true);
         toast(t("toast.created"));
@@ -1417,47 +2069,103 @@
   // Het logo brengt je terug naar de kaart, vanuit elk paneel.
   $("#homeBtn").addEventListener("click", () => { closeFiche(); setView("map"); });
 
+  // Welke periode een export beslaat. Alleen de twee lijsten met een datum
+  // luisteren ernaar: contactmomenten en geplande momenten. Een voorkeuze is
+  // "sinds zoveel maanden", zonder einde: zo geeft ze van het logboek het
+  // recente stuk en van de agenda wat onlangs te laat was plus alles wat nog
+  // komt, en hoeft niemand na te denken over wat "de laatste drie maanden"
+  // voor een planning zou betekenen. De keuze blijft staan tot je herlaadt.
+  const EXPORT_PERIODS = { all: 0, m3: 3, m6: 6, y1: 12, custom: 0 };
+  let exportPeriod = { period: "all", from: "", to: "" };
+  function exportRange({ period, from, to }) {
+    if (period === "custom") {
+      const a = dateOrEmpty(from), b = dateOrEmpty(to);
+      // Omgekeerd ingevuld is nog altijd duidelijk wat bedoeld is.
+      return a && b && a > b ? [b, a] : [a, b];
+    }
+    const months = EXPORT_PERIODS[period] || 0;
+    if (!months) return ["", ""];
+    const d = new Date();
+    // Naar de eerste van die maand en dan pas naar de dag, begrensd op de
+    // lengte van die maand: drie maanden terug vanaf 31 mei is eind februari,
+    // niet 3 maart.
+    const s = new Date(d.getFullYear(), d.getMonth() - months, 1);
+    s.setDate(Math.min(d.getDate(), new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate()));
+    return [ymd(s.getFullYear(), s.getMonth(), s.getDate()), ""];
+  }
   $("#exportBtn").addEventListener("click", () => {
-    openDialog(`
+    const form = openDialog(`
       <h2>${esc(t("dlg.export"))}</h2>
       <p class="muted">${esc(t("dlg.exportHint"))}</p>
+      <div class="grid">
+        <label class="field full">${esc(t("log.period"))}
+          <select name="period">${Object.keys(EXPORT_PERIODS).map((k) => opt(k, t("export.period." + k), exportPeriod.period)).join("")}</select>
+        </label>
+        <label class="field" data-export-custom ${exportPeriod.period === "custom" ? "" : "hidden"}>${esc(t("export.from"))}<input type="date" name="from" max="9999-12-31" value="${esc(exportPeriod.from)}"></label>
+        <label class="field" data-export-custom ${exportPeriod.period === "custom" ? "" : "hidden"}>${esc(t("export.to"))}<input type="date" name="to" max="9999-12-31" value="${esc(exportPeriod.to)}"></label>
+      </div>
+      <p class="muted">${esc(t("export.periodHint"))}</p>
       <div style="display:flex;flex-direction:column;gap:8px">
         <button class="btn" value="hospitals">${esc(t("export.hospitals"))}</button>
         <button class="btn" value="contacts">${esc(t("export.contacts"))}</button>
         <button class="btn" value="activities">${esc(t("export.activities"))}</button>
-        <button class="btn" value="units">${esc(t("export.units"))}</button>
+        <button class="btn" value="planned">${esc(t("export.planned"))}</button>
+        ${endoAccount() ? `<button class="btn" value="units">${esc(t("export.units"))}</button>` : ""}
         <button class="btn" value="json">${esc(t("export.json"))}</button>
       </div>
       <div class="actions"><button class="btn" value="cancel">${esc(t("btn.close"))}</button></div>`, (data, kind) => {
       const hs = state.db.hospitals;
       const d = today();
-      const contactName = (h, id) => (h.contacts.find((c) => c.id === id) || {}).name;
+      exportPeriod = { period: Object.hasOwn(EXPORT_PERIODS, data.period) ? data.period : "all", from: data.from || "", to: data.to || "" };
+      const [from, to] = exportRange(exportPeriod);
+      // Een moment zonder datum hoort in geen enkele periode, en dus alleen
+      // bij "alle datums".
+      const inPeriod = (date) => (date ? (!from || date >= from) && (!to || date <= to) : !from && !to);
+      // De periode in de bestandsnaam, zodat je later nog ziet wat erin zit.
+      const span = from || to ? `${from || "begin"}--${to || d}` : d;
       // De kolom "Demo gepland op" bestaat nog; de datum komt uit het eerste
       // geplande demomoment dat nog moet komen.
       const demoDate = (h) => ((h.planned.find((p) => p.type === "demo" && p.date >= d) || {}).date) || "";
       if (kind === "hospitals") {
         download(`hospitals-${d}.csv`, csv([
           [t("col.name"), t("col.country"), t("col.sector"), t("col.status"), t("col.stage"), t("col.products"),
-            t("col.lastContact"), t("col.demos"), t("col.installations"), t("unit.roomsInstalled"),
+            t("col.lastContact"), t("col.demos"), ...(endoAccount() ? [t("col.installations"), t("unit.roomsInstalled")] : []),
             t("col.demoDate"), t("col.nextAction"), t("col.nextActionDate"), t("col.primaryContact"),
-            t("col.address"), t("col.createdAt"), t("col.notes")],
+            t("col.address"), t("col.createdAt"), t("col.notes"),
+            t("field.network"), t("field.sites"),
+            ...myProducts().flatMap((p) => [`${t("col.stage")} ${p}`, `${t("col.owner")} ${p}`,
+              ...(productKind(p) === "procedure" ? ["rfa.cmm", "rfa.prio", "rfa.doesAlready", "rfa.currentSystem", "rfa.notes"].map((k) => `${t(k)} ${p}`) : [])])],
           ...hs.map((h) => [h.name, h.country && t("country." + h.country), h.sector && t("sector." + h.sector),
             t("status." + h.status), t("stage." + h.stage), h.products.join(", "), lastContact(h),
-            countType(h, "demo"), countType(h, "installation"), h.unit.roomsInstalled ?? "",
+            countType(h, "demo"), ...(endoAccount() ? [countType(h, "installation"), h.unit.roomsInstalled ?? ""] : []),
             demoDate(h), h.nextAction, h.nextActionDate, (h.contacts.find((c) => c.primary) || {}).name,
-            h.address, h.createdAt, h.notes]),
+            h.address, h.createdAt, h.notes,
+            h.network, h.sites,
+            ...myProducts().flatMap((p) => {
+              const e = h.products.includes(p) && h.pipeline[p];
+              const rfa = productKind(p) === "procedure";
+              if (!e) return rfa ? ["", "", "", "", "", "", ""] : ["", ""];
+              return [t("stage." + e.stage), personName(e.owner),
+                ...(rfa ? [e.cmm && t("rfa.cmm." + e.cmm), e.prio ?? "", e.doesAlready && t("yn." + e.doesAlready), e.currentSystem, e.notes] : [])];
+            })]),
         ]), "text/csv");
       } else if (kind === "contacts") {
         download(`contacts-${d}.csv`, csv([
-          [t("col.hospital"), t("col.name"), t("col.dept"), t("col.role"), t("col.phone"), t("col.email"), t("col.address"), t("col.product"), t("col.isPrimary"), t("col.notes")],
+          [t("col.hospital"), t("col.name"), t("col.dept"), t("col.role"), t("col.phone"), t("col.email"), t("col.language"), t("col.address"), t("col.product"), t("col.isPrimary"), t("col.notes")],
           ...hs.flatMap((h) => h.contacts.map((c) => [h.name, c.name, c.department && t("dept." + c.department), c.role,
-            c.phone, c.email, c.address, c.products.join(" / "), c.primary ? t("col.yes") : "", c.notes])),
+            c.phone, c.email, c.language, c.address, c.products.join(" / "), c.primary ? t("col.yes") : "", c.notes])),
         ]), "text/csv");
       } else if (kind === "activities") {
-        download(`activities-${d}.csv`, csv([
-          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.rooms"), t("col.note"), t("col.addedBy")],
-          ...hs.flatMap((h) => h.activities.map((a) => [a.date, h.name, t("act." + a.type), a.product, contactName(h, a.contactId), a.rooms ?? "", a.note, personName(a.createdBy)]))
-            .sort((a, b) => b[0].localeCompare(a[0])),
+        download(`activities-${span}.csv`, activitiesCsv(hs.flatMap((h) => h.activities.filter((a) => inPeriod(a.date)).map((a) => ({ h, a })))), "text/csv");
+      } else if (kind === "planned") {
+        // De agenda, eerst wat het eerst komt. Voor wie het is staat er
+        // altijd: zonder toewijzing is dat wie het invoerde.
+        download(`planned-${span}.csv`, csv([
+          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("dlg.p.assignee"), t("col.addedBy")],
+          ...hs.flatMap((h) => h.planned.filter((p) => inPeriod(p.date)).map((p) => ({ h, p })))
+            .sort((x, y) => x.p.date.localeCompare(y.p.date) || x.h.name.localeCompare(y.h.name))
+            .map(({ h, p }) => [p.date, h.name, t("act." + p.type), p.product,
+              (h.contacts.find((c) => c.id === p.contactId) || {}).name, p.note, personName(assigneeOf(p)) || (p.assignee ? "?" : ""), personName(p.createdBy)]),
         ]), "text/csv");
       } else if (kind === "units") {
         download(`units-${d}.csv`, csv([
@@ -1475,6 +2183,15 @@
       }
       return KEEP_OPEN; // meestal wil je meer dan één lijst
     });
+    // De twee datumvelden staan er alleen bij een eigen periode.
+    form.elements.period.addEventListener("change", (e) => {
+      form.querySelectorAll("[data-export-custom]").forEach((el) => { el.hidden = e.target.value !== "custom"; });
+    });
+    // Enter in een datumveld zou het formulier indienen met de eerste knop en
+    // zo ongevraagd het ziekenhuisoverzicht downloaden.
+    for (const name of ["from", "to"]) {
+      form.elements[name].addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
+    }
   });
 
   $("#importBtn").addEventListener("click", () => {
@@ -1488,7 +2205,7 @@
     try {
       const data = JSON.parse(await file.text());
       if (!Array.isArray(data.hospitals)) throw new Error(t("import.noHospitals"));
-      if (!confirm(t("import.confirm", { n: data.hospitals.length }))) return;
+      if (!(await ask(t("import.confirm", { n: data.hospitals.length }), { ok: t("btn.continue") }))) return;
       data.hospitals.forEach(normalize);
       state.db = data;
       state.selectedId = null;
@@ -1498,12 +2215,12 @@
       fitAll();
       toast(t("import.done"));
     } catch (err) {
-      alert(t("import.failed", { msg: err.message }));
+      tell(t("import.failed", { msg: err.message }));
     }
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !$("#dialog").open) {
+    if (e.key === "Escape" && !document.querySelector("dialog[open]")) {
       if (state.placing) $("#cancelPlace").click();
       else if (!menuList.hidden) toggleMenu(false);
       else if (state.selectedId) closeFiche();
@@ -1518,14 +2235,30 @@
   // sleutels minder om in twee talen bij te houden.
   function plannedAll() {
     const out = [];
-    for (const h of state.db.hospitals) for (const p of h.planned) out.push({ h, p });
+    // Het rooster, "te laat" en de lijst volgen alle drie de keuze "voor wie".
+    const who = state.agenda.assignees;
+    for (const h of state.db.hospitals) for (const p of h.planned) if (!who.length || who.includes(assigneeOf(p))) out.push({ h, p });
     return out.sort((a, b) => a.p.date.localeCompare(b.p.date) || a.h.name.localeCompare(b.h.name));
   }
 
+  // Voor wie: dezelfde uitklapper als de filters in het logboek en de zijbalk,
+  // met jezelf vooraan. "Gepland voor" en niet "Toegewezen aan": dat laatste
+  // is wie een product bij een ziekenhuis opvolgt, en die filter staat op het
+  // andere tabblad van deze pagina. Twee keer hetzelfde woord voor twee
+  // verschillende dingen las als één filter. Zonder namen (lokaal zonder naam) valt er niets te
+  // kiezen en staat er niets.
+  function agendaAssignee() {
+    const list = owners();
+    if (!list.length) return "";
+    const open = state.agenda.whoOpen;
+    state.agenda.whoOpen = false;
+    return `<div class="s-filters">${pickBox(list.map(([id]) => ({
+      attrs: `data-ag-who data-value="${esc(id)}"`, label: personLabel(id), checked: state.agenda.assignees.includes(id),
+    })), t("agenda.forAnyone"), open, t("dlg.p.assignee"))}</div>`;
+  }
+
   function agendaRow({ h, p }) {
-    const c = h.contacts.find((x) => x.id === p.contactId);
-    const by = personName(p.createdBy);
-    const sub = [t("act." + p.type), p.product, c && c.name, by && t("by", { name: by })].filter(Boolean).join(" · ");
+    const sub = momentLine(h, p, true);
     const when = new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" });
     return `<li class="ag-row ${p.date < today() ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
       <div class="ag-date"><b>${esc(when)}</b><span>${esc(relDays(p.date))}</span></div>
@@ -1535,14 +2268,18 @@
         ${p.note ? `<div class="ag-note">${esc(p.note)}</div>` : ""}
       </div>
       <div class="ag-acts">
-        <button class="icon-btn" data-ag="done" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">✓</button>
-        <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">✎</button>
-        <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">→</button>
+        <button class="icon-btn" data-ag="done" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
+        <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
+        <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">${icon("arrow")}</button>
       </div>
     </li>`;
   }
 
   function renderAgenda() {
+    // Zolang de gegevens onderweg zijn tekent de agenda haar eigen streepjes,
+    // wie haar ook oproept: een lege agenda zou "niets gepland" zeggen.
+    if (state.loading) { agendaView.innerHTML = skelAgenda(); return; }
+    if (state.agenda.tab === "log") return renderLog();
     const { y, m, day } = state.agenda;
     const items = plannedAll();
     const td = today();
@@ -1585,10 +2322,14 @@
       <div class="s-head">
         <h2>${esc(t("agenda.title"))}</h2>
         <div class="ag-nav">
-          <button class="btn small" data-ag="prev" title="${esc(t("btn.prevMonth"))}" aria-label="${esc(t("btn.prevMonth"))}">‹</button>
+          <button class="btn small" data-ag="prev" title="${esc(t("btn.prevMonth"))}" aria-label="${esc(t("btn.prevMonth"))}">${icon("prev")}</button>
           <button class="btn small" data-ag="today">${esc(t("btn.today"))}</button>
-          <button class="btn small" data-ag="next" title="${esc(t("btn.nextMonth"))}" aria-label="${esc(t("btn.nextMonth"))}">›</button>
+          <button class="btn small" data-ag="next" title="${esc(t("btn.nextMonth"))}" aria-label="${esc(t("btn.nextMonth"))}">${icon("next")}</button>
         </div>
+        ${agendaAssignee()}
+        ${// De schakelaar als laatste, op beide tabbladen: zo staat hij op
+          // dezelfde plaats en verspringt hij niet onder je muis.
+          agendaTabs()}
       </div>
       <div class="cal">
         <div class="cal-month">${esc(monthLabel)}</div>
@@ -1597,7 +2338,7 @@
           ${cells.join("")}
         </div>
       </div>
-      ${items.length ? "" : `<p class="muted">${esc(t("agenda.none"))}</p>`}
+      ${items.length ? "" : `<p class="muted">${esc(t(state.agenda.assignees.length ? "agenda.noneFor" : "agenda.none"))}</p>`}
       ${overdue.length && !day && !past ? `<div class="ag-block">
         <h3 class="ag-h">${esc(t("agenda.overdue"))} <span class="badge">${overdue.length}</span></h3>
         <ul class="ag-list">${overdue.map(agendaRow).join("")}</ul>
@@ -1609,11 +2350,202 @@
       </div>` : ""}`;
   }
 
+  // ---------- logboek ----------
+  // De andere helft van de agenda: niet wat komt maar wat gebeurd is, over
+  // alle ziekenhuizen heen. In de fiche zie je de contactmomenten van één
+  // ziekenhuis; hier de vraag "wat is er deze week gebeurd".
+  //
+  // Afschermen hoeft hier niet apart: de databank stuurt een account alleen de
+  // contactmomenten van zijn eigen producten, dus dit is vanzelf beperkt.
+  const LOG_STEP = 50;
+  const LOG_PERIODS = ["week", "month", "quarter", "year", "all"];
+  const agendaTabs = () => `<div class="s-seg">${[["planned", "agenda.tabPlanned"], ["log", "agenda.tabLog"]].map(([k, key]) =>
+    `<button data-ag-tab="${k}" class="${state.agenda.tab === k ? "active" : ""}"><span>${esc(t(key))}</span></button>`).join("")}</div>`;
+  // De eerste dag van de periode, of leeg voor alles.
+  function periodStart(period) {
+    const d = new Date();
+    const y = d.getFullYear(), m = d.getMonth();
+    if (period === "week") { const s = new Date(y, m, d.getDate() - ((d.getDay() + 6) % 7)); return ymd(s.getFullYear(), s.getMonth(), s.getDate()); }
+    if (period === "month") return ymd(y, m, 1);
+    if (period === "quarter") { const s = new Date(y, m - 3, d.getDate()); return ymd(s.getFullYear(), s.getMonth(), s.getDate()); }
+    if (period === "year") return ymd(y, 0, 1);
+    return "";
+  }
+  // De week van een datum: de maandag als sleutel, en het ISO-weeknummer, dat
+  // bij de donderdag van die week hoort.
+  function weekOf(date) {
+    const d = new Date(date + "T00:00:00");
+    const mon = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+    const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
+    const thu = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 3);
+    const n = Math.floor(Math.round((thu - new Date(thu.getFullYear(), 0, 1)) / 86400000) / 7) + 1;
+    const short = (x) => x.toLocaleDateString(I18N.locale, { day: "numeric", month: "short" });
+    // Het jaar erbij zodra het niet het lopende is: over "alles" staat week 45
+    // er anders twee keer, zonder dat je ziet van wanneer.
+    const year = thu.getFullYear() === new Date().getFullYear() ? "" : ` ${thu.getFullYear()}`;
+    return { key: ymd(mon.getFullYear(), mon.getMonth(), mon.getDate()), label: `${t("log.week", { n })} · ${short(mon)} – ${short(sun)}${year}` };
+  }
+  // Alles wat bij de keuze past, recentste eerst.
+  //
+  // De filters van de kaart gelden voor het ziekenhuis (land,
+  // verantwoordelijke) en voor het contactmoment zelf (product). Kom je uit
+  // een fiche, dan gelden ze niet: je vroeg om de contactmomenten van dát
+  // ziekenhuis, en de fiche toonde ze ook allemaal. Periode, soort en
+  // "ingevoerd door" blijven wel gelden — die staan er nog en zijn van hier.
+  //
+  // Zoeken gaat per contactmoment en niet per ziekenhuis: elk woord moet
+  // voorkomen in het ziekenhuis, de contactpersoon van dít moment, de soort,
+  // het product of de nota. Wie op een arts zoekt krijgt dus de momenten met
+  // die arts, niet alles van zijn ziekenhuis.
+  function logItems() {
+    const L = state.log;
+    const from = periodStart(L.period);
+    const only = L.hospitalId && byId(L.hospitalId);
+    const words = only ? [] : state.filter.query.toLowerCase().split(/\s+/).filter(Boolean);
+    const out = [];
+    for (const h of only ? [only] : scopedHospitals()) {
+      const place = [h.name, h.address, h.network, h.sites].join(" ");
+      for (const a of h.activities) {
+        if (!only && !inFilter(a)) continue;
+        if (from && a.date < from) continue;
+        if (L.types.length && !L.types.includes(a.type)) continue;
+        if (L.authors.length && !L.authors.includes(a.createdBy)) continue;
+        if (words.length) {
+          const c = h.contacts.find((x) => x.id === a.contactId);
+          const hay = [place, c && c.name, t("act." + a.type), a.product, a.note].join(" ").toLowerCase();
+          if (!words.every((w) => hay.includes(w))) continue;
+        }
+        out.push({ h, a });
+      }
+    }
+    return out.sort((x, y) => y.a.date.localeCompare(x.a.date) || x.h.name.localeCompare(y.h.name));
+  }
+  // Uit een fiche gekomen: het logboek van dat ene ziekenhuis, over de hele
+  // periode. Dat is een uitstap, geen instelling — de periode van daarvoor
+  // wordt onthouden en komt terug zodra je het ziekenhuis loslaat of de
+  // agenda verlaat.
+  function openLogFor(h) {
+    if (!state.log.hospitalId) state.log.prevPeriod = state.log.period;
+    state.log = { ...state.log, hospitalId: h.id, period: "all", limit: LOG_STEP };
+    state.agenda = { ...state.agenda, tab: "log" };
+    setView("agenda");
+  }
+  function clearLogHospital() {
+    if (!state.log.hospitalId) return;
+    state.log = { ...state.log, hospitalId: "", period: state.log.prevPeriod || "quarter", limit: LOG_STEP };
+  }
+  function logRow({ h, a }) {
+    const sub = momentLine(h, a, true);
+    const when = new Date(a.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" });
+    return `<li class="ag-row" data-hid="${esc(h.id)}" data-aid="${esc(a.id)}">
+      <div class="ag-date"><b>${esc(when)}</b><span>${esc(relDays(a.date))}</span></div>
+      <div class="ag-body">
+        <div class="ag-name">${esc(h.name)}</div>
+        <div class="ag-sub"><span class="type-pill" style="background:${ACT_TYPES[a.type] || "#999"}"></span>${esc(sub)}</div>
+        ${a.note ? `<div class="ag-note">${esc(a.note)}</div>` : ""}
+      </div>
+      <div class="ag-acts">
+        <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
+        <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">${icon("arrow")}</button>
+      </div>
+    </li>`;
+  }
+  // Alleen de lijst, niet de filters erboven: anders klapt de uitklapper dicht
+  // bij elk vinkje, en verliest het zoekveld zijn cursor bij elke letter.
+  function renderLogBody() {
+    const body = $("#logBody", agendaView);
+    if (!body) return;
+    const items = logItems();
+    // Zoals in de lijst van ziekenhuizen: een rij die blijft schuift naar haar
+    // nieuwe plek, een nieuwe komt zacht op. De weekkopjes doen mee, anders
+    // springen zij terwijl de rijen eronder glijden.
+    const LOG_ROWS = "h3.ag-h, li.ag-row, p.muted";
+    const logKey = (el) => el.dataset.aid || "kop:" + el.textContent;
+    const before = rowTops(body, LOG_ROWS, logKey, window.innerHeight);
+    const settle = () => settleRows(body, LOG_ROWS, logKey, before, window.innerHeight);
+    if (!items.length) { body.innerHTML = `<p class="muted">${esc(t("log.empty"))}</p>`; settle(); return; }
+    const counts = {};
+    for (const { a } of items) counts[a.type] = (counts[a.type] || 0) + 1;
+    const perType = Object.entries(counts).sort((x, y) => y[1] - x[1]).map(([k, n]) => `${n} ${t("act." + k).toLowerCase()}`).join(" · ");
+    const visible = items.slice(0, state.log.limit);
+    const weeks = [];
+    for (const x of visible) {
+      const w = weekOf(x.a.date);
+      if (!weeks.length || weeks[weeks.length - 1].key !== w.key) weeks.push({ ...w, rows: [] });
+      weeks[weeks.length - 1].rows.push(x);
+    }
+    body.innerHTML = `
+      <p class="log-sum"><b>${esc(items.length === 1 ? t("log.countOne") : t("log.count", { n: items.length }))}</b>${perType ? ` — ${esc(perType)}` : ""}
+        <button class="btn small" data-log-export>${esc(t("log.export"))}</button></p>
+      ${weeks.map((w) => `<div class="ag-block">
+        <h3 class="ag-h">${esc(w.label)}</h3>
+        <ul class="ag-list">${w.rows.map(logRow).join("")}</ul>
+      </div>`).join("")}
+      ${items.length > visible.length ? `<p class="log-more"><span class="muted">${esc(t("log.shown", { n: visible.length, total: items.length }))}</span>
+        <button class="btn small" data-log-more>${esc(t("log.more"))}</button></p>` : ""}`;
+    settle();
+  }
+  function renderLog() {
+    const L = state.log;
+    const only = L.hospitalId && byId(L.hospitalId);
+    if (L.hospitalId && !only) clearLogHospital();
+    const pick = (key, items, label, leeg, voor) => pickBox(items.map((k) => ({
+      attrs: `data-log-pick="${esc(key)}" data-value="${esc(k)}"`, label: label(k), checked: L[key].includes(k),
+    })), leeg, false, voor);
+    agendaView.innerHTML = `
+      <div class="s-head">
+        <h2>${esc(t("agenda.title"))}</h2>
+        ${agendaTabs()}
+      </div>
+      <div class="s-filters log-filters">
+        ${// Eén manier voor de hele rij: wat een veld filtert staat ín het
+          // veld, niet ervoor. De periodes zeggen zelf wat ze zijn; "Ingevoerd
+          // door" en "Toegewezen aan" blijven erbij staan als er namen gekozen
+          // zijn, want een naam alleen zegt niet waarvoor hij staat.
+          ""}<label><select data-log-period aria-label="${esc(t("log.period"))}">${LOG_PERIODS.map((p) => opt(p, t("log.period." + p), L.period)).join("")}</select></label>
+        ${only ? "" : FILTERS.filter((f) => f.key !== "statuses" && f.items().length).map((f) => `<label>${pickBox(f.items().map((k) => ({
+          attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`, label: f.label(k), checked: chosen(f.key).includes(k),
+        })), f.leeg(), false, f.voor && f.voor())}</label>`).join("")}
+        <label>${pick("types", ACT_TYPE_KEYS, (k) => t("act." + k), t("log.allTypes"))}</label>
+        ${owners().length ? `<label>${pick("authors", owners().map(([id]) => id), personLabel, t("log.anyAuthor"), t("log.author"))}</label>` : ""}
+        ${only ? "" : `<input type="search" data-log-search value="${esc(state.filter.query)}" placeholder="${esc(t("log.search"))}" aria-label="${esc(t("log.search"))}">`}
+      </div>
+      ${only ? `<p class="log-only">${esc(t("log.hospital"))}: <b>${esc(only.name)}</b> <button class="link" data-log-clear>${esc(t("log.allHospitals"))}</button></p>` : ""}
+      <div id="logBody"></div>`;
+    renderLogBody();
+  }
+  // Enkel wat hier geselecteerd staat — álles daarvan, niet alleen wat al
+  // geladen is.
+  function exportLog() {
+    download(`logboek-${today()}.csv`, activitiesCsv(logItems()), "text/csv");
+  }
+
   // ---------- start ----------
+  // ---------- wat er staat zolang de gegevens onderweg zijn ----------
+  // Dezelfde streepjes als de lijst in index.html, in de vorm van het scherm
+  // dat komt: zo staat de indeling er meteen en verspringt er weinig wanneer
+  // de echte inhoud arriveert. De glans komt van aria-busy (styles.css).
+  const skelRows = (n) => `<ul class="ag-list" aria-busy="true">${'<li class="ag-row skel"><div><b></b><span></span></div></li>'.repeat(n)}</ul>`;
+  const skelAgenda = () => `
+    <div class="s-head"><h2>${esc(t("agenda.title"))}</h2>${agendaTabs()}</div>
+    <div class="skel-box ${state.agenda.tab === "log" ? "skel-filters" : "skel-cal"}" aria-busy="true"></div>
+    ${skelRows(state.agenda.tab === "log" ? 6 : 3)}`;
+  const skelStats = () => `
+    <div class="s-head"><h2>${esc(t("nav.stats"))}</h2></div>
+    <div class="s-tiles" aria-busy="true">${'<div class="s-tile skel"><span></span><b></b></div>'.repeat(5)}</div>
+    <div class="skel-box skel-card" aria-busy="true"></div>`;
+  // Met een knop om te sluiten: op een telefoon bedekt de fiche het hele
+  // scherm, en wie op een trage verbinding niet wil wachten moet eruit kunnen.
+  const skelFiche = () => `<div class="fiche-skel-head"><button class="icon-btn" data-skel-close title="${esc(t("btn.close"))}" aria-label="${esc(t("btn.close"))}">${icon("close")}</button></div>
+    <div class="fiche-skel skel" aria-busy="true">
+      <b class="skel-title"></b>${"<span></span><b></b><span></span><span></span>".repeat(4)}
+    </div>`;
+
   function renderAll() {
-    if (!statsView.hidden) window.FollowUpStats.render(state.db, statsView, scheduleSave);
+    if (!statsView.hidden && !state.loading) window.FollowUpStats.render(state.db, statsView, scheduleSave, pickedRegions());
     if (!agendaView.hidden) renderAgenda();
     if (!usersView.hidden) renderUsers();
+    renderFilters();
     renderKpis();
     renderList();
     renderMarkers();
@@ -1633,14 +2565,19 @@
       await store.ready();
       applyRights();
       await loadPeople();
+      // Nu pas zijn de namen er: de filter op verantwoordelijke heeft ze nodig.
+      renderFilters();
       const { db, empty } = await store.load();
       state.db = db;
       // Het versienummer zegt of deze app de vorm van de data nog begrijpt.
       // Komt ze van een nieuwere versie, dan waarschuwen we en laten we het
       // nummer staan — overschrijven zou stille gegevensverlies betekenen.
-      if (Number(state.db.version) > DB_VERSION) showBanner(t("save.newerVersion"));
+      if (Number(state.db.version) > DB_VERSION) showBanner(t("save.newerVersion"), false, "warn");
       state.db.version = Math.max(Number(state.db.version) || 1, DB_VERSION);
       state.db.hospitals.forEach(normalize);
+      // Wat we nu van de databank kennen; daartegen meten we later af wat hier
+      // veranderde en wat bij een collega.
+      base = clone(state.db);
       // read_state geeft de rol en het bereik mee waarmee dit document is
       // uitgelezen; is daar iets aan veranderd, dan kloppen de knoppen nu pas.
       applyRights();
@@ -1650,14 +2587,23 @@
       showBanner(e.message);
     }
     if (store.mode === "supabase") $("#logoutBtn").hidden = false;
+    // Geladen of mislukt: de streepjes maken plaats voor wat er is.
+    state.loading = false;
+    const place = early && document.body.dataset.view === early.view ? early.place : null;
+    // De fiche alleen als haar streepjes er nog staan: anders is ze gesloten.
+    const open = place && (!place.hospital || $("#fiche .fiche-skel")) ? restoreSelection(place) : null;
     renderAll();
     map.invalidateSize();
-    fitAll();
+    // Alles in beeld brengen is voor wie vers binnenkomt; wie herlaadt houdt
+    // de kaart waar ze stond.
+    if (!placeAt(place)) fitAll();
+    restoreView(place, open);
   }
 
   // Lege online databank: startlijst laden of een back-up importeren.
   function offerSeed() {
     const b = $("#banner");
+    b.dataset.tone = "info";
     b.textContent = t("seed.empty");
     // Zonder schrijfrecht blijft het bij de melding: de knop zou toch stuiten
     // op de grendel in scheduleSave en op de databank. Met een productbeperking
@@ -1679,7 +2625,7 @@
         fitAll();
         toast(t("seed.loaded", { n: state.db.hospitals.length }));
       } catch (e) {
-        alert(t("seed.missing"));
+        tell(t("seed.missing"));
       }
     };
     b.append(btn, t("seed.or"));
@@ -1712,6 +2658,7 @@
   const agendaView = $("#agendaView");
   const usersView = $("#usersView");
   function setView(view) {
+    if (view !== "agenda") clearLogHospital();
     document.body.dataset.view = view;
     statsView.hidden = view !== "stats";
     agendaView.hidden = view !== "agenda";
@@ -1720,8 +2667,15 @@
     $("#agendaBtn").textContent = view === "agenda" ? t("btn.backToMap") : t("btn.agenda");
     document.querySelectorAll(".tabbar [data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     try { localStorage.setItem("followup-view", view); } catch (e) { /* privévenster */ }
-    if (view === "stats") window.FollowUpStats.render(state.db, statsView, scheduleSave);
-    else window.FollowUpStats.hideTip();
+    if (view === "stats" && state.loading) {
+      statsView.innerHTML = skelStats();
+    } else if (view === "stats") {
+      // Bij het binnenkomen groeien de balken vanaf de as (styles.css). Alleen
+      // dan: bij elke filterklik opnieuw zou het een trucje worden.
+      statsView.classList.add("enter");
+      setTimeout(() => statsView.classList.remove("enter"), 900);
+      window.FollowUpStats.render(state.db, statsView, scheduleSave, pickedRegions());
+    } else window.FollowUpStats.hideTip();
     if (view === "agenda") renderAgenda();
     if (view === "users") loadUsers();
     if (view === "map") setTimeout(() => {
@@ -1742,9 +2696,26 @@
   // Knoppen in de agenda: maand vooruit of achteruit, een dag kiezen, en per
   // regel afvinken, aanpassen of naar de fiche gaan.
   agendaView.addEventListener("click", (e) => {
+    const tab = e.target.closest("[data-ag-tab]");
+    if (tab) {
+      state.agenda = { ...state.agenda, tab: tab.dataset.agTab };
+      return renderAgenda();
+    }
+    if (e.target.closest("[data-log-more]")) { state.log.limit += LOG_STEP; return renderLogBody(); }
+    if (e.target.closest("[data-log-clear]")) { clearLogHospital(); return renderAgenda(); }
+    if (e.target.closest("[data-log-export]")) return exportLog();
     const b = e.target.closest("[data-ag]");
     if (b) {
       const row = b.closest(".ag-row");
+      // Een regel uit het logboek: een contactmoment, geen gepland moment.
+      if (row && row.dataset.aid) {
+        const h = byId(row.dataset.hid);
+        const a = h && h.activities.find((x) => x.id === row.dataset.aid);
+        if (!a) return;
+        if (b.dataset.ag === "edit") return activityDialog(h, a);
+        if (b.dataset.ag === "open") { setView("map"); select(h.id, true); }
+        return;
+      }
       if (row) {
         const h = byId(row.dataset.hid);
         const p = h && h.planned.find((x) => x.id === row.dataset.pid);
@@ -1758,10 +2729,10 @@
       if (b.dataset.ag === "prev" || b.dataset.ag === "next") {
         // Via Date, zodat december → januari het jaar meeneemt.
         const d = new Date(a.y, a.m + (b.dataset.ag === "next" ? 1 : -1), 1);
-        state.agenda = { y: d.getFullYear(), m: d.getMonth(), day: "" };
+        state.agenda = { ...a, y: d.getFullYear(), m: d.getMonth(), day: "" };
       } else if (b.dataset.ag === "today") {
         const d = new Date();
-        state.agenda = { y: d.getFullYear(), m: d.getMonth(), day: "" };
+        state.agenda = { ...a, y: d.getFullYear(), m: d.getMonth(), day: "" };
       } else if (b.dataset.ag === "clear") {
         state.agenda = { ...a, day: "" };
       } else return;
@@ -1772,6 +2743,49 @@
     // Dezelfde dag opnieuw aantikken toont weer de hele maand.
     state.agenda = { ...state.agenda, day: state.agenda.day === cell.dataset.day ? "" : cell.dataset.day };
     renderAgenda();
+  });
+
+  // De keuzes boven het logboek. Wat het met de kaart deelt gaat naar
+  // state.filter, en dan moeten de zijbalk, de lijst en de kaart mee.
+  agendaView.addEventListener("change", (e) => {
+    const el = e.target;
+    const d = el.dataset;
+    const toggle = (list, v) => (el.checked ? [...list, v] : list.filter((x) => x !== v));
+    if (d.filter) {
+      setChosen(d.filter, toggle(chosen(d.filter), d.value));
+      if (d.filter === "regions") redrawAfterRegion(agendaView);
+      else renderFilters();
+      renderList();
+      renderMarkers();
+      renderKpis();
+    } else if (d.logPick) {
+      state.log[d.logPick] = toggle(state.log[d.logPick], d.value);
+    } else if ("logPeriod" in d) {
+      state.log.period = el.value;
+    } else if ("agWho" in d) {
+      // De hele agenda hertekent, dus onthouden we dat de uitklapper openstond:
+      // anders klapt hij dicht bij elk vinkje.
+      state.agenda = { ...state.agenda, assignees: toggle(state.agenda.assignees, d.value), day: "", whoOpen: true };
+      renderAgenda();
+      // De hele agenda is hertekend, dus het vakje waar je stond is een nieuw
+      // vakje. Zonder dit staat de focus weer bovenaan de pagina.
+      const again = [...agendaView.querySelectorAll("[data-ag-who]")].find((x) => x.dataset.value === d.value);
+      if (again) again.focus();
+      return;
+    } else return;
+    state.log.limit = LOG_STEP;
+    renderLogBody();
+  });
+  agendaView.addEventListener("input", (e) => {
+    if (!("logSearch" in e.target.dataset)) return;
+    state.filter.query = e.target.value.trim();
+    $("#search").value = state.filter.query;
+    state.log.limit = LOG_STEP;
+    renderLogBody();
+    // De lijst en de kaart staan achter de agenda en hoeven niet bij elke
+    // letter mee: dezelfde pauze als bij het zoekveld in de zijbalk.
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { renderList(); renderMarkers(); }, 120);
   });
   document.querySelector(".tabbar").addEventListener("click", (e) => {
     const b = e.target.closest("button");
@@ -1786,6 +2800,85 @@
     if (saved && !["stats", "agenda", "users"].includes(saved)) setView(saved);
   } catch (e) { /* privévenster */ }
 
+  // Herladen brengt je terug waar je was: hetzelfde scherm, dezelfde fiche,
+  // met de gegevens van nu. In sessionStorage en niet in localStorage: dat is
+  // dit tabblad, dus wie de app opnieuw opent begint gewoon op de kaart. We
+  // schrijven het op bij het weggaan in plaats van bij elke klik — één plaats,
+  // en niets om bij te houden in de schermen zelf.
+  const PLACE_KEY = "followup-place";
+  window.addEventListener("pagehide", () => {
+    try {
+      sessionStorage.setItem(PLACE_KEY, JSON.stringify({
+        view: document.body.dataset.view,
+        hospital: state.ficheOpen ? state.selectedId : null,
+        tab: state.agenda.tab,
+        // Waar de kaart stond, zodat ze er meteen weer staat en niet eerst de
+        // hele Benelux toont. Een verborgen kaart heeft geen zinnig midden.
+        at: map.getContainer().offsetWidth ? [map.getCenter().lat, map.getCenter().lng, map.getZoom()] : null,
+      }));
+    } catch (e) { /* privévenster */ }
+  });
+  function readPlace() {
+    try {
+      const place = JSON.parse(sessionStorage.getItem(PLACE_KEY) || "null");
+      return place && typeof place === "object" ? place : null;
+    } catch (e) { return null; } // privévenster, of iets onleesbaars
+  }
+  // Meteen bij het laden, nog vóór de gegevens er zijn: het scherm waar je was
+  // gaat al open, met streepjes waar de inhoud komt. Anders zag je eerst even
+  // de kaart en sprong de app daarna pas naar je plek.
+  // Wat we bij het laden hebben klaargezet. Zodra de gegevens er zijn maken we
+  // het af, maar alleen als je er nog staat: wie tijdens het wachten naar een
+  // ander scherm ging of de fiche sloot, wordt niet teruggetrokken.
+  let early = null;
+  $("#fiche").addEventListener("click", (e) => {
+    if (!e.target.closest("[data-skel-close]")) return;
+    const el = $("#fiche");
+    el.hidden = true;
+    el.innerHTML = "";
+  });
+  function showPlaceEarly() {
+    const place = readPlace();
+    if (!place) return;
+    if (["planned", "log"].includes(place.tab)) state.agenda.tab = place.tab;
+    // Het gebruikersscherm wacht: wie het mag zien weten we pas na aanmelden.
+    if (["stats", "agenda"].includes(place.view)) setView(place.view);
+    if (place.hospital) {
+      const el = $("#fiche");
+      el.innerHTML = skelFiche();
+      el.hidden = false;
+    }
+    if (placeAt(place)) map.setView(place.at.slice(0, 2), place.at[2], { animate: false });
+    early = { place, view: document.body.dataset.view };
+  }
+  // Drie getallen die ook echt een plek op de kaart zijn. sessionStorage is
+  // van de hele site, niet alleen van deze app.
+  const placeAt = (place) => !!place && Array.isArray(place.at) && place.at.length === 3 && place.at.every(Number.isFinite)
+    && Math.abs(place.at[0]) <= 90 && Math.abs(place.at[1]) <= 180 && place.at[2] >= 0 && place.at[2] <= 19;
+  // Zodra de gegevens er zijn, in twee stappen rond renderAll(): eerst welk
+  // ziekenhuis openstond, zodat de fiche in één keer de echte wordt, en erna
+  // de kaart en het scherm.
+  function restoreSelection(place) {
+    const h = place && place.hospital && byId(place.hospital);
+    if (!h) return null;
+    state.selectedId = h.id;
+    state.ficheOpen = true;
+    return h;
+  }
+  function restoreView(place, h) {
+    if (!place) return;
+    // De kaart staat al waar ze stond. Kennen we die plek niet (ze was
+    // verborgen bij het herladen), dan naar het ziekenhuis, zonder vlucht.
+    if (placeAt(place)) map.setView(place.at.slice(0, 2), place.at[2], { animate: false });
+    else if (h && h.lat != null) {
+      if (map.getContainer().offsetWidth) map.setView([h.lat, h.lng], Math.max(map.getZoom(), 13), { animate: false });
+      else state.pendingFocus = [h.lat, h.lng];
+    }
+    const views = ["map", "list", "stats", "agenda", ...(store.can.manageUsers ? ["users"] : [])];
+    if (views.includes(place.view)) setView(place.view);
+  }
+  showPlaceEarly();
+
   // ---------- gebruikers ----------
   // Wie mag wat. Alleen een beheerder komt hier: de menuknop staat verborgen
   // voor de rest, en de rij-beveiliging weigert de wijziging van ieder ander.
@@ -1798,7 +2891,9 @@
   async function loadUsers() {
     usersView.innerHTML = `<div class="u-head"><h2>${esc(t("users.title"))}</h2>
         <p class="muted">${esc(t("users.intro"))}</p></div>
-      <p class="muted">${esc(t("save.saving"))}</p>`;
+      ${/* Zolang de lijst onderweg is: streepjes in de vorm van een rij. Er
+           stond hier "Opslaan…", en opgeslagen wordt er op dat moment niets. */""}
+      <div class="u-list" aria-busy="true">${'<div class="u-row skel"><b></b><span></span><span></span></div>'.repeat(4)}</div>`;
     try {
       // Eén plaats waar de vorm wordt rechtgezet, zodat de rest op een naam,
       // een rol en een lijst mag rekenen.
@@ -1809,7 +2904,10 @@
         products: Array.isArray(u.products) ? u.products : [],
       }));
     } catch (e) {
-      usersView.innerHTML += `<p class="login-error">${esc(t("users.failed", { msg: e.message }))}</p>`;
+      // De streepjes mogen niet blijven glanzen boven een foutmelding.
+      const busy = usersView.querySelector("[aria-busy]");
+      if (busy) busy.remove();
+      usersView.insertAdjacentHTML("beforeend", `<p class="login-error">${esc(t("users.failed", { msg: e.message }))}</p>`);
       return;
     }
     renderUsers();
@@ -1891,7 +2989,7 @@
     } catch (err) {
       Object.assign(u, before);
       renderUsers();
-      alert(t("users.failed", { msg: err.message }));
+      tell(t("users.failed", { msg: err.message }));
       return;
     }
     // Bijwerken zonder hertekenen: renderUsers() bouwt het scherm opnieuw op en
@@ -1904,7 +3002,7 @@
     // gooit je bij élk vinkje terug naar de kaart. Nu vraagt de balk erom en
     // kies je zelf wanneer — met meerdere wijzigingen na elkaar één keer.
     if (u.id === store.me().id && (before.role !== u.role || String(before.products) !== String(u.products))) {
-      showBanner(t("users.reloadNeeded"), true);
+      showBanner(t("users.reloadNeeded"), true, "info");
     }
   });
 
@@ -1918,11 +3016,31 @@
   // ---------- menu (⋯) ----------
   const menuList = $("#menuList");
   function toggleMenu(open) {
-    menuList.hidden = !open;
+    if (open === (!menuList.hidden && !leaving(menuList))) return; // elke klik op de pagina komt hier langs
     $("#menuBtn").setAttribute("aria-expanded", String(open));
+    if (open) { stay(menuList); menuList.hidden = false; }
+    else leave(menuList, () => { menuList.hidden = true; }, { ms: 90, shift: "translateY(-4px) scale(0.98)" });
   }
-  $("#menuBtn").addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(menuList.hidden); });
-  menuList.addEventListener("click", () => toggleMenu(false));
+  $("#menuBtn").addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(menuList.hidden || leaving(menuList)); });
+  // Licht, donker of het toestel. De keuze zelf bewaart theme.js; hier staat
+  // alleen welke knop aan is. Het menu blijft open, zodat je meteen ziet wat
+  // je koos en nog kunt wisselen.
+  const theme = window.FollowUpTheme;
+  const paintTheme = () => {
+    for (const b of $("#themeSeg").querySelectorAll("[data-theme-set]")) {
+      const on = b.dataset.themeSet === theme.get();
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-pressed", String(on));
+    }
+  };
+  $("#themeSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-theme-set]");
+    if (!b) return;
+    theme.set(b.dataset.themeSet);
+    paintTheme();
+  });
+  paintTheme();
+  menuList.addEventListener("click", (e) => { if (!e.target.closest(".menu__theme")) toggleMenu(false); });
   document.addEventListener("click", (e) => { if (!e.target.closest(".menu")) toggleMenu(false); });
   init();
 })();
