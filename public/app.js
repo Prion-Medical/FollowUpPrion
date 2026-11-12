@@ -50,6 +50,10 @@
     // De gekozen regio's; leeg is overal. Bewust buiten filter: zie hierboven.
     regions: savedRegions(),
     db: { version: 1, hospitals: [] },
+    // Zolang de gegevens onderweg zijn. Een scherm dat dan al openstaat toont
+    // streepjes in plaats van "niets gepland" of nullen: leeg en nog-niet-er
+    // zijn niet hetzelfde.
+    loading: true,
     selectedId: null,
     // Elke filter is een lijst; leeg betekent geen beperking, dezelfde
     // betekenis als een leeg bereik op een gebruiker. derived is er één van
@@ -2338,9 +2342,26 @@
   }
 
   // ---------- start ----------
+  // ---------- wat er staat zolang de gegevens onderweg zijn ----------
+  // Dezelfde streepjes als de lijst in index.html, in de vorm van het scherm
+  // dat komt: zo staat de indeling er meteen en verspringt er weinig wanneer
+  // de echte inhoud arriveert. De glans komt van aria-busy (styles.css).
+  const skelRows = (n) => `<ul class="ag-list" aria-busy="true">${'<li class="ag-row skel"><div><b></b><span></span></div></li>'.repeat(n)}</ul>`;
+  const skelAgenda = () => `
+    <div class="s-head"><h2>${esc(t("agenda.title"))}</h2>${agendaTabs()}</div>
+    <div class="skel-box ${state.agenda.tab === "log" ? "skel-filters" : "skel-cal"}" aria-busy="true"></div>
+    ${skelRows(state.agenda.tab === "log" ? 6 : 3)}`;
+  const skelStats = () => `
+    <div class="s-head"><h2>${esc(t("nav.stats"))}</h2></div>
+    <div class="s-tiles" aria-busy="true">${'<div class="s-tile skel"><span></span><b></b></div>'.repeat(5)}</div>
+    <div class="skel-box skel-card" aria-busy="true"></div>`;
+  const skelFiche = () => `<div class="fiche-skel skel" aria-busy="true">
+      <b class="skel-title"></b>${"<span></span><b></b><span></span><span></span>".repeat(4)}
+    </div>`;
+
   function renderAll() {
-    if (!statsView.hidden) window.FollowUpStats.render(state.db, statsView, scheduleSave, pickedRegions());
-    if (!agendaView.hidden) renderAgenda();
+    if (!statsView.hidden && !state.loading) window.FollowUpStats.render(state.db, statsView, scheduleSave, pickedRegions());
+    if (!agendaView.hidden && !state.loading) renderAgenda();
     if (!usersView.hidden) renderUsers();
     renderFilters();
     renderKpis();
@@ -2381,9 +2402,16 @@
       showBanner(e.message);
     }
     if (store.mode === "supabase") $("#logoutBtn").hidden = false;
+    // Geladen of mislukt: de streepjes maken plaats voor wat er is.
+    state.loading = false;
+    const place = readPlace();
+    const open = restoreSelection(place);
     renderAll();
     map.invalidateSize();
-    fitAll();
+    // Alles in beeld brengen is voor wie vers binnenkomt; wie herlaadt houdt
+    // de kaart waar ze stond.
+    if (!placeAt(place)) fitAll();
+    restoreView(place, open);
   }
 
   // Lege online databank: startlijst laden of een back-up importeren.
@@ -2453,14 +2481,17 @@
     $("#agendaBtn").textContent = view === "agenda" ? t("btn.backToMap") : t("btn.agenda");
     document.querySelectorAll(".tabbar [data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     try { localStorage.setItem("followup-view", view); } catch (e) { /* privévenster */ }
-    if (view === "stats") {
+    if (view === "stats" && state.loading) {
+      statsView.innerHTML = skelStats();
+    } else if (view === "stats") {
       // Bij het binnenkomen groeien de balken vanaf de as (styles.css). Alleen
       // dan: bij elke filterklik opnieuw zou het een trucje worden.
       statsView.classList.add("enter");
       setTimeout(() => statsView.classList.remove("enter"), 900);
       window.FollowUpStats.render(state.db, statsView, scheduleSave, pickedRegions());
     } else window.FollowUpStats.hideTip();
-    if (view === "agenda") renderAgenda();
+    if (view === "agenda" && state.loading) agendaView.innerHTML = skelAgenda();
+    else if (view === "agenda") renderAgenda();
     if (view === "users") loadUsers();
     if (view === "map") setTimeout(() => {
       map.invalidateSize();
@@ -2578,6 +2609,71 @@
     const saved = localStorage.getItem("followup-view");
     if (saved && !["stats", "agenda", "users"].includes(saved)) setView(saved);
   } catch (e) { /* privévenster */ }
+
+  // Herladen brengt je terug waar je was: hetzelfde scherm, dezelfde fiche,
+  // met de gegevens van nu. In sessionStorage en niet in localStorage: dat is
+  // dit tabblad, dus wie de app opnieuw opent begint gewoon op de kaart. We
+  // schrijven het op bij het weggaan in plaats van bij elke klik — één plaats,
+  // en niets om bij te houden in de schermen zelf.
+  const PLACE_KEY = "followup-place";
+  window.addEventListener("pagehide", () => {
+    try {
+      sessionStorage.setItem(PLACE_KEY, JSON.stringify({
+        view: document.body.dataset.view,
+        hospital: state.ficheOpen ? state.selectedId : null,
+        tab: state.agenda.tab,
+        // Waar de kaart stond, zodat ze er meteen weer staat en niet eerst de
+        // hele Benelux toont. Een verborgen kaart heeft geen zinnig midden.
+        at: map.getContainer().offsetWidth ? [map.getCenter().lat, map.getCenter().lng, map.getZoom()] : null,
+      }));
+    } catch (e) { /* privévenster */ }
+  });
+  function readPlace() {
+    try {
+      const place = JSON.parse(sessionStorage.getItem(PLACE_KEY) || "null");
+      return place && typeof place === "object" ? place : null;
+    } catch (e) { return null; } // privévenster, of iets onleesbaars
+  }
+  // Meteen bij het laden, nog vóór de gegevens er zijn: het scherm waar je was
+  // gaat al open, met streepjes waar de inhoud komt. Anders zag je eerst even
+  // de kaart en sprong de app daarna pas naar je plek.
+  function showPlaceEarly() {
+    const place = readPlace();
+    if (!place) return;
+    if (["planned", "log"].includes(place.tab)) state.agenda.tab = place.tab;
+    // Het gebruikersscherm wacht: wie het mag zien weten we pas na aanmelden.
+    if (["stats", "agenda"].includes(place.view)) setView(place.view);
+    if (place.hospital) {
+      const el = $("#fiche");
+      el.innerHTML = skelFiche();
+      el.hidden = false;
+    }
+    if (placeAt(place)) map.setView(place.at.slice(0, 2), place.at[2], { animate: false });
+  }
+  const placeAt = (place) => !!place && Array.isArray(place.at) && place.at.length === 3 && place.at.every(Number.isFinite);
+  // Zodra de gegevens er zijn, in twee stappen rond renderAll(): eerst welk
+  // ziekenhuis openstond, zodat de fiche in één keer de echte wordt, en erna
+  // de kaart en het scherm.
+  function restoreSelection(place) {
+    const h = place && place.hospital && byId(place.hospital);
+    if (!h) return null;
+    state.selectedId = h.id;
+    state.ficheOpen = true;
+    return h;
+  }
+  function restoreView(place, h) {
+    if (!place) return;
+    // De kaart staat al waar ze stond. Kennen we die plek niet (ze was
+    // verborgen bij het herladen), dan naar het ziekenhuis, zonder vlucht.
+    if (placeAt(place)) map.setView(place.at.slice(0, 2), place.at[2], { animate: false });
+    else if (h && h.lat != null) {
+      if (map.getContainer().offsetWidth) map.setView([h.lat, h.lng], Math.max(map.getZoom(), 13), { animate: false });
+      else state.pendingFocus = [h.lat, h.lng];
+    }
+    const views = ["map", "list", "stats", "agenda", ...(store.can.manageUsers ? ["users"] : [])];
+    if (views.includes(place.view)) setView(place.view);
+  }
+  showPlaceEarly();
 
   // ---------- gebruikers ----------
   // Wie mag wat. Alleen een beheerder komt hier: de menuknop staat verborgen

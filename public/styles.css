@@ -395,6 +395,21 @@ p.muted { margin: 0 0 8px; }
 .u-row.skel b { flex: 1 1 200px; max-width: 180px; margin: 0; }
 .u-row.skel span { flex: 0 0 210px; width: auto; height: var(--ctl); margin: 0; border-radius: var(--radius); }
 .u-row.skel span + span { flex-basis: 240px; }
+/* De schermen die al openstaan terwijl de gegevens nog komen (herladen brengt
+   je terug waar je was): de agenda, de statistieken en de fiche. Hele blokken
+   waar een rooster of een grafiek komt, streepjes waar tekst komt. */
+.skel-box { border-radius: var(--radius-lg); background: var(--press); margin-bottom: 24px; }
+.skel-cal { height: 300px; }
+.skel-card { height: 260px; }
+.skel-filters { height: var(--ctl); max-width: 720px; margin-bottom: 16px; }
+.ag-row.skel > div { flex: 1; }
+.ag-row.skel span { margin-bottom: 6px; }
+.s-tile.skel span { width: 64%; margin: 2px 0 12px; }
+.s-tile.skel b { width: 40%; height: 18px; margin: 0 0 4px; }
+.fiche-skel { padding: 22px 20px; }
+.fiche-skel .skel-title { width: 58%; height: 16px; margin: 0 0 30px; }
+.fiche-skel span { margin-bottom: 14px; }
+.fiche-skel span:nth-of-type(3n) { margin-bottom: 30px; }
 [aria-busy="true"] { position: relative; overflow: hidden; }
 [aria-busy="true"]::after {
   content: ""; position: absolute; inset: 0; width: 60%; pointer-events: none;
