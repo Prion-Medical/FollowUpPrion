@@ -2039,10 +2039,38 @@
   // Het logo brengt je terug naar de kaart, vanuit elk paneel.
   $("#homeBtn").addEventListener("click", () => { closeFiche(); setView("map"); });
 
+  // Welke periode een export beslaat. Alleen de twee lijsten met een datum
+  // luisteren ernaar: contactmomenten en geplande momenten. Een voorkeuze is
+  // "sinds zoveel maanden", zonder einde: zo geeft ze van het logboek het
+  // recente stuk en van de agenda wat onlangs te laat was plus alles wat nog
+  // komt, en hoeft niemand na te denken over wat "de laatste drie maanden"
+  // voor een planning zou betekenen. De keuze blijft staan tot je herlaadt.
+  const EXPORT_PERIODS = { all: 0, m3: 3, m6: 6, y1: 12, custom: 0 };
+  let exportPeriod = { period: "all", from: "", to: "" };
+  function exportRange({ period, from, to }) {
+    if (period === "custom") {
+      const a = dateOrEmpty(from), b = dateOrEmpty(to);
+      // Omgekeerd ingevuld is nog altijd duidelijk wat bedoeld is.
+      return a && b && a > b ? [b, a] : [a, b];
+    }
+    const months = EXPORT_PERIODS[period] || 0;
+    if (!months) return ["", ""];
+    const d = new Date();
+    const s = new Date(d.getFullYear(), d.getMonth() - months, d.getDate());
+    return [ymd(s.getFullYear(), s.getMonth(), s.getDate()), ""];
+  }
   $("#exportBtn").addEventListener("click", () => {
-    openDialog(`
+    const form = openDialog(`
       <h2>${esc(t("dlg.export"))}</h2>
       <p class="muted">${esc(t("dlg.exportHint"))}</p>
+      <div class="grid">
+        <label class="field full">${esc(t("log.period"))}
+          <select name="period">${Object.keys(EXPORT_PERIODS).map((k) => opt(k, t("export.period." + k), exportPeriod.period)).join("")}</select>
+        </label>
+        <label class="field" data-export-custom ${exportPeriod.period === "custom" ? "" : "hidden"}>${esc(t("export.from"))}<input type="date" name="from" value="${esc(exportPeriod.from)}"></label>
+        <label class="field" data-export-custom ${exportPeriod.period === "custom" ? "" : "hidden"}>${esc(t("export.to"))}<input type="date" name="to" value="${esc(exportPeriod.to)}"></label>
+      </div>
+      <p class="muted">${esc(t("export.periodHint"))}</p>
       <div style="display:flex;flex-direction:column;gap:8px">
         <button class="btn" value="hospitals">${esc(t("export.hospitals"))}</button>
         <button class="btn" value="contacts">${esc(t("export.contacts"))}</button>
@@ -2054,6 +2082,9 @@
       <div class="actions"><button class="btn" value="cancel">${esc(t("btn.close"))}</button></div>`, (data, kind) => {
       const hs = state.db.hospitals;
       const d = today();
+      exportPeriod = { period: data.period in EXPORT_PERIODS ? data.period : "all", from: data.from || "", to: data.to || "" };
+      const [from, to] = exportRange(exportPeriod);
+      const inPeriod = (date) => (!from || date >= from) && (!to || date <= to);
       // De kolom "Demo gepland op" bestaat nog; de datum komt uit het eerste
       // geplande demomoment dat nog moet komen.
       const demoDate = (h) => ((h.planned.find((p) => p.type === "demo" && p.date >= d) || {}).date) || "";
@@ -2087,13 +2118,13 @@
             c.phone, c.email, c.language, c.address, c.products.join(" / "), c.primary ? t("col.yes") : "", c.notes])),
         ]), "text/csv");
       } else if (kind === "activities") {
-        download(`activities-${d}.csv`, activitiesCsv(hs.flatMap((h) => h.activities.map((a) => ({ h, a })))), "text/csv");
+        download(`activities-${d}.csv`, activitiesCsv(hs.flatMap((h) => h.activities.filter((a) => inPeriod(a.date)).map((a) => ({ h, a })))), "text/csv");
       } else if (kind === "planned") {
         // De agenda, eerst wat het eerst komt. Voor wie het is staat er
         // altijd: zonder toewijzing is dat wie het invoerde.
         download(`planned-${d}.csv`, csv([
           [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("col.owner"), t("col.addedBy")],
-          ...hs.flatMap((h) => h.planned.map((p) => ({ h, p })))
+          ...hs.flatMap((h) => h.planned.filter((p) => inPeriod(p.date)).map((p) => ({ h, p })))
             .sort((x, y) => x.p.date.localeCompare(y.p.date) || x.h.name.localeCompare(y.h.name))
             .map(({ h, p }) => [p.date, h.name, t("act." + p.type), p.product,
               (h.contacts.find((c) => c.id === p.contactId) || {}).name, p.note, personName(assigneeOf(p)), personName(p.createdBy)]),
@@ -2113,6 +2144,10 @@
         download(`followup-prion-backup-${d}.json`, JSON.stringify(state.db, null, 2), "application/json");
       }
       return KEEP_OPEN; // meestal wil je meer dan één lijst
+    });
+    // De twee datumvelden staan er alleen bij een eigen periode.
+    form.elements.period.addEventListener("change", (e) => {
+      form.querySelectorAll("[data-export-custom]").forEach((el) => { el.hidden = e.target.value !== "custom"; });
     });
   });
 
