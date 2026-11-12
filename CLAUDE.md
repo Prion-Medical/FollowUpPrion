@@ -290,10 +290,14 @@ into `planned[]` the same way: `normalize()` turns it into a planned moment of t
 `demo` and drops the field, and the "demo's gepland" KPI and the CSV column both read
 `planned[]` now. There is one place to plan a demo, and it clears itself when ticked off.
 
-**Assigned to.** Two things can be assigned to a person, and they share one word.
-A product at a hospital: `owner` in that product's row in `h.pipeline` (the field
-kept its name; the label became "Assigned to"). And a planned moment: `assignee` on
-the entry in `planned[]`. A planned moment is for whoever entered it unless someone
+**Assigned to, and planned for.** Two things belong to a person, and they have two
+words on purpose. A product at a hospital is *assigned to* someone: `owner` in that
+product's row in `h.pipeline` (the field kept its name; the label became "Assigned
+to"). A planned moment is *planned for* someone: `assignee` on the entry in
+`planned[]`. They shared "Assigned to" for a day, until the agenda page showed both
+filters, one per tab, with the same label and a different meaning. The connector
+follows the same split: `assign_to` on a product's follow-up, `planned_for` on a
+planned moment. A planned moment is for whoever entered it unless someone
 else is chosen, so `assigneeOf()` falls back to `createdBy`, and **the field is only
 stored when it differs from the author**. That is not tidiness: writing an empty
 `assignee` onto every older moment would make the first person to save the last

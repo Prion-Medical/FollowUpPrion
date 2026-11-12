@@ -2161,7 +2161,7 @@
         // De agenda, eerst wat het eerst komt. Voor wie het is staat er
         // altijd: zonder toewijzing is dat wie het invoerde.
         download(`planned-${span}.csv`, csv([
-          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("col.owner"), t("col.addedBy")],
+          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("dlg.p.assignee"), t("col.addedBy")],
           ...hs.flatMap((h) => h.planned.filter((p) => inPeriod(p.date)).map((p) => ({ h, p })))
             .sort((x, y) => x.p.date.localeCompare(y.p.date) || x.h.name.localeCompare(y.h.name))
             .map(({ h, p }) => [p.date, h.name, t("act." + p.type), p.product,
@@ -2242,7 +2242,10 @@
   }
 
   // Voor wie: dezelfde uitklapper als de filters in het logboek en de zijbalk,
-  // met jezelf vooraan. Zonder namen (lokaal zonder naam) valt er niets te
+  // met jezelf vooraan. "Gepland voor" en niet "Toegewezen aan": dat laatste
+  // is wie een product bij een ziekenhuis opvolgt, en die filter staat op het
+  // andere tabblad van deze pagina. Twee keer hetzelfde woord voor twee
+  // verschillende dingen las als één filter. Zonder namen (lokaal zonder naam) valt er niets te
   // kiezen en staat er niets.
   function agendaAssignee() {
     const list = owners();
@@ -2251,7 +2254,7 @@
     state.agenda.whoOpen = false;
     return `<div class="s-filters">${pickBox(list.map(([id]) => ({
       attrs: `data-ag-who data-value="${esc(id)}"`, label: personLabel(id), checked: state.agenda.assignees.includes(id),
-    })), t("filter.allOwners"), open, t("field.owner"))}</div>`;
+    })), t("agenda.forAnyone"), open, t("dlg.p.assignee"))}</div>`;
   }
 
   function agendaRow({ h, p }) {

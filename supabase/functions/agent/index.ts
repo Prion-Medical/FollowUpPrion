@@ -247,7 +247,7 @@ async function getHospital(token: string, args: Any) {
     },
     contacts: (h.contacts || []).map((c: Any) => ({ id: c.id, name: c.name, role: c.role, department: c.department, language: c.language, phone: c.phone, email: c.email, address: c.address || "", notes: c.notes || "", products: c.products || [], primary: !!c.primary })),
     recent_contact_moments: acts.slice(0, 8).map(pick),
-    planned: (h.planned || []).map((r: Any) => ({ ...pick(r), assigned_to: who(assigneeOf(r)) })),
+    planned: (h.planned || []).map((r: Any) => ({ ...pick(r), planned_for: who(assigneeOf(r)) })),
   };
 }
 
@@ -434,7 +434,7 @@ async function addPlannedMoment(token: string, args: Any, user: Any) {
   const type = oneOf(args.type, ACT_TYPES, "type");
   const product = String(args.product || "");
   if (!isDate(args.date)) throw new ToolError("date is required, as YYYY-MM-DD.");
-  const to = has(args, "assign_to") ? findPerson(await people(token), args.assign_to, user.id) : null;
+  const to = has(args, "planned_for") ? findPerson(await people(token), args.planned_for, user.id) : null;
   if (to && !worksOn(to, product)) throw new ToolError(`${to.name} does not work on ${product} and would not see this moment.`);
   return await change(token, ({ doc, scope }) => {
     checkProduct(product, scope);
@@ -447,7 +447,7 @@ async function addPlannedMoment(token: string, args: Any, user: Any) {
     if (to && to.id !== user.id) rec.assignee = to.id;
     h.planned.push(rec);
     sortPlanned(h);
-    return { saved: true, hospital: h.name, planned: { id: rec.id, date: rec.date, type, product, note: rec.note, assigned_to: to && to.id !== user.id ? to.name : "you" } };
+    return { saved: true, hospital: h.name, planned: { id: rec.id, date: rec.date, type, product, note: rec.note, planned_for: to && to.id !== user.id ? to.name : "you" } };
   });
 }
 
@@ -917,9 +917,9 @@ async function listMoments(token: string, args: Any, user: Any) {
   const type = has(args, "type") ? oneOf(args.type, ACT_TYPES, "type") : "";
   const hospitalId = String(args.hospital_id || "");
   if (hospitalId) hospitalIn(doc, hospitalId);
-  if (has(args, "assigned_to") && kind !== "planned") throw new ToolError("Only planned moments are assigned to someone. For the logbook use entered_by.");
+  if (has(args, "planned_for") && kind !== "planned") throw new ToolError("Only a planned moment is planned for someone. For the logbook use entered_by.");
   const forWhom = args.mine === true && kind === "planned" ? user.id
-    : has(args, "assigned_to") ? findPerson(all, args.assigned_to, user.id)?.id || "" : "";
+    : has(args, "planned_for") ? findPerson(all, args.planned_for, user.id)?.id || "" : "";
   const enteredBy = args.mine === true && kind === "logged" ? user.id
     : has(args, "entered_by") ? findPerson(all, args.entered_by, user.id)?.id || "" : "";
   const now = today();
@@ -958,7 +958,7 @@ async function listMoments(token: string, args: Any, user: Any) {
       rows.push({
         hospital: h.name, hospital_id: h.id, id: r.id, date: d, type: r.type, product: r.product || "",
         contact: contact(r.contactId), note: r.note || "", entered_by: name(r.createdBy),
-        ...(kind === "logged" ? { quantity: r.rooms ?? null } : { assigned_to: name(assigneeOf(r)), overdue: late }),
+        ...(kind === "logged" ? { quantity: r.rooms ?? null } : { planned_for: name(assigneeOf(r)), overdue: late }),
       });
     }
   }
@@ -982,11 +982,11 @@ async function updateMoment(token: string, args: Any, user: Any) {
   const kind = oneOf(args.kind, ["contact_moment", "planned_moment"], "kind");
   if (has(args, "date") && !isDate(args.date)) throw new ToolError("date must be YYYY-MM-DD.");
   const qty = has(args, "quantity") ? quantity(args) : undefined;
-  if (has(args, "assign_to") && kind !== "planned_moment") throw new ToolError("Only a planned moment can be assigned to someone.");
+  if (has(args, "planned_for") && kind !== "planned_moment") throw new ToolError("Only a planned moment is planned for someone.");
   // De namen zijn nodig om toe te wijzen, en ook om na te kijken of wie het
   // moment al had het nieuwe product wel heeft.
-  const all = has(args, "assign_to") || (kind === "planned_moment" && has(args, "product")) ? await people(token) : null;
-  const to = has(args, "assign_to") && all ? findPerson(all, args.assign_to, user.id) : undefined;
+  const all = has(args, "planned_for") || (kind === "planned_moment" && has(args, "product")) ? await people(token) : null;
+  const to = has(args, "planned_for") && all ? findPerson(all, args.planned_for, user.id) : undefined;
   return await change(token, ({ doc, scope }) => {
     const h = hospitalIn(doc, args.hospital_id);
     const list = kind === "planned_moment" ? h.planned : h.activities;
@@ -1008,21 +1008,21 @@ async function updateMoment(token: string, args: Any, user: Any) {
       // "van mij" zijn. Eerst zeggen voor wie het dan wel is.
       if (to === undefined && has(args, "product") && rec.assignee && all) {
         const who = all.get(rec.assignee);
-        if (who && !worksOn(who, rec.product || "")) throw new ToolError(`This moment is assigned to ${who.name}, who does not work on ${rec.product}. Give assign_to in the same call to say who it is for.`);
+        if (who && !worksOn(who, rec.product || "")) throw new ToolError(`This moment is planned for ${who.name}, who does not work on ${rec.product}. Give planned_for in the same call to say who it is for.`);
       }
       if (to !== undefined) {
         if (to && !worksOn(to, rec.product || "")) throw new ToolError(`${to.name} does not work on ${rec.product} and would not see this moment.`);
         // Zoals in de app: het veld staat er alleen als het voor iemand anders
         // is dan wie het invoerde.
         if (to && to.id !== (rec.createdBy || "")) rec.assignee = to.id; else delete rec.assignee;
-        changed.push("assigned_to");
+        changed.push("planned_for");
       }
       if (!changed.length) throw new ToolError("Nothing to change: give at least one field.");
       sortPlanned(h);
       return {
         saved: true, hospital: h.name, changed,
         planned: { id: rec.id, date: rec.date, type: rec.type, product: rec.product || "", note: rec.note || "" },
-        ...(to !== undefined ? { assigned_to: to ? (to.id === user.id ? "you" : to.name) : "whoever entered it" } : {}),
+        ...(to !== undefined ? { planned_for: to ? (to.id === user.id ? "you" : to.name) : "whoever entered it" } : {}),
       };
     }
     if (!changed.length && qty === undefined) throw new ToolError("Nothing to change: give at least one field.");
@@ -1236,7 +1236,7 @@ const TOOLS = [
   {
     name: "add_planned_moment",
     title: "Plan a moment",
-    description: "Put something in the agenda that is STILL TO HAPPEN at a hospital: a visit, call, demo and so on, on a date. A planned moment does not change the hospital's status or the statistics. It is for the signed-in user unless assign_to names a colleague, who must work on that product. Convert relative dates ('next Tuesday') to a real date yourself and say which date you used.",
+    description: "Put something in the agenda that is STILL TO HAPPEN at a hospital: a visit, call, demo and so on, on a date. A planned moment does not change the hospital's status or the statistics. It is planned for the signed-in user unless planned_for names a colleague, who must work on that product. Convert relative dates ('next Tuesday') to a real date yourself and say which date you used.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1245,7 +1245,7 @@ const TOOLS = [
         type: { type: "string", enum: ACT_TYPES },
         product: { type: "string", enum: PRODUCTS },
         contact_id: { type: "string", description: "Id of the person it is with, from get_hospital. Optional." },
-        assign_to: { type: "string", description: "A colleague's name, when someone else will do it. Leave out for the signed-in user." },
+        planned_for: { type: "string", description: "A colleague's name, when someone else will do it. Leave out for the signed-in user." },
         note: { type: "string", description: "What is to be done." },
       },
       required: ["hospital_id", "date", "type"], additionalProperties: false,
@@ -1296,7 +1296,7 @@ const TOOLS = [
   {
     name: "list_moments",
     title: "Agenda and logbook",
-    description: "Search the agenda (kind 'planned') or the logbook of contact moments (kind 'logged'), across all hospitals or within one. Combine any of: a period, one hospital, a product, a type of moment, who it is assigned to (planned) and who entered it. Examples: everything planned this week; all planned moments for one hospital; every demo last quarter; what a colleague logged this month. Set mine to true for the signed-in user's own: planned moments assigned to them, or contact moments they entered. With no period and no hospital you get the coming seven days plus everything overdue (planned) or the past seven days (logged); with a hospital and no period you get everything for that hospital. Convert 'this week' or 'last month' to dates yourself and say which period you used. Returns at most 200 moments, each with the ids needed to tick off, correct or remove it.",
+    description: "Search the agenda (kind 'planned') or the logbook of contact moments (kind 'logged'), across all hospitals or within one. Combine any of: a period, one hospital, a product, a type of moment, who it is planned for (planned) and who entered it. Examples: everything planned this week; all planned moments for one hospital; every demo last quarter; what a colleague logged this month. Set mine to true for the signed-in user's own: moments planned for them, or contact moments they entered. With no period and no hospital you get the coming seven days plus everything overdue (planned) or the past seven days (logged); with a hospital and no period you get everything for that hospital. Convert 'this week' or 'last month' to dates yourself and say which period you used. Returns at most 200 moments, each with the ids needed to tick off, correct or remove it.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1306,8 +1306,8 @@ const TOOLS = [
         hospital_id: { type: "string", description: "Only this hospital, from find_hospital." },
         product: { type: "string", enum: PRODUCTS },
         type: { type: "string", enum: ACT_TYPES },
-        mine: { type: "boolean", description: "True: planned moments assigned to the signed-in user, or contact moments they entered." },
-        assigned_to: { type: "string", description: "Planned only: a colleague's name, or 'me'." },
+        mine: { type: "boolean", description: "True: moments planned for the signed-in user, or contact moments they entered." },
+        planned_for: { type: "string", description: "Planned only: a colleague's name, or 'me'." },
         entered_by: { type: "string", description: "A colleague's name, or 'me'." },
         include_overdue: { type: "boolean", description: "Planned only, when no period and no hospital is given: false leaves out what is overdue." },
       },
@@ -1318,7 +1318,7 @@ const TOOLS = [
   {
     name: "update_moment",
     title: "Correct a moment",
-    description: "Correct a saved contact moment or planned moment: its date, type, product, the person it was with, the quantity (contact moments only), who it is assigned to (planned moments only) or the note. Only the fields you give change, and a note you give replaces the old one, so repeat what should stay. Use it when the user corrects something they reported earlier; to mark a planned moment as done use complete_planned_moment. Get the ids from get_hospital or list_moments.",
+    description: "Correct a saved contact moment or planned moment: its date, type, product, the person it was with, the quantity (contact moments only), who it is planned for (planned moments only) or the note. Only the fields you give change, and a note you give replaces the old one, so repeat what should stay. Use it when the user corrects something they reported earlier; to mark a planned moment as done use complete_planned_moment. Get the ids from get_hospital or list_moments.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1330,7 +1330,7 @@ const TOOLS = [
         product: { type: "string", enum: PRODUCTS },
         contact_id: { type: "string", description: "Id of the person, from get_hospital. Empty text for nobody." },
         quantity: { type: "integer", description: "Rooms or units, as for add_contact_moment." },
-        assign_to: { type: "string", description: "Planned moments only: a colleague's name, 'me', or empty text to give it back to whoever entered it." },
+        planned_for: { type: "string", description: "Planned moments only: a colleague's name, 'me', or empty text to give it back to whoever entered it." },
         note: { type: "string", description: "Replaces the note. Empty text removes it." },
       },
       required: ["kind", "hospital_id", "record_id"], additionalProperties: false,
@@ -1565,7 +1565,7 @@ async function handle(msg: Any, token: string, user: Any) {
       return reply({
         protocolVersion: VERSIONS.includes(asked) ? asked : VERSIONS[0],
         capabilities: { tools: {} },
-        serverInfo: { name: "followup-prion", title: "FollowUp Prion", version: "0.8.0" },
+        serverInfo: { name: "followup-prion", title: "FollowUp Prion", version: "0.9.0" },
         instructions: INSTRUCTIONS,
       });
     }
