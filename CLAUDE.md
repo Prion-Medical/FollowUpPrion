@@ -591,6 +591,14 @@ consent was given before, and only continues on a click: on a shared browser a
 remembered consent would otherwise hand a second person the first one's account
 without a single screen.
 
+The same function runs on both projects with the same tools under the same names,
+so from inside a chat the two connectors cannot be told apart. The function
+therefore knows the live project by name (`LIVE`, as `config.js` does): `whoami`
+reports `database` on either side, and on development every answer, the server's
+title and its instructions say that it is development. On live nothing is added,
+so someone who only has the live connector never hears about it. A second live
+project would have to be named there too, or it would call itself development.
+
 Removing a record always takes two calls: the first returns what would go and a
 code, the second removes. The code is tied to the user, the record and the document's
 timestamp. It forces the two steps; it cannot prove a person said yes, and in Claude's
