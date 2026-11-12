@@ -140,7 +140,19 @@ window.FollowUpDomain = (() => {
   // De taal waarin je een contactpersoon aanspreekt. Codes, geen vertaalde
   // namen: ze zijn in beide talen van de app gelijk.
   const LANGUAGES = ["NL", "FR", "DE", "EN"];
-  const COUNTRIES = ["BE", "NL", "LU"];
+  // Regio's: welke landen samen een werkgebied vormen, en welk stuk kaart
+  // daarbij hoort ([[zuid, west], [noord, oost]]). Een ziekenhuis draagt zelf
+  // geen regio: ze volgt uit zijn land (regionOf), zodat de twee elkaar nooit
+  // kunnen tegenspreken en bestaande data niets hoeft bij te krijgen. Een
+  // regio toevoegen is hier één regel, plus de namen in i18n.js ("region.x"
+  // en "country.XX"). Zolang er maar één is, toont de app geen regiofilter.
+  const REGIONS = {
+    benelux: { countries: ["BE", "NL", "LU"], bounds: [[49.3, 2.3], [53.7, 7.4]] },
+    australia: { countries: ["AU"], bounds: [[-44, 112], [-10, 154]] },
+  };
+  const REGION_KEYS = Object.keys(REGIONS);
+  const COUNTRIES = REGION_KEYS.flatMap((r) => REGIONS[r].countries);
+  const regionOf = (country) => REGION_KEYS.find((r) => REGIONS[r].countries.includes(country)) || "";
   // Rollen, van veel naar weinig rechten. In de databank staat de sleutel; wat
   // elke rol precies mag staat in storage.js (RIGHTS) en wordt afgedwongen in
   // supabase/schema.sql.
@@ -257,7 +269,7 @@ window.FollowUpDomain = (() => {
 
   return {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
+    ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
   };
 })();

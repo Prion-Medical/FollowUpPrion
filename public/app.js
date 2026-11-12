@@ -10,7 +10,7 @@
   // zo moet een nieuwe fase of een nieuw merk maar op één plaats bij.
   const {
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
-    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, ROLES,
+    PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
     esc, pickBox, syncPick, myProducts, productColor,
   } = window.FollowUpDomain;
@@ -25,13 +25,30 @@
   // Scope-merken zijn eigennamen; enkel "other" is een sleutel met vertaling.
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Benelux: west/zuid → oost/noord.
-  const REGION_BOUNDS = [[49.3, 2.3], [53.7, 7.4]];
-  const REGION_BBOX = [2.3, 49.3, 7.4, 53.7];
+  // In welke regio je werkt, onthouden per browser zoals het thema. Het is
+  // een filter als de andere, maar geen zoekvraag: "filters wissen" laat hem
+  // staan, anders stond wie alleen de Benelux volgt na één klik weer tussen
+  // de ziekenhuizen van de rest van de wereld.
+  const REGION_KEY = "followup-regions";
+  function savedRegions() {
+    try {
+      const v = JSON.parse(localStorage.getItem(REGION_KEY) || "[]");
+      return Array.isArray(v) ? v.filter((r) => REGION_KEYS.includes(r)) : [];
+    } catch (e) { return []; }
+  }
+  function keepRegions(list) {
+    try {
+      if (list.length) localStorage.setItem(REGION_KEY, JSON.stringify(list));
+      else localStorage.removeItem(REGION_KEY);
+    } catch (e) { /* privévenster */ }
+  }
 
   // Geen enkel filter aan. Op één plaats: de begintoestand, de vraag of er
   // iets gefilterd is en "filters wissen" lezen alle drie dit lijstje.
   const noFilter = () => ({ statuses: [], products: [], countries: [], owners: [], derived: "", query: "" });
   const state = {
+    // De gekozen regio's; leeg is overal. Bewust buiten filter: zie hierboven.
+    regions: savedRegions(),
     db: { version: 1, hospitals: [] },
     selectedId: null,
     // Elke filter is een lijst; leeg betekent geen beperking, dezelfde
@@ -557,7 +574,34 @@
   }
 
   // ---------- kaart ----------
-  const map = L.map("map", { zoomControl: true }).fitBounds(REGION_BOUNDS);
+  // De regio's waar je naar kijkt: de gekozen, of allemaal. Daaruit volgen de
+  // landen in de landenfilter en het stuk kaart waarop de app opent.
+  // Een regio telt pas mee als er een ziekenhuis in ligt. De tabel in
+  // domain.js mag dus vooruitlopen op de data: zolang alles in de Benelux
+  // ligt is er geen regiofilter te zien en opent de kaart daar, en met het
+  // eerste ziekenhuis elders komt de filter er vanzelf bij.
+  const liveRegions = () => REGION_KEYS.filter((r) => state.db.hospitals.some((h) => regionOf(h.country) === r));
+  // Een onthouden keuze voor een regio waar (nog) niets in ligt geldt niet:
+  // de filter om ze uit te zetten staat er dan niet.
+  const pickedRegions = () => { const live = liveRegions(); return live.length > 1 ? state.regions.filter((r) => live.includes(r)) : []; };
+  function activeRegions() {
+    const picked = pickedRegions();
+    if (picked.length) return picked;
+    const live = liveRegions();
+    return live.length ? live : REGION_KEYS.slice(0, 1);
+  }
+  const activeCountries = () => activeRegions().flatMap((r) => REGIONS[r].countries);
+  function regionBounds() {
+    const b = activeRegions().map((r) => REGIONS[r].bounds);
+    return [
+      [Math.min(...b.map((x) => x[0][0])), Math.min(...b.map((x) => x[0][1]))],
+      [Math.max(...b.map((x) => x[1][0])), Math.max(...b.map((x) => x[1][1]))],
+    ];
+  }
+  // Eén regio in beeld: noem ze ("Hele Benelux"). Meer dan één: "Alle landen".
+  const regionLabel = (one, many) => (activeRegions().length === 1
+    ? t(one, { region: t("region." + activeRegions()[0]) }) : t(many));
+  const map = L.map("map", { zoomControl: true }).fitBounds(regionBounds());
   // Zonder {s}: de subdomeinen a/b/c zijn de oude vorm en openen drie
   // verbindingen waar één volstaat. OpenStreetMap blokkeert daarop, en dan
   // staat de kaart vol "Access blocked"-tegels. Zet je de subdomeinen terug,
@@ -646,7 +690,7 @@
     map.getContainer().style.cursor = "";
   });
   $("#fitBtn").addEventListener("click", fitAll);
-  $("#regionBtn").addEventListener("click", () => map.fitBounds(REGION_BOUNDS));
+  $("#regionBtn").addEventListener("click", () => map.fitBounds(regionBounds()));
 
   // ---------- filter + lijst ----------
   function matchesQuery(h, q) {
@@ -675,7 +719,9 @@
   // dan stond er bij een filter op groen gewoon overal nul naast.
   function scopedHospitals() {
     const { products, countries, owners } = state.filter;
+    const regions = pickedRegions();
     return state.db.hospitals.filter((h) =>
+      (!regions.length || regions.includes(regionOf(h.country))) &&
       (!products.length || products.some((p) => h.products.includes(p))) &&
       (!countries.length || countries.includes(h.country)) &&
       (!owners.length || ownersOf(h).some((o) => owners.includes(o))));
@@ -756,13 +802,15 @@
   // De drie filters in de zijbalk. Ze staan hier en niet in index.html omdat
   // de lijsten van de taal afhangen en de producten van je bereik.
   const FILTERS = [
-    { key: "statuses",  leeg: "filter.allStatuses",        items: () => STATUSES,  label: (k) => t("status." + k + ".short") },
-    { key: "products",  leeg: "filter.allProducts",  items: myProducts,      label: (p) => p },
-    { key: "countries", leeg: "filter.allCountries", items: () => COUNTRIES, label: (c) => t("country." + c) },
+    { key: "statuses",  leeg: () => t("filter.allStatuses"), items: () => STATUSES,  label: (k) => t("status." + k + ".short") },
+    { key: "products",  leeg: () => t("filter.allProducts"), items: myProducts,      label: (p) => p },
+    // Regio staat er pas als er in meer dan één ziekenhuizen liggen; de landen volgen de regio.
+    { key: "regions",   leeg: () => t("filter.allRegions"), items: () => (liveRegions().length > 1 ? liveRegions() : []), label: (r) => t("region." + r) },
+    { key: "countries", leeg: () => regionLabel("filter.wholeRegion", "filter.allCountries"), items: activeCountries, label: (c) => t("country." + c) },
     // Wie verantwoordelijk is. De lijst is die van de keuzelijst in de fiche:
     // iedereen met een account. Zonder namen (lokaal, zonder localUser) is er
     // niets om op te filteren en staat de uitklapper er niet.
-    { key: "owners",    leeg: "filter.allOwners",    items: () => owners().map(([id]) => id), label: (id) => personName(id) },
+    { key: "owners",    leeg: () => t("filter.allOwners"), items: () => owners().map(([id]) => id), label: (id) => personName(id) },
   ];
   function renderDerived() {
     for (const b of $("#derivedFilters").querySelectorAll(".chip")) {
@@ -774,9 +822,32 @@
       f.items().map((k) => ({
         attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`,
         label: f.label(k),
-        checked: state.filter[f.key].includes(k),
-      })), t(f.leeg))).join("");
+        checked: chosen(f.key).includes(k),
+      })), f.leeg())).join("");
+    $("#regionBtn").textContent = regionLabel("btn.wholeRegion", "btn.allRegions");
     renderDerived();
+  }
+  // Regio woont naast de andere filters (state.regions), de rest in state.filter.
+  const chosen = (key) => (key === "regions" ? state.regions : state.filter[key]);
+  // Een vinkje in een van de uitklappers, in de zijbalk of boven het logboek.
+  function setChosen(key, list) {
+    if (key !== "regions") { state.filter[key] = list; return; }
+    state.regions = list;
+    keepRegions(list);
+    // Een land buiten de gekozen regio's kan niet aangevinkt blijven: het
+    // staat niet meer in de lijst en zou onzichtbaar alles wegfilteren.
+    state.filter.countries = state.filter.countries.filter((c) => activeCountries().includes(c));
+    map.fitBounds(regionBounds());
+  }
+  // De landenlijst hangt van de regio af, dus na een regiovinkje moeten de
+  // uitklappers opnieuw getekend worden. Die van de regio zelf gaat daarna
+  // weer open: je bent er nog in bezig.
+  function redrawAfterRegion(root) {
+    renderFilters();
+    if (root !== $("#pickFilters")) renderLog();
+    const box = root.querySelector('[data-filter="regions"]');
+    const d = box && box.closest("details");
+    if (d) d.open = true;
   }
   // Niet hertekenen bij elk vinkje: dan klapt de uitklapper dicht. Enkel de
   // lijst en de kaart dus; de samenvatting op de knop is het werk van de
@@ -786,9 +857,10 @@
     if (!box) return;
     const f = FILTERS.find((x) => x.key === box.dataset.filter);
     const v = box.dataset.value;
-    state.filter[f.key] = e.target.checked
-      ? [...state.filter[f.key], v]
-      : state.filter[f.key].filter((x) => x !== v);
+    setChosen(f.key, e.target.checked
+      ? [...chosen(f.key), v]
+      : chosen(f.key).filter((x) => x !== v));
+    if (f.key === "regions") redrawAfterRegion($("#pickFilters"));
     renderList();
     renderMarkers();
     renderKpis();
@@ -1198,6 +1270,8 @@
     renderList();
     renderKpis();
     if (["name", "stage", "country"].includes(d.field) || d.pstage || d.product) { renderFiche(); renderMarkers(); }
+    // Het eerste ziekenhuis in een andere regio brengt de regiofilter mee.
+    if (d.field === "country") renderFilters();
   });
 
   $("#fiche").addEventListener("click", (e) => {
@@ -1252,6 +1326,7 @@
           if (!yes) return;
           state.db.hospitals = state.db.hospitals.filter((x) => x.id !== h.id);
           scheduleSave();
+          renderFilters(); // de regiofilter hangt af van waar er ziekenhuizen liggen
           closeFiche();
         });
         return;
@@ -1320,11 +1395,12 @@
     async function search(q) {
       const my = ++seq;
       try {
-        // Eerst de Benelux; voorrang aan wat de kaart toont, anders rond Brussel.
+        // Eerst de eigen regio; voorrang aan wat de kaart toont, anders haar midden.
         // Niets gevonden? Dan pas wereldwijd zoeken.
         const c = map.getCenter();
-        const inRegion = c.lng >= REGION_BBOX[0] && c.lat >= REGION_BBOX[1] && c.lng <= REGION_BBOX[2] && c.lat <= REGION_BBOX[3];
-        const [lat, lon] = inRegion ? [c.lat.toFixed(3), c.lng.toFixed(3)] : [50.85, 4.35];
+        const [[south, west], [north, east]] = regionBounds();
+        const inRegion = c.lng >= west && c.lat >= south && c.lng <= east && c.lat <= north;
+        const [lat, lon] = inRegion ? [c.lat.toFixed(3), c.lng.toFixed(3)] : [((south + north) / 2).toFixed(3), ((west + east) / 2).toFixed(3)];
         // Photon kent enkel default, de, en en fr — "nl" geeft een 400. Met
         // "default" komen de namen in de plaatselijke taal, wat voor de Benelux
         // precies is wat we willen (Vlaams-Brabant, Hippokrateslaan, ...).
@@ -1335,7 +1411,7 @@
           if (!res.ok) throw new Error(`Photon ${res.status}`);
           return res.json();
         };
-        let json = await ask(`${url}&bbox=${REGION_BBOX.join(",")}`);
+        let json = await ask(`${url}&bbox=${[west, south, east, north].join(",")}`);
         if (my !== seq) return;
         if (!json.features.length) json = await ask(url);
         if (my !== seq) return;
@@ -1751,6 +1827,7 @@
       });
       state.db.hospitals.push(h);
       scheduleSave();
+      renderFilters(); // de regiofilter hangt af van waar er ziekenhuizen liggen
       if (hasLoc) {
         select(h.id, true);
         toast(t("toast.created"));
@@ -2147,8 +2224,8 @@
       <div class="s-filters log-filters">
         <label>${esc(t("log.period"))} <select data-log-period>${LOG_PERIODS.map((p) => opt(p, t("log.period." + p), L.period)).join("")}</select></label>
         ${only ? "" : FILTERS.filter((f) => f.key !== "statuses" && f.items().length).map((f) => `<label>${pickBox(f.items().map((k) => ({
-          attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`, label: f.label(k), checked: state.filter[f.key].includes(k),
-        })), t(f.leeg))}</label>`).join("")}
+          attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`, label: f.label(k), checked: chosen(f.key).includes(k),
+        })), f.leeg())}</label>`).join("")}
         <label>${pick("types", ACT_TYPE_KEYS, (k) => t("act." + k), t("log.allTypes"))}</label>
         ${owners().length ? `<label>${esc(t("log.author"))} ${pick("authors", owners().map(([id]) => id), personName, t("log.allAuthors"))}</label>` : ""}
         ${only ? "" : `<input type="search" data-log-search value="${esc(state.filter.query)}" placeholder="${esc(t("log.search"))}" aria-label="${esc(t("log.search"))}">`}
@@ -2165,9 +2242,10 @@
 
   // ---------- start ----------
   function renderAll() {
-    if (!statsView.hidden) window.FollowUpStats.render(state.db, statsView, scheduleSave);
+    if (!statsView.hidden) window.FollowUpStats.render(state.db, statsView, scheduleSave, pickedRegions());
     if (!agendaView.hidden) renderAgenda();
     if (!usersView.hidden) renderUsers();
+    renderFilters();
     renderKpis();
     renderList();
     renderMarkers();
@@ -2283,7 +2361,7 @@
       // dan: bij elke filterklik opnieuw zou het een trucje worden.
       statsView.classList.add("enter");
       setTimeout(() => statsView.classList.remove("enter"), 900);
-      window.FollowUpStats.render(state.db, statsView, scheduleSave);
+      window.FollowUpStats.render(state.db, statsView, scheduleSave, pickedRegions());
     } else window.FollowUpStats.hideTip();
     if (view === "agenda") renderAgenda();
     if (view === "users") loadUsers();
@@ -2361,8 +2439,9 @@
     const d = el.dataset;
     const toggle = (list, v) => (el.checked ? [...list, v] : list.filter((x) => x !== v));
     if (d.filter) {
-      state.filter[d.filter] = toggle(state.filter[d.filter], d.value);
-      renderFilters();
+      setChosen(d.filter, toggle(chosen(d.filter), d.value));
+      if (d.filter === "regions") redrawAfterRegion(agendaView);
+      else renderFilters();
       renderList();
       renderMarkers();
       renderKpis();

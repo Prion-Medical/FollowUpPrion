@@ -15,7 +15,7 @@ window.FollowUpStats = (() => {
   const t = (k, v) => I18N.t(k, v);
 
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
-  const { PRODUCTS, CMM_STATES, STAGES, STATUSES, COUNTRIES, SCOPE_BRANDS, PROCESSOR_BRANDS,
+  const { PRODUCTS, CMM_STATES, STAGES, STATUSES, COUNTRIES, regionOf, SCOPE_BRANDS, PROCESSOR_BRANDS,
           esc, pickBox, myProducts, productColor, productKind, pipelineView, emptyTargets } = window.FollowUpDomain;
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Een doelcijfer aanpassen is schrijven. Zonder dat recht staat het getal er
@@ -65,6 +65,7 @@ window.FollowUpStats = (() => {
   function rows(db, { types, ignoreYear } = {}) {
     const out = [];
     for (const h of db.hospitals) {
+      if (!inRegion(h)) continue;
       for (const a of h.activities) {
         if (types && !types.includes(a.type)) continue;
         if (!ignoreYear && view.year !== "all" && !a.date.startsWith(view.year)) continue;
@@ -75,9 +76,15 @@ window.FollowUpStats = (() => {
     return out;
   }
 
-  // Ziekenhuizen, gefilterd op het gekozen product.
+  // De regio's van de kaart gelden hier ook: wie de Benelux volgt, wil geen
+  // cijfers waar de rest van de wereld in zit. app.js geeft ze mee bij render().
+  let regions = [];
+  const inRegion = (h) => !regions.length || regions.includes(regionOf(h.country));
+
+  // Ziekenhuizen, gefilterd op regio en op het gekozen product.
   function hospitals(db) {
-    return db.hospitals.filter((h) => !view.products.length || view.products.some((p) => h.products.includes(p)));
+    return db.hospitals.filter((h) => inRegion(h) &&
+      (!view.products.length || view.products.some((p) => h.products.includes(p))));
   }
 
   // Fase en kleur van een ziekenhuis, voor de producten waarop gefilterd is.
@@ -332,7 +339,8 @@ window.FollowUpStats = (() => {
   }
 
   // ---------- render ----------
-  function render(db, el, onTargetsChange) {
+  function render(db, el, onTargetsChange, inRegions = regions) {
+    regions = inRegions;
     // Buiten bereik geraakt (een beheerder heeft je afscherming aangepast):
     // terug naar alles, anders staan er nullen voor iets wat je niet ziet.
     // Is het bereik ondertussen versmald, dan vallen de vinkjes die er niet

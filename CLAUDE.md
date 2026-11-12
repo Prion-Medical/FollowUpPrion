@@ -31,7 +31,7 @@ If a skill, linter or review suggests otherwise — and general-purpose skills w
 ## Running it
 
 ```bash
-python3 server.py        # then open http://localhost:8080
+python3 server.py        # then open http://localhost:8081
 ```
 
 Or double-click `start.command`. Data lives in `data/db.json`, created from
@@ -220,6 +220,27 @@ needs its own copy, since it cannot read that file: `followup.producten()` in
 sorts last rather than being refused, so an app that already knows a new product
 does not break against a database that has not been updated yet. So: two lines,
 one per side, and a seventh product also wants a `--series-7`.
+
+**Regions.** `REGIONS` in `public/domain.js` says which countries make up a
+region and which piece of map belongs to it; `COUNTRIES` is derived from it. A
+hospital stores no region: `regionOf(h.country)` works it out, so the two cannot
+disagree and old data needs nothing. The chosen regions live in `state.regions`,
+beside `state.filter` rather than in it, and are remembered per browser
+(`followup-regions` in `localStorage`): it is where you work, not a search, so
+"clear filters" leaves it alone. It narrows the list, the map, the counters, the
+logbook and the statistics, decides which countries the country filter offers and
+where the map opens. Exports are not narrowed. **A region only counts once a
+hospital lies in it** (`liveRegions()` in `app.js`): the table lists the Benelux
+and Australia, but while every hospital is in the Benelux no region filter is
+drawn and the map opens there, and the first hospital given an Australian
+address brings the filter with it. The country field in the record and in the
+new-hospital dialog always offers every country, or that first one could never
+be entered. Adding a region is one line there plus `region.x` and `country.XX`
+in both languages; mind that `normalize()` empties a country that is not on the
+list. It is a filter and not a wall — nothing in
+the database knows about it. If it ever has to become one, it would key on
+`country` in `read_state()`, with its own copy of the table as `producten()` is of
+`PRODUCTS`, and it would end "every hospital stays visible to everyone".
 
 **Two kinds of product.** `productKind()` in `public/domain.js` says how a product is
 sold: `"subscription"` (EndoQ, Ainex: per room, counted in rooms and active
