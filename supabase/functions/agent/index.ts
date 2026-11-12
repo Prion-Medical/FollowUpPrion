@@ -37,6 +37,15 @@ const RESOURCE = `${SUPABASE_URL}/functions/v1/agent`;
 const METADATA = `${RESOURCE}/oauth-protected-resource`;
 const ISSUER = `${SUPABASE_URL}/auth/v1`;
 
+// Dezelfde functie draait op twee projecten, met dezelfde werktuigen onder
+// dezelfde namen: van binnenuit zie je niet welke van de twee antwoordt. Wie
+// beide koppelingen heeft moet dat kunnen lezen zonder ernaar te vragen. Het
+// live project staat hier bij naam, zoals in public/config.js; al de rest is
+// ontwikkeling. Komt er een ander live project, dan moet het hier mee.
+const LIVE = SUPABASE_URL.includes("hpkmobbfcryygtxgjvlu");
+const DATABASE = LIVE ? "live" : "development";
+const DEV_NOTE = "This is the DEVELOPMENT database: invented test data, not the real FollowUp. Tell the user so before the first thing you save or change in this conversation, and whenever you report figures from it.";
+
 const VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 
 // ---------- wat de app ook weet (public/domain.js) ----------
@@ -1176,6 +1185,7 @@ async function whoami(token: string, user: Any) {
     role: (s && s.role) || "viewer",
     products: s && s.products && s.products.length ? s.products : "all",
     recognised_as_assistant: viaAssistant,
+    database: DATABASE,
   };
 }
 
@@ -1188,7 +1198,7 @@ const TOOLS = [
   {
     name: "whoami",
     title: "Who am I",
-    description: "The FollowUp account this connection acts as: name, role (admin, editor, contributor or viewer) and the products it may work on.",
+    description: "The FollowUp account this connection acts as: name, role (admin, editor, contributor or viewer), the products it may work on, and which database this connection reaches (live or development).",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true },
   },
@@ -1565,8 +1575,8 @@ async function handle(msg: Any, token: string, user: Any) {
       return reply({
         protocolVersion: VERSIONS.includes(asked) ? asked : VERSIONS[0],
         capabilities: { tools: {} },
-        serverInfo: { name: "followup-prion", title: "FollowUp Prion", version: "0.9.0" },
-        instructions: INSTRUCTIONS,
+        serverInfo: { name: "followup-prion", title: LIVE ? "FollowUp Prion" : "FollowUp Prion (development)", version: "0.10.0" },
+        instructions: LIVE ? INSTRUCTIONS : `${DEV_NOTE} ${INSTRUCTIONS}`,
       });
     }
     case "ping":
@@ -1577,7 +1587,10 @@ async function handle(msg: Any, token: string, user: Any) {
       const p = msg.params || {};
       try {
         const out = await callTool(String(p.name), p.arguments ?? {}, token, user);
-        return reply({ content: [{ type: "text", text: JSON.stringify(out) }] });
+        // Op ontwikkeling zegt elk antwoord dat het ontwikkeling is; op live
+        // staat er niets bij, zodat wie alleen live kent er niets van merkt.
+        const shown = !LIVE && isPlain(out) ? { database: DEV_NOTE, ...out } : out;
+        return reply({ content: [{ type: "text", text: JSON.stringify(shown) }] });
       } catch (e) {
         // Een fout van een werktuig is een antwoord, geen protocolfout: zo kan
         // de assistent lezen wat er misging en het de gebruiker zeggen.
