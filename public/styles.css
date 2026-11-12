@@ -630,6 +630,9 @@ dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap
 .login-card p { margin: 0; }
 .login-card .btn { min-height: 36px; margin-top: 4px; }
 .login-error { color: var(--red-ink); font-size: var(--t-sm); min-height: 1.45em; }
+/* consent.html: de stappen in dezelfde kaart. :not([hidden]), want display
+   zou het hidden-attribuut anders overstemmen. */
+.consent-step:not([hidden]) { display: flex; flex-direction: column; gap: 12px; }
 
 /* ---------- tabbalk (enkel gsm) ---------- */
 .tabbar { display: none; }
