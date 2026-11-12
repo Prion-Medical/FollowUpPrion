@@ -597,7 +597,9 @@
     // Alleen bij een gepland moment, en alleen als het voor iemand anders is
     // dan jij of dan wie het invoerde: anders staat er op elke regel een naam
     // die niets zegt.
-    const to = r.assignee && r.assignee !== store.me().id && r.assignee !== r.createdBy && personName(r.assignee);
+    // Een account dat niet meer bestaat is "?", niet niets: anders lijkt het
+    // moment van wie het invoerde.
+    const to = r.assignee && r.assignee !== store.me().id && r.assignee !== r.createdBy && (personName(r.assignee) || "?");
     return [withType && t("act." + r.type), r.product, c && c.name,
       r.rooms ? `${r.rooms} ${t(productKind(r.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
       to && t("for", { name: to }),
@@ -1225,9 +1227,9 @@
       <div class="section">
         <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
         ${h.planned.length ? `<ul class="timeline">${h.planned.map((p) => {
-          const c = h.contacts.find((x) => x.id === p.contactId);
-          const by = personName(p.createdBy);
-          const sub = [p.product, c && c.name, by && t("by", { name: by })].filter(Boolean).join(" · ");
+          // Dezelfde regel als in de agenda, zodat ook hier staat voor wie
+          // het moment is.
+          const sub = momentLine(h, p, false);
           return `<li class="${p.date < today() ? "late" : ""}">
             <div class="t-date">${esc(fmtDate(p.date))}<span class="t-rel">${esc(relDays(p.date))}</span></div>
             <div class="t-body">
@@ -1902,14 +1904,23 @@
     }, t("confirm.deletePlanned"));
     // Een ander product, andere collega's: de lijst volgt de keuze. Wie
     // gekozen was blijft staan als hij dat product ook heeft.
-    form.addEventListener("change", (e) => {
+    // onchange en geen luisteraar: #dialogForm wordt hergebruikt, en een
+    // luisteraar per geopende dialoog zou zich opstapelen (zie openDialog).
+    form.onchange = (e) => {
       const pick = form.elements.assignee;
       if (!pick || e.target.name !== "product") return;
       const was = pick.value;
-      pick.innerHTML = assigneeOptions(e.target.value, "");
+      // Een collega die het nieuwe product niet heeft valt weg. Iemand die we
+      // niet (meer) kennen blijft staan: over hem valt niets te zeggen, en een
+      // ander product kiezen mag het moment niet stil aan jou toewijzen.
+      const unknown = !!was && !owners().some(([id]) => id === was);
+      pick.innerHTML = assigneeOptions(e.target.value, unknown ? was : "");
       const has = (id) => [...pick.options].some((o) => o.value === id);
-      pick.value = has(was) ? was : has(store.me().id) ? store.me().id : "";
-    });
+      const next = has(was) ? was : has(store.me().id) ? store.me().id : "";
+      const blank = pick.querySelector('option[value=""]');
+      if (next && blank) blank.remove();
+      pick.value = next;
+    };
   }
 
   // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
@@ -2075,7 +2086,11 @@
     const months = EXPORT_PERIODS[period] || 0;
     if (!months) return ["", ""];
     const d = new Date();
-    const s = new Date(d.getFullYear(), d.getMonth() - months, d.getDate());
+    // Naar de eerste van die maand en dan pas naar de dag, begrensd op de
+    // lengte van die maand: drie maanden terug vanaf 31 mei is eind februari,
+    // niet 3 maart.
+    const s = new Date(d.getFullYear(), d.getMonth() - months, 1);
+    s.setDate(Math.min(d.getDate(), new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate()));
     return [ymd(s.getFullYear(), s.getMonth(), s.getDate()), ""];
   }
   $("#exportBtn").addEventListener("click", () => {
@@ -2086,8 +2101,8 @@
         <label class="field full">${esc(t("log.period"))}
           <select name="period">${Object.keys(EXPORT_PERIODS).map((k) => opt(k, t("export.period." + k), exportPeriod.period)).join("")}</select>
         </label>
-        <label class="field" data-export-custom ${exportPeriod.period === "custom" ? "" : "hidden"}>${esc(t("export.from"))}<input type="date" name="from" value="${esc(exportPeriod.from)}"></label>
-        <label class="field" data-export-custom ${exportPeriod.period === "custom" ? "" : "hidden"}>${esc(t("export.to"))}<input type="date" name="to" value="${esc(exportPeriod.to)}"></label>
+        <label class="field" data-export-custom ${exportPeriod.period === "custom" ? "" : "hidden"}>${esc(t("export.from"))}<input type="date" name="from" max="9999-12-31" value="${esc(exportPeriod.from)}"></label>
+        <label class="field" data-export-custom ${exportPeriod.period === "custom" ? "" : "hidden"}>${esc(t("export.to"))}<input type="date" name="to" max="9999-12-31" value="${esc(exportPeriod.to)}"></label>
       </div>
       <p class="muted">${esc(t("export.periodHint"))}</p>
       <div style="display:flex;flex-direction:column;gap:8px">
@@ -2101,9 +2116,13 @@
       <div class="actions"><button class="btn" value="cancel">${esc(t("btn.close"))}</button></div>`, (data, kind) => {
       const hs = state.db.hospitals;
       const d = today();
-      exportPeriod = { period: data.period in EXPORT_PERIODS ? data.period : "all", from: data.from || "", to: data.to || "" };
+      exportPeriod = { period: Object.hasOwn(EXPORT_PERIODS, data.period) ? data.period : "all", from: data.from || "", to: data.to || "" };
       const [from, to] = exportRange(exportPeriod);
-      const inPeriod = (date) => (!from || date >= from) && (!to || date <= to);
+      // Een moment zonder datum hoort in geen enkele periode, en dus alleen
+      // bij "alle datums".
+      const inPeriod = (date) => (date ? (!from || date >= from) && (!to || date <= to) : !from && !to);
+      // De periode in de bestandsnaam, zodat je later nog ziet wat erin zit.
+      const span = from || to ? `${from || "begin"}--${to || d}` : d;
       // De kolom "Demo gepland op" bestaat nog; de datum komt uit het eerste
       // geplande demomoment dat nog moet komen.
       const demoDate = (h) => ((h.planned.find((p) => p.type === "demo" && p.date >= d) || {}).date) || "";
@@ -2137,16 +2156,16 @@
             c.phone, c.email, c.language, c.address, c.products.join(" / "), c.primary ? t("col.yes") : "", c.notes])),
         ]), "text/csv");
       } else if (kind === "activities") {
-        download(`activities-${d}.csv`, activitiesCsv(hs.flatMap((h) => h.activities.filter((a) => inPeriod(a.date)).map((a) => ({ h, a })))), "text/csv");
+        download(`activities-${span}.csv`, activitiesCsv(hs.flatMap((h) => h.activities.filter((a) => inPeriod(a.date)).map((a) => ({ h, a })))), "text/csv");
       } else if (kind === "planned") {
         // De agenda, eerst wat het eerst komt. Voor wie het is staat er
         // altijd: zonder toewijzing is dat wie het invoerde.
-        download(`planned-${d}.csv`, csv([
+        download(`planned-${span}.csv`, csv([
           [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("col.owner"), t("col.addedBy")],
           ...hs.flatMap((h) => h.planned.filter((p) => inPeriod(p.date)).map((p) => ({ h, p })))
             .sort((x, y) => x.p.date.localeCompare(y.p.date) || x.h.name.localeCompare(y.h.name))
             .map(({ h, p }) => [p.date, h.name, t("act." + p.type), p.product,
-              (h.contacts.find((c) => c.id === p.contactId) || {}).name, p.note, personName(assigneeOf(p)), personName(p.createdBy)]),
+              (h.contacts.find((c) => c.id === p.contactId) || {}).name, p.note, personName(assigneeOf(p)) || (p.assignee ? "?" : ""), personName(p.createdBy)]),
         ]), "text/csv");
       } else if (kind === "units") {
         download(`units-${d}.csv`, csv([
@@ -2168,6 +2187,11 @@
     form.elements.period.addEventListener("change", (e) => {
       form.querySelectorAll("[data-export-custom]").forEach((el) => { el.hidden = e.target.value !== "custom"; });
     });
+    // Enter in een datumveld zou het formulier indienen met de eerste knop en
+    // zo ongevraagd het ziekenhuisoverzicht downloaden.
+    for (const name of ["from", "to"]) {
+      form.elements[name].addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
+    }
   });
 
   $("#importBtn").addEventListener("click", () => {
@@ -2249,6 +2273,9 @@
   }
 
   function renderAgenda() {
+    // Zolang de gegevens onderweg zijn tekent de agenda haar eigen streepjes,
+    // wie haar ook oproept: een lege agenda zou "niets gepland" zeggen.
+    if (state.loading) { agendaView.innerHTML = skelAgenda(); return; }
     if (state.agenda.tab === "log") return renderLog();
     const { y, m, day } = state.agenda;
     const items = plannedAll();
@@ -2504,13 +2531,16 @@
     <div class="s-head"><h2>${esc(t("nav.stats"))}</h2></div>
     <div class="s-tiles" aria-busy="true">${'<div class="s-tile skel"><span></span><b></b></div>'.repeat(5)}</div>
     <div class="skel-box skel-card" aria-busy="true"></div>`;
-  const skelFiche = () => `<div class="fiche-skel skel" aria-busy="true">
+  // Met een knop om te sluiten: op een telefoon bedekt de fiche het hele
+  // scherm, en wie op een trage verbinding niet wil wachten moet eruit kunnen.
+  const skelFiche = () => `<div class="fiche-skel-head"><button class="icon-btn" data-skel-close title="${esc(t("btn.close"))}" aria-label="${esc(t("btn.close"))}">${icon("close")}</button></div>
+    <div class="fiche-skel skel" aria-busy="true">
       <b class="skel-title"></b>${"<span></span><b></b><span></span><span></span>".repeat(4)}
     </div>`;
 
   function renderAll() {
     if (!statsView.hidden && !state.loading) window.FollowUpStats.render(state.db, statsView, scheduleSave, pickedRegions());
-    if (!agendaView.hidden && !state.loading) renderAgenda();
+    if (!agendaView.hidden) renderAgenda();
     if (!usersView.hidden) renderUsers();
     renderFilters();
     renderKpis();
@@ -2556,8 +2586,9 @@
     if (store.mode === "supabase") $("#logoutBtn").hidden = false;
     // Geladen of mislukt: de streepjes maken plaats voor wat er is.
     state.loading = false;
-    const place = readPlace();
-    const open = restoreSelection(place);
+    const place = early && document.body.dataset.view === early.view ? early.place : null;
+    // De fiche alleen als haar streepjes er nog staan: anders is ze gesloten.
+    const open = place && (!place.hospital || $("#fiche .fiche-skel")) ? restoreSelection(place) : null;
     renderAll();
     map.invalidateSize();
     // Alles in beeld brengen is voor wie vers binnenkomt; wie herlaadt houdt
@@ -2642,8 +2673,7 @@
       setTimeout(() => statsView.classList.remove("enter"), 900);
       window.FollowUpStats.render(state.db, statsView, scheduleSave, pickedRegions());
     } else window.FollowUpStats.hideTip();
-    if (view === "agenda" && state.loading) agendaView.innerHTML = skelAgenda();
-    else if (view === "agenda") renderAgenda();
+    if (view === "agenda") renderAgenda();
     if (view === "users") loadUsers();
     if (view === "map") setTimeout(() => {
       map.invalidateSize();
@@ -2733,7 +2763,12 @@
       // De hele agenda hertekent, dus onthouden we dat de uitklapper openstond:
       // anders klapt hij dicht bij elk vinkje.
       state.agenda = { ...state.agenda, assignees: toggle(state.agenda.assignees, d.value), day: "", whoOpen: true };
-      return renderAgenda();
+      renderAgenda();
+      // De hele agenda is hertekend, dus het vakje waar je stond is een nieuw
+      // vakje. Zonder dit staat de focus weer bovenaan de pagina.
+      const again = [...agendaView.querySelectorAll("[data-ag-who]")].find((x) => x.dataset.value === d.value);
+      if (again) again.focus();
+      return;
     } else return;
     state.log.limit = LOG_STEP;
     renderLogBody();
@@ -2789,6 +2824,16 @@
   // Meteen bij het laden, nog vóór de gegevens er zijn: het scherm waar je was
   // gaat al open, met streepjes waar de inhoud komt. Anders zag je eerst even
   // de kaart en sprong de app daarna pas naar je plek.
+  // Wat we bij het laden hebben klaargezet. Zodra de gegevens er zijn maken we
+  // het af, maar alleen als je er nog staat: wie tijdens het wachten naar een
+  // ander scherm ging of de fiche sloot, wordt niet teruggetrokken.
+  let early = null;
+  $("#fiche").addEventListener("click", (e) => {
+    if (!e.target.closest("[data-skel-close]")) return;
+    const el = $("#fiche");
+    el.hidden = true;
+    el.innerHTML = "";
+  });
   function showPlaceEarly() {
     const place = readPlace();
     if (!place) return;
@@ -2801,8 +2846,12 @@
       el.hidden = false;
     }
     if (placeAt(place)) map.setView(place.at.slice(0, 2), place.at[2], { animate: false });
+    early = { place, view: document.body.dataset.view };
   }
-  const placeAt = (place) => !!place && Array.isArray(place.at) && place.at.length === 3 && place.at.every(Number.isFinite);
+  // Drie getallen die ook echt een plek op de kaart zijn. sessionStorage is
+  // van de hele site, niet alleen van deze app.
+  const placeAt = (place) => !!place && Array.isArray(place.at) && place.at.length === 3 && place.at.every(Number.isFinite)
+    && Math.abs(place.at[0]) <= 90 && Math.abs(place.at[1]) <= 180 && place.at[2] >= 0 && place.at[2] <= 19;
   // Zodra de gegevens er zijn, in twee stappen rond renderAll(): eerst welk
   // ziekenhuis openstond, zodat de fiche in één keer de echte wordt, en erna
   // de kaart en het scherm.

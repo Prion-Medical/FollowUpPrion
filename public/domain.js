@@ -200,16 +200,18 @@ window.FollowUpDomain = (() => {
   // als een filter, "Anna" alleen niet. De lege tekst zegt het al zelf.
   const pickSamenvatting = (namen, leeg, voor) => (namen.length ? (voor ? voor + ": " : "") + namen.join(", ") : leeg);
   const pickBox = (rows, leeg, open, voor) =>
-    `<details class="pick" data-pick-empty="${esc(leeg)}" data-pick-prefix="${esc(voor || "")}" ${open ? "open" : ""}><summary><span class="pick-label">${
-      esc(pickSamenvatting(rows.filter((r) => r.checked).map((r) => r.label), leeg, voor))}</span></summary>
-       <div class="pick-list">${rows.map(pickRow).join("")}</div></details>`;
+    // De samenvatting ook als title: op een smalle knop wordt ze afgekapt, en
+    // dan is dit de enige plek waar ze nog helemaal staat.
+    ((tekst) => `<details class="pick" data-pick-empty="${esc(leeg)}" data-pick-prefix="${esc(voor || "")}" ${open ? "open" : ""}><summary><span class="pick-label" title="${esc(tekst)}">${
+      esc(tekst)}</span></summary>
+       <div class="pick-list">${rows.map(pickRow).join("")}</div></details>`)(pickSamenvatting(rows.filter((r) => r.checked).map((r) => r.label), leeg, voor));
   // Dezelfde samenvatting, nu uit de pagina gelezen in plaats van uit de
   // gegevens: elke rij draagt zijn eigen tekst al, dus de teksten van de
   // aangevinkte vakjes achter elkaar geven precies hetzelfde antwoord.
   const syncPick = (box) => {
     const sum = box.querySelector(".pick-label");
     if (!sum) return;
-    sum.textContent = pickSamenvatting(
+    sum.title = sum.textContent = pickSamenvatting(
       [...box.querySelectorAll(".pick-list input:checked")]
         .map((i) => (i.closest("label") || { textContent: "" }).textContent.trim())
         .filter(Boolean),
