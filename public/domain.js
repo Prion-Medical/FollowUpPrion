@@ -195,10 +195,13 @@ window.FollowUpDomain = (() => {
   // De regel zelf, op één plaats: de namen van wat aanstaat achter elkaar, en
   // anders de lege tekst. Hij wordt twee keer toegepast — bij het opbouwen op
   // de rijen, en daarna op de pagina — en moet dus ook maar één keer bestaan.
-  const pickSamenvatting = (namen, leeg) => (namen.length ? namen.join(", ") : leeg);
-  const pickBox = (rows, leeg, open) =>
-    `<details class="pick" data-pick-empty="${esc(leeg)}" ${open ? "open" : ""}><summary><span class="pick-label">${
-      esc(pickSamenvatting(rows.filter((r) => r.checked).map((r) => r.label), leeg))}</span></summary>
+  // voor is wat er vóór de namen komt te staan, voor een uitklapper waarvan de
+  // keuzes zelf niet zeggen waar ze over gaan: "Toegewezen aan: Anna" leest
+  // als een filter, "Anna" alleen niet. De lege tekst zegt het al zelf.
+  const pickSamenvatting = (namen, leeg, voor) => (namen.length ? (voor ? voor + ": " : "") + namen.join(", ") : leeg);
+  const pickBox = (rows, leeg, open, voor) =>
+    `<details class="pick" data-pick-empty="${esc(leeg)}" data-pick-prefix="${esc(voor || "")}" ${open ? "open" : ""}><summary><span class="pick-label">${
+      esc(pickSamenvatting(rows.filter((r) => r.checked).map((r) => r.label), leeg, voor))}</span></summary>
        <div class="pick-list">${rows.map(pickRow).join("")}</div></details>`;
   // Dezelfde samenvatting, nu uit de pagina gelezen in plaats van uit de
   // gegevens: elke rij draagt zijn eigen tekst al, dus de teksten van de
@@ -210,7 +213,7 @@ window.FollowUpDomain = (() => {
       [...box.querySelectorAll(".pick-list input:checked")]
         .map((i) => (i.closest("label") || { textContent: "" }).textContent.trim())
         .filter(Boolean),
-      box.dataset.pickEmpty || "");
+      box.dataset.pickEmpty || "", box.dataset.pickPrefix || "");
   };
   // <details> gaat uit zichzelf nooit dicht: je moest er twee keer op klikken.
   // Eén luisteraar op het document doet dat voor alle uitklappers samen, ook

@@ -62,7 +62,7 @@
     dragId: null,
     // Welke maand de agenda toont, en eventueel één gekozen dag.
     // tab: "planned" is de agenda zelf, "log" het logboek ernaast.
-    agenda: { y: new Date().getFullYear(), m: new Date().getMonth(), day: "", tab: "planned" },
+    agenda: { y: new Date().getFullYear(), m: new Date().getMonth(), day: "", tab: "planned", assignees: [], whoOpen: false },
     // Het logboek: alle contactmomenten over de ziekenhuizen heen. Product,
     // land, verantwoordelijke en de zoekterm deelt het met de kaart
     // (state.filter); dit zijn de keuzes die alleen hier bestaan. hospitalId
@@ -310,9 +310,17 @@
   }
   // Namen bij de uuid's uit app_users, één keer opgehaald bij het starten.
   const people = new Map();
+  // Per persoon de producten waartoe hij beperkt is; leeg is onbeperkt. Enkel
+  // om bij het toewijzen geen collega aan te bieden die het moment niet zou
+  // zien.
+  const peopleScope = new Map();
   async function loadPeople() {
     try {
-      for (const u of await store.users()) if (u.name) people.set(u.id, u.name);
+      for (const u of await store.users()) {
+        if (!u.name) continue;
+        people.set(u.id, u.name);
+        peopleScope.set(u.id, Array.isArray(u.products) ? u.products : []);
+      }
     } catch (e) {
       // Geen lijst (lokaal, of het schema is nog niet uitgevoerd): dan tonen we
       // gewoon geen namen. Dat is geen reden om de app te laten struikelen.
@@ -379,9 +387,17 @@
     p.product = str(p.product);
     p.contactId = str(p.contactId);
     p.note = str(p.note);
+    // Aan wie het moment is toegewezen. Het veld staat er alleen als iemand
+    // gekozen is: schreven we bij elk ouder moment een lege waarde, dan zou
+    // wie als eerste opslaat de laatste bewerker van de hele agenda worden.
+    if (str(p.assignee)) p.assignee = str(p.assignee); else delete p.assignee;
     stampFields(p);
     return p;
   }
+  // Voor wie een gepland moment is. Zonder toewijzing is dat wie het invoerde:
+  // wie iets plant, volgt het bijna altijd ook op, en zo werkt de filter in de
+  // agenda meteen voor alles wat er al stond.
+  const assigneeOf = (p) => p.assignee || p.createdBy || "";
   // De gegevens van een product per ingreep. Ze staan in de rij van dat
   // product in h.pipeline en niet in een blok op het ziekenhuis zoals unit:
   // Thyroid RFA en Fibroid RFA hebben elk hun eigen goedkeuring, prioriteit en
@@ -460,8 +476,13 @@
   function momentLine(h, r, withType) {
     const c = h.contacts.find((x) => x.id === r.contactId);
     const by = personName(r.createdBy);
+    // Alleen bij een gepland moment, en alleen als het voor iemand anders is
+    // dan jij of dan wie het invoerde: anders staat er op elke regel een naam
+    // die niets zegt.
+    const to = r.assignee && r.assignee !== store.me().id && r.assignee !== r.createdBy && personName(r.assignee);
     return [withType && t("act." + r.type), r.product, c && c.name,
       r.rooms ? `${r.rooms} ${t(productKind(r.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
+      to && t("for", { name: to }),
       by && t("by", { name: by })].filter(Boolean).join(" · ");
   }
   // De contactmomenten als CSV, recentste eerst: voor de export van alles en
@@ -497,14 +518,34 @@
     const list = new Map(people);
     const me = store.me();
     if (me.id && me.name) list.set(me.id, me.name);
-    return [...list].sort((a, b) => a[1].localeCompare(b[1]));
+    // Jezelf vooraan: dat is de keuze die je het vaakst maakt. De rest op naam.
+    return [...list].sort((a, b) => (b[0] === me.id) - (a[0] === me.id) || a[1].localeCompare(b[1]));
   }
+  // Een naam in een keuzelijst, met erbij wie jij bent. Alleen in lijsten
+  // waar je kiest: naast een contactmoment staat gewoon de naam.
+  const personLabel = (id) => {
+    const name = personName(id);
+    return name && id === store.me().id ? `${name} ${t("me.suffix")}` : name;
+  };
   // Een id dat we niet (meer) kennen blijft als keuze staan, anders wist een
   // opslag het.
+  // Aan wie je een gepland moment kunt toewijzen: wie het product van dat
+  // moment mag zien. Zonder product is dat iedereen. Een keuze, geen muur: de
+  // databank verbergt het moment sowieso voor wie het product niet heeft.
+  function assigneeOptions(product, current) {
+    const list = owners().filter(([id]) => {
+      const scope = id === store.me().id ? (store.can.products || []) : (peopleScope.get(id) || []);
+      return !product || !scope.length || scope.includes(product);
+    });
+    if (current && !list.some(([id]) => id === current)) list.push([current, personName(current) || "?"]);
+    // "—" alleen als er niemand bekend is (een moment van vóór de stempel):
+    // anders zou het stilzwijgend "wie het invoerde" betekenen.
+    return [...(current ? [] : [opt("", "—", "")]), ...list.map(([id, name]) => opt(id, personLabel(id) || name, current))].join("");
+  }
   function ownerOptions(current) {
     const list = owners();
     if (current && !list.some(([id]) => id === current)) list.push([current, "?"]);
-    return [opt("", "—", current), ...list.map(([id, name]) => opt(id, name, current))].join("");
+    return [opt("", "—", current), ...list.map(([id, name]) => opt(id, personLabel(id) || name, current))].join("");
   }
 
   function normalize(h) {
@@ -810,7 +851,7 @@
     // Wie verantwoordelijk is. De lijst is die van de keuzelijst in de fiche:
     // iedereen met een account. Zonder namen (lokaal, zonder localUser) is er
     // niets om op te filteren en staat de uitklapper er niet.
-    { key: "owners",    leeg: () => t("filter.allOwners"), items: () => owners().map(([id]) => id), label: (id) => personName(id) },
+    { key: "owners",    leeg: () => t("filter.allOwners"), items: () => owners().map(([id]) => id), label: personLabel, voor: () => t("field.owner") },
   ];
   function renderDerived() {
     for (const b of $("#derivedFilters").querySelectorAll(".chip")) {
@@ -823,7 +864,7 @@
         attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`,
         label: f.label(k),
         checked: chosen(f.key).includes(k),
-      })), f.leeg())).join("");
+      })), f.leeg(), false, f.voor && f.voor())).join("");
     $("#regionBtn").textContent = regionLabel("btn.wholeRegion", "btn.allRegions");
     renderDerived();
   }
@@ -1691,7 +1732,12 @@
       contactId: (h.contacts.find((c) => c.primary) || {}).id || "",
       note: "",
     };
-    openDialog(`
+    // Een nieuw moment is voor jezelf tot je iemand anders kiest; een bestaand
+    // toont wie het nu opvolgt.
+    const assignee = p ? assigneeOf(p) : store.me().id;
+    // Lokaal zonder naam is er niemand om aan toe te wijzen: dan geen veld.
+    const canAssign = owners().length > 0 || !!assignee;
+    const form = openDialog(`
       <h2>${esc(p ? t("dlg.plannedEdit") : t("dlg.plannedNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
         <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
@@ -1702,6 +1748,9 @@
         <label class="field">${esc(t("dlg.p.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
+        ${canAssign ? `<label class="field full">${esc(t("dlg.p.assignee"))}
+          <select name="assignee">${assigneeOptions(v.product, assignee)}</select>
+        </label>` : ""}
         <label class="field full">${esc(t("dlg.p.note"))}<textarea name="note" rows="3" placeholder="${esc(t("dlg.p.note.ph"))}">${esc(v.note)}</textarea></label>
       </div>
       ${stampLine(p)}
@@ -1718,6 +1767,13 @@
           date: data.date, type: data.type, product: data.product,
           contactId: data.contactId, note: data.note.trim(),
         });
+        // Het veld komt er alleen bij als het moment voor iemand anders is dan
+        // wie het invoerde: voor die persoon volgt het al uit de stempel. Zo
+        // krijgt een moment dat je voor jezelf plant geen naam mee, en blijft
+        // een ouder moment waar niemand aan de toewijzing kwam onaangeroerd.
+        const chosen = canAssign ? data.assignee : "";
+        if (chosen && chosen !== (p ? p.createdBy || "" : store.me().id)) rec.assignee = chosen;
+        else delete rec.assignee;
         stamp(rec, !p);
         if (!p) h.planned.push(rec);
         h.planned.sort((a, b) => a.date.localeCompare(b.date));
@@ -1726,6 +1782,16 @@
       scheduleSave();
       renderAll();
     }, t("confirm.deletePlanned"));
+    // Een ander product, andere collega's: de lijst volgt de keuze. Wie
+    // gekozen was blijft staan als hij dat product ook heeft.
+    form.addEventListener("change", (e) => {
+      const pick = form.elements.assignee;
+      if (!pick || e.target.name !== "product") return;
+      const was = pick.value;
+      pick.innerHTML = assigneeOptions(e.target.value, "");
+      const has = (id) => [...pick.options].some((o) => o.value === id);
+      pick.value = has(was) ? was : has(store.me().id) ? store.me().id : "";
+    });
   }
 
   // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
@@ -1981,8 +2047,23 @@
   // sleutels minder om in twee talen bij te houden.
   function plannedAll() {
     const out = [];
-    for (const h of state.db.hospitals) for (const p of h.planned) out.push({ h, p });
+    // Het rooster, "te laat" en de lijst volgen alle drie de keuze "voor wie".
+    const who = state.agenda.assignees;
+    for (const h of state.db.hospitals) for (const p of h.planned) if (!who.length || who.includes(assigneeOf(p))) out.push({ h, p });
     return out.sort((a, b) => a.p.date.localeCompare(b.p.date) || a.h.name.localeCompare(b.h.name));
+  }
+
+  // Voor wie: dezelfde uitklapper als de filters in het logboek en de zijbalk,
+  // met jezelf vooraan. Zonder namen (lokaal zonder naam) valt er niets te
+  // kiezen en staat er niets.
+  function agendaAssignee() {
+    const list = owners();
+    if (!list.length) return "";
+    const open = state.agenda.whoOpen;
+    state.agenda.whoOpen = false;
+    return `<div class="s-filters">${pickBox(list.map(([id]) => ({
+      attrs: `data-ag-who data-value="${esc(id)}"`, label: personLabel(id), checked: state.agenda.assignees.includes(id),
+    })), t("filter.allOwners"), open, t("field.owner"))}</div>`;
   }
 
   function agendaRow({ h, p }) {
@@ -2051,6 +2132,7 @@
           <button class="btn small" data-ag="today">${esc(t("btn.today"))}</button>
           <button class="btn small" data-ag="next" title="${esc(t("btn.nextMonth"))}" aria-label="${esc(t("btn.nextMonth"))}">${icon("next")}</button>
         </div>
+        ${agendaAssignee()}
         ${// De schakelaar als laatste, op beide tabbladen: zo staat hij op
           // dezelfde plaats en verspringt hij niet onder je muis.
           agendaTabs()}
@@ -2062,7 +2144,7 @@
           ${cells.join("")}
         </div>
       </div>
-      ${items.length ? "" : `<p class="muted">${esc(t("agenda.none"))}</p>`}
+      ${items.length ? "" : `<p class="muted">${esc(t(state.agenda.assignees.length ? "agenda.noneFor" : "agenda.none"))}</p>`}
       ${overdue.length && !day && !past ? `<div class="ag-block">
         <h3 class="ag-h">${esc(t("agenda.overdue"))} <span class="badge">${overdue.length}</span></h3>
         <ul class="ag-list">${overdue.map(agendaRow).join("")}</ul>
@@ -2213,21 +2295,25 @@
     const L = state.log;
     const only = L.hospitalId && byId(L.hospitalId);
     if (L.hospitalId && !only) clearLogHospital();
-    const pick = (key, items, label, leeg) => pickBox(items.map((k) => ({
+    const pick = (key, items, label, leeg, voor) => pickBox(items.map((k) => ({
       attrs: `data-log-pick="${esc(key)}" data-value="${esc(k)}"`, label: label(k), checked: L[key].includes(k),
-    })), leeg);
+    })), leeg, false, voor);
     agendaView.innerHTML = `
       <div class="s-head">
         <h2>${esc(t("agenda.title"))}</h2>
         ${agendaTabs()}
       </div>
       <div class="s-filters log-filters">
-        <label>${esc(t("log.period"))} <select data-log-period>${LOG_PERIODS.map((p) => opt(p, t("log.period." + p), L.period)).join("")}</select></label>
+        ${// Eén manier voor de hele rij: wat een veld filtert staat ín het
+          // veld, niet ervoor. De periodes zeggen zelf wat ze zijn; "Ingevoerd
+          // door" en "Toegewezen aan" blijven erbij staan als er namen gekozen
+          // zijn, want een naam alleen zegt niet waarvoor hij staat.
+          ""}<label><select data-log-period aria-label="${esc(t("log.period"))}">${LOG_PERIODS.map((p) => opt(p, t("log.period." + p), L.period)).join("")}</select></label>
         ${only ? "" : FILTERS.filter((f) => f.key !== "statuses" && f.items().length).map((f) => `<label>${pickBox(f.items().map((k) => ({
           attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`, label: f.label(k), checked: chosen(f.key).includes(k),
-        })), f.leeg())}</label>`).join("")}
+        })), f.leeg(), false, f.voor && f.voor())}</label>`).join("")}
         <label>${pick("types", ACT_TYPE_KEYS, (k) => t("act." + k), t("log.allTypes"))}</label>
-        ${owners().length ? `<label>${esc(t("log.author"))} ${pick("authors", owners().map(([id]) => id), personName, t("log.allAuthors"))}</label>` : ""}
+        ${owners().length ? `<label>${pick("authors", owners().map(([id]) => id), personLabel, t("log.anyAuthor"), t("log.author"))}</label>` : ""}
         ${only ? "" : `<input type="search" data-log-search value="${esc(state.filter.query)}" placeholder="${esc(t("log.search"))}" aria-label="${esc(t("log.search"))}">`}
       </div>
       ${only ? `<p class="log-only">${esc(t("log.hospital"))}: <b>${esc(only.name)}</b> <button class="link" data-log-clear>${esc(t("log.allHospitals"))}</button></p>` : ""}
@@ -2449,6 +2535,11 @@
       state.log[d.logPick] = toggle(state.log[d.logPick], d.value);
     } else if ("logPeriod" in d) {
       state.log.period = el.value;
+    } else if ("agWho" in d) {
+      // De hele agenda hertekent, dus onthouden we dat de uitklapper openstond:
+      // anders klapt hij dicht bij elk vinkje.
+      state.agenda = { ...state.agenda, assignees: toggle(state.agenda.assignees, d.value), day: "", whoOpen: true };
+      return renderAgenda();
     } else return;
     state.log.limit = LOG_STEP;
     renderLogBody();
