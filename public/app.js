@@ -12,7 +12,7 @@
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
-    esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual,
+    esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual, setMain, mainContact,
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
   const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
@@ -920,7 +920,8 @@
     }
     ul.innerHTML = items.map((h) => {
       const lc = lastContact(h);
-      const primary = h.contacts.find((c) => c.primary);
+      // Met een productfilter het hoofdcontact van dat product, anders het eerste.
+      const primary = state.filter.products.map((p) => mainContact(h, p)).find(Boolean) || (state.filter.products.length ? null : mainContact(h));
       const bits = [t("stage." + shown(h).stage)];
       if (h.country) bits.push(t("country." + h.country + ".short"));
       if (h.unit.roomsInstalled && endoAccount()) bits.push(`${h.unit.roomsInstalled}× ${t("stats.roomsLive").toLowerCase()}`);
@@ -1464,9 +1465,7 @@
       case "edit-contact": return contactDialog(h, h.contacts.find((c) => c.id === id));
       case "primary": {
         const c = h.contacts.find((x) => x.id === id);
-        const was = c.primary;
-        h.contacts.forEach((x) => (x.primary = false));
-        c.primary = !was;
+        if (c.primary) c.primary = false; else setMain(h, c);
         scheduleSave();
         return renderAll();
       }
@@ -1752,7 +1751,7 @@
           products: [...new Set([...had.filter((p) => !mine.includes(p)), ...keuze])],
           notes: data.notes.trim(), primary: !!data.primary,
         });
-        if (rec.primary) h.contacts.forEach((x) => { if (x !== rec) x.primary = false; });
+        if (rec.primary) setMain(h, rec);
         if (!c) h.contacts.push(rec);
         for (const p of rec.products) if (!h.products.includes(p)) h.products.push(p);
         syncProducts(h, had.filter((p) => !rec.products.includes(p)));
@@ -1768,7 +1767,7 @@
       date: today(),
       type: h.activities.length ? "email" : "prospecting",
       product: defaultProduct(h),
-      contactId: (h.contacts.find((c) => c.primary) || {}).id || "",
+      contactId: (mainContact(h, defaultProduct(h)) || {}).id || "",
       rooms: "", note: "",
     });
     const form = openDialog(`
@@ -1849,7 +1848,7 @@
       date: today(),
       type: "visit",
       product: defaultProduct(h),
-      contactId: (h.contacts.find((c) => c.primary) || {}).id || "",
+      contactId: (mainContact(h, defaultProduct(h)) || {}).id || "",
       note: "",
     };
     // Een nieuw moment is voor jezelf tot je iemand anders kiest; een bestaand
@@ -2138,7 +2137,7 @@
           ...hs.map((h) => [h.name, h.country && t("country." + h.country), h.sector && t("sector." + h.sector),
             t("status." + h.status), t("stage." + h.stage), h.products.join(", "), lastContact(h),
             countType(h, "demo"), ...(endoAccount() ? [countType(h, "installation"), h.unit.roomsInstalled ?? ""] : []),
-            demoDate(h), h.nextAction, h.nextActionDate, (h.contacts.find((c) => c.primary) || {}).name,
+            demoDate(h), h.nextAction, h.nextActionDate, h.contacts.filter((c) => c.primary).map((c) => c.name).join(" / "),
             h.address, h.createdAt, h.notes,
             h.network, h.sites,
             ...myProducts().flatMap((p) => {

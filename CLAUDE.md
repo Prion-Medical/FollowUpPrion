@@ -279,6 +279,17 @@ the contact's own fields — name, phone, e-mail, notes — are **shared**, exac
 the hospital's are. Two people looking after the same clinician edit the same
 record, and the last save wins.
 
+**The main contact.** One per product, not one per hospital: the radiologist who
+performs thyroid RFA and the gynaecologist for fibroids are both the person to
+call. There is no field per product for it. A contact's `primary` counts for the
+products that contact is ticked for, and `setMain()` in `public/domain.js` only
+takes the star from contacts that stand on the same ground: they share a product,
+or one of the two is ticked for none and so stands for the hospital as a whole.
+The price of having no separate field is that someone ticked for two products is
+the main contact for both or for neither. `mainContact(h, product)` is what the
+list, the two moment dialogs and the export ask; the merge and the connector
+follow the same rule.
+
 **Planned versus logged.** `activities[]` is the log of what happened, and it drives
 status, stage, rooms and both charts. `planned[]` is the agenda and drives none of that —
 deliberately a separate array, so a planned installation can never turn a hospital green
