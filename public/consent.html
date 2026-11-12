@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <!-- Krapper dan index.html, want deze pagina beslist over toegang: script
+       alleen van onszelf en van die ene versie van de Supabase-client, en
+       verbinden alleen met de twee projecten uit config.js. Komt er een
+       project bij of verandert de versie hieronder, dan moet het hier mee. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://hpkmobbfcryygtxgjvlu.supabase.co https://fdlyaljnusmylywtptfn.supabase.co; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="robots" content="noindex">
+  <title>FollowUp Prion</title>
+  <script src="theme.js?v=202611131300"></script>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css?v=202611131300">
+</head>
+<body>
+  <!-- Hier komt iemand terecht die in Claude de FollowUp-koppeling toevoegt.
+       Supabase stuurt hem naar deze pagina met ?authorization_id=…; hij meldt
+       zich aan als zichzelf en zegt ja of nee. Pas na dat ja krijgt de
+       assistent een sleutel, en die sleutel is de zijne: zelfde rol, zelfde
+       productmuur, zelfde stempel als in de app. -->
+  <div class="login">
+    <div class="login-card">
+      <img class="login-logo" src="logo.png" alt="Prion Medical">
+      <p class="eyebrow" data-i18n="consent.title">Toegang geven</p>
+
+      <form id="consentLogin" class="consent-step" hidden>
+        <p class="muted" data-i18n="consent.signin">Meld je eerst aan.</p>
+        <label class="field"><span data-i18n="login.email">E-mail</span><input name="email" type="email" autocomplete="username" required></label>
+        <label class="field"><span data-i18n="login.password">Wachtwoord</span><input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="btn primary" type="submit" data-i18n="login.submit">Aanmelden</button>
+      </form>
+
+      <div id="consentAsk" class="consent-step" hidden>
+        <p id="consentIntro"></p>
+        <p class="muted" data-i18n="consent.what">Het kan lezen en toevoegen wat jij mag, niet meer. Alles wat het invoert komt op jouw naam te staan.</p>
+        <p class="muted"><span id="consentWho"></span> · <a href="#" id="consentSwitch" data-i18n="consent.switch">Niet jij?</a></p>
+        <p class="muted" id="consentWhere"></p>
+        <button class="btn primary" id="consentApprove" type="button" data-i18n="consent.approve">Toestaan</button>
+        <button class="btn" id="consentDeny" type="button" data-i18n="consent.deny">Weigeren</button>
+      </div>
+
+      <p class="muted" id="consentDone" hidden></p>
+      <p class="login-error" id="consentError"></p>
+      <p class="muted" id="consentOther" hidden><a href="#" id="consentSignOut" data-i18n="consent.switch">Niet jij?</a></p>
+    </div>
+  </div>
+
+  <!-- Een nieuwere versie dan index.html laadt: pas deze kent auth.oauth. De
+       app zelf blijft op de zijne tot die apart is nagekeken. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.js" integrity="sha384-uteMfOloLDGt042uDz+xHGF3ym63/WQ6rFq7murQRG8Ih7QrXGEGNtWd8688sb4O" crossorigin="anonymous"></script>
+  <script src="config.js?v=202611131300"></script>
+  <script src="i18n.js?v=202611131300"></script>
+  <script src="consent.js?v=202611131300"></script>
+</body>
+</html>

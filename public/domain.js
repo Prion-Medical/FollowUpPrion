@@ -195,22 +195,27 @@ window.FollowUpDomain = (() => {
   // De regel zelf, op één plaats: de namen van wat aanstaat achter elkaar, en
   // anders de lege tekst. Hij wordt twee keer toegepast — bij het opbouwen op
   // de rijen, en daarna op de pagina — en moet dus ook maar één keer bestaan.
-  const pickSamenvatting = (namen, leeg) => (namen.length ? namen.join(", ") : leeg);
-  const pickBox = (rows, leeg, open) =>
-    `<details class="pick" data-pick-empty="${esc(leeg)}" ${open ? "open" : ""}><summary><span class="pick-label">${
-      esc(pickSamenvatting(rows.filter((r) => r.checked).map((r) => r.label), leeg))}</span></summary>
-       <div class="pick-list">${rows.map(pickRow).join("")}</div></details>`;
+  // voor is wat er vóór de namen komt te staan, voor een uitklapper waarvan de
+  // keuzes zelf niet zeggen waar ze over gaan: "Toegewezen aan: Anna" leest
+  // als een filter, "Anna" alleen niet. De lege tekst zegt het al zelf.
+  const pickSamenvatting = (namen, leeg, voor) => (namen.length ? (voor ? voor + ": " : "") + namen.join(", ") : leeg);
+  const pickBox = (rows, leeg, open, voor) =>
+    // De samenvatting ook als title: op een smalle knop wordt ze afgekapt, en
+    // dan is dit de enige plek waar ze nog helemaal staat.
+    ((tekst) => `<details class="pick" data-pick-empty="${esc(leeg)}" data-pick-prefix="${esc(voor || "")}" ${open ? "open" : ""}><summary><span class="pick-label" title="${esc(tekst)}">${
+      esc(tekst)}</span></summary>
+       <div class="pick-list">${rows.map(pickRow).join("")}</div></details>`)(pickSamenvatting(rows.filter((r) => r.checked).map((r) => r.label), leeg, voor));
   // Dezelfde samenvatting, nu uit de pagina gelezen in plaats van uit de
   // gegevens: elke rij draagt zijn eigen tekst al, dus de teksten van de
   // aangevinkte vakjes achter elkaar geven precies hetzelfde antwoord.
   const syncPick = (box) => {
     const sum = box.querySelector(".pick-label");
     if (!sum) return;
-    sum.textContent = pickSamenvatting(
+    sum.title = sum.textContent = pickSamenvatting(
       [...box.querySelectorAll(".pick-list input:checked")]
         .map((i) => (i.closest("label") || { textContent: "" }).textContent.trim())
         .filter(Boolean),
-      box.dataset.pickEmpty || "");
+      box.dataset.pickEmpty || "", box.dataset.pickPrefix || "");
   };
   // <details> gaat uit zichzelf nooit dicht: je moest er twee keer op klikken.
   // Eén luisteraar op het document doet dat voor alle uitklappers samen, ook
@@ -267,7 +272,145 @@ window.FollowUpDomain = (() => {
     });
   }
 
+  // ---------- twee mensen tegelijk ----------
+  // Het document is één geheel en de databank weigert een opslag zodra iemand
+  // anders ondertussen iets bewaarde, wat het ook was. Hiermee hoeft dat geen
+  // "herlaad en doe het opnieuw" meer te zijn: we leggen drie versies naast
+  // elkaar — basis (wat we laatst van de databank kenden), mine (wat hier nu
+  // staat) en theirs (wat de databank nu heeft) — en nemen van elk stuk de
+  // kant die veranderd is. Pas als allebei hetzelfde stuk anders veranderden
+  // is er echt een conflict, en dat komt in de lijst terecht.
+  //
+  // Zuiver rekenwerk op gewone JSON, zodat het zonder browser na te kijken is.
+  const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  const deepEqual = (a, b) => {
+    if (a === b) return true;
+    if (Array.isArray(a) || Array.isArray(b)) {
+      return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));
+    }
+    if (!isObj(a) || !isObj(b)) return false;
+    // De volgorde van de sleutels telt niet: de app en de databank bouwen
+    // hetzelfde object niet altijd in dezelfde volgorde op.
+    const ka = Object.keys(a).filter((k) => a[k] !== undefined);
+    const kb = Object.keys(b).filter((k) => b[k] !== undefined);
+    return ka.length === kb.length && ka.every((k) => deepEqual(a[k], b[k]));
+  };
+  // Een lijst van records met een id (ziekenhuizen, contactpersonen,
+  // contactmomenten, geplande momenten) of een lijst van losse waarden
+  // (producten, merken). Een lege lijst past bij allebei.
+  const isRecords = (v) => Array.isArray(v) && v.every((x) => isObj(x) && typeof x.id === "string" && x.id);
+  const isValues = (v) => Array.isArray(v) && v.every((x) => !isObj(x) && !Array.isArray(x));
+  // De stempel zet de databank zelf, op wie bewaart: daarover valt niet te
+  // twisten. nextAction volgt altijd uit planned[], en normalize() rekent het
+  // na het samenvoegen opnieuw uit.
+  const STAMP_KEYS = ["createdBy", "createdAt", "updatedBy", "updatedAt"];
+  const DERIVED_KEYS = ["nextAction", "nextActionDate"];
+  const isHospital = (path) => path.length === 2 && path[0] === "hospitals";
+  const settled = (path) => STAMP_KEYS.includes(path[path.length - 1])
+    || (path.length === 3 && path[0] === "hospitals" && DERIVED_KEYS.includes(path[2]));
+  // Een record zonder zijn stempel. De app zet de stempel zelf en de databank
+  // zet hem opnieuw, en die twee zijn niet altijd letterlijk gelijk (de dag
+  // van de browser tegenover die van Brussel). Wie daarop vergelijkt, ziet
+  // een wijziging van de collega waar er geen is.
+  const bare = (r) => {
+    if (!isObj(r)) return r;
+    const o = {};
+    for (const k of Object.keys(r)) if (!STAMP_KEYS.includes(k)) o[k] = r[k];
+    return o;
+  };
+  const untouched = (now, before) => deepEqual(bare(now), bare(before));
+  // Kamers die een contactmoment bijtelt of aftrekt: dezelfde regel als
+  // syncRooms() in app.js, hier nodig om te zien of een gewijzigd aantal
+  // geïnstalleerde kamers uit contactmomenten volgt of met de hand is getypt.
+  const roomsFrom = (h) => ((h && h.activities) || []).reduce((n, a) => {
+    if (!a || !a.rooms || productKind(a.product) !== "subscription") return n;
+    return n + (a.type === "installation" ? a.rooms : a.type === "cancellation" ? -a.rooms : 0);
+  }, 0);
+  // Wat alleen op het niveau van één ziekenhuis te beslissen valt.
+  function settleHospital(base, mine, theirs, out, conflicts, path) {
+    const drop = (key) => {
+      const i = conflicts.findIndex((c) => c.length === path.length + key.length && key.every((k, n) => c[path.length + n] === k));
+      if (i >= 0) conflicts.splice(i, 1);
+    };
+    // Geïnstalleerde kamers zijn een teller: een installatie telt erbij, en
+    // twee mensen die er elk een invoeren moeten bij de som uitkomen, niet bij
+    // één van de twee. Volgt de wijziging aan elke kant precies uit de
+    // contactmomenten van die kant, dan tellen we de twee verschillen op. Is
+    // het getal met de hand gezet, dan blijft het wat het algemene
+    // samenvoegen ervan maakte: gelijk is gelijk, anders een conflict.
+    const n = (h) => Number(h && h.unit && h.unit.roomsInstalled) || 0;
+    const dm = n(mine) - n(base), dt = n(theirs) - n(base);
+    if (dm && dt && dm === roomsFrom(mine) - roomsFrom(base) && dt === roomsFrom(theirs) - roomsFrom(base) && isObj(out.unit)) {
+      out.unit = { ...out.unit, roomsInstalled: Math.max(0, n(base) + dm + dt) };
+      drop(["unit", "roomsInstalled"]);
+    }
+    // Eén hoofdcontact. Kozen twee mensen elk een ander, dan zouden er na het
+    // samenvoegen twee zijn; die regel woont in de dialoog en niet in
+    // normalize(). Wie nu bewaart heeft het laatste woord.
+    if (Array.isArray(out.contacts) && out.contacts.filter((c) => c && c.primary).length > 1) {
+      const keep = ((mine.contacts || []).find((c) => c && c.primary) || {}).id;
+      out.contacts = out.contacts.map((c) => (c && c.primary && c.id !== keep ? { ...c, primary: false } : c));
+    }
+  }
+  function merge3(base, mine, theirs, conflicts = [], path = []) {
+    if (deepEqual(mine, theirs)) return mine;
+    if (deepEqual(mine, base)) return theirs;
+    if (deepEqual(theirs, base)) return mine;
+    // Vanaf hier veranderden allebei, en niet naar hetzelfde.
+    if (isRecords(mine) && isRecords(theirs) && (base == null || isRecords(base))) {
+      const b = new Map((base || []).map((r) => [r.id, r]));
+      const m = new Map(mine.map((r) => [r.id, r]));
+      const out = [];
+      // Hun volgorde, met wat alleen hier bestaat erachter.
+      for (const r of theirs) {
+        if (m.has(r.id)) out.push(merge3(b.get(r.id), m.get(r.id), r, conflicts, [...path, r.id]));
+        else if (!b.has(r.id)) out.push(r); // door hen toegevoegd
+        // Hier verwijderd. Bleef het bij hen zoals het was, dan is het weg;
+        // werkten zij er net aan, dan mag het niet stil verdwijnen.
+        else if (!untouched(r, b.get(r.id))) { conflicts.push([...path, r.id]); out.push(r); }
+      }
+      const seen = new Set(theirs.map((r) => r.id));
+      for (const r of mine) {
+        if (seen.has(r.id)) continue;
+        if (!b.has(r.id)) out.push(r); // hier toegevoegd
+        // Door hen verwijderd terwijl het hier veranderde.
+        else if (!untouched(r, b.get(r.id))) { conflicts.push([...path, r.id]); out.push(r); }
+      }
+      return out;
+    }
+    if (isValues(mine) && isValues(theirs) && (base == null || isValues(base))) {
+      // Vinkjes: wat zij hebben, plus wat hier bijkwam, min wat hier wegging.
+      const b = base || [];
+      const gone = b.filter((x) => !mine.includes(x));
+      const added = mine.filter((x) => !b.includes(x));
+      return [...theirs.filter((x) => !gone.includes(x)), ...added.filter((x) => !theirs.includes(x))];
+    }
+    if (isObj(mine) && isObj(theirs) && (base == null || isObj(base))) {
+      const out = {};
+      const keys = [...new Set([...Object.keys(theirs), ...Object.keys(mine)])];
+      // products eerst: daar hangt van af of de kleur en de fase van het
+      // ziekenhuis afgeleid zijn.
+      if (isHospital(path)) keys.sort((a, b) => (b === "products") - (a === "products"));
+      for (const k of keys) {
+        // Een sleutel met deze naam vervangt het prototype in plaats van een
+        // waarde te zetten. In echte gegevens komt hij niet voor.
+        if (k === "__proto__") continue;
+        // Met een product aangevinkt volgen kleur en fase uit de opvolging per
+        // product en rekent normalize() ze opnieuw uit. Zonder product zijn ze
+        // met de hand gezet, en dan is twee keer anders gewoon een conflict.
+        if (isHospital(path) && (k === "status" || k === "stage") && (out.products || []).length) { out[k] = mine[k]; continue; }
+        const v = merge3(base == null ? undefined : base[k], mine[k], theirs[k], conflicts, [...path, k]);
+        if (v !== undefined) out[k] = v;
+      }
+      if (isHospital(path)) settleHospital(base, mine, theirs, out, conflicts, path);
+      return out;
+    }
+    if (!settled(path)) conflicts.push(path);
+    return mine;
+  }
+
   return {
+    merge3, deepEqual,
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,

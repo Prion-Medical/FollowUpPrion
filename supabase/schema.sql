@@ -162,9 +162,22 @@ $$;
 
 -- Deze staat wel in public: de policies op app_users hebben hem nodig, en een
 -- policy kan niet bij een schema waar de aanroeper geen usage op heeft.
+-- Komt deze oproep van een assistent? Wie de koppeling toestaat, geeft de
+-- assistent een sleutel die voor de databank dezelfde gebruiker is. De
+-- koppeling zelf biedt maar een handvol werktuigen aan, maar de sleutel kan
+-- meer: lekt hij, dan kon hij alles wat de app kan. Een sleutel die via de
+-- OAuth-server van Supabase is uitgegeven draagt het id van de aanvrager
+-- (client_id); een gewone aanmelding in de app heeft dat niet. Twee dingen
+-- zijn daarom alleen in de app zelf te doen: gebruikers beheren en een
+-- back-up terugzetten.
+create or replace function followup.via_assistant() returns boolean
+language sql stable set search_path = public as $$
+  select coalesce(auth.jwt() ->> 'client_id', '') <> '';
+$$;
+
 create or replace function public.is_admin() returns boolean
 language sql stable security definer set search_path = public as $$
-  select followup.my_role() = 'admin';
+  select followup.my_role() = 'admin' and not followup.via_assistant();
 $$;
 
 -- Er moet altijd minstens één beheerder overblijven. Zonder deze controle kan
@@ -1040,6 +1053,12 @@ begin
       raise exception 'followup:no_import importeren mag enkel een bewerker of beheerder'
         using errcode = 'PT403', hint = 'no_import';
     end if;
+    if followup.via_assistant() then
+      -- Een back-up terugzetten vervangt alles. Dat doet een mens in de app,
+      -- niet een sleutel die bij een assistent ligt.
+      raise exception 'followup:no_import importeren kan niet via een assistent'
+        using errcode = 'PT403', hint = 'no_import';
+    end if;
     if v_bereik <> '{}'::text[] then
       -- Wie maar een deel van het document ziet, kan er geen volledig document
       -- over zetten: alles wat hij niet zag, zou verdwijnen.
@@ -1155,6 +1174,17 @@ begin
 end $$;
 
 
+-- Is er iets veranderd sinds ik laadde? De app vraagt dit wanneer je naar het
+-- tabblad terugkeert, en haalt het document pas op als het antwoord anders is
+-- dan wat ze heeft. Het is alleen het tijdstip van de laatste opslag: daar
+-- staat niets in van welk product ook, dus hier hoeft geen muur omheen.
+-- Geen rij (nog geen document) geeft null terug.
+create or replace function public.state_version() returns timestamptz
+language sql stable security definer set search_path = public as $$
+  select updated_at from public.app_state where id = 'main';
+$$;
+
+
 -- ---------------------------------------------------------------------------
 -- 11. Rechten
 -- ---------------------------------------------------------------------------
@@ -1202,7 +1232,9 @@ create policy "beheerder gebruikers wijzigen" on public.app_users
   with check (public.is_admin());
 
 -- Een functie is standaard voor iedereen uitvoerbaar, en van alles in "public"
--- maakt PostgREST een /rpc/-adres. Daarom hier expliciet welke drie dat zijn.
+-- maakt PostgREST een /rpc/-adres. Daarom hier expliciet welke vier dat zijn.
+revoke all on function public.state_version() from public, anon;
+grant execute on function public.state_version() to authenticated;
 revoke all on function public.read_state() from public, anon;
 revoke all on function public.write_state(jsonb, timestamptz, text) from public, anon;
 revoke all on function public.is_admin() from public, anon;

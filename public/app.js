@@ -12,7 +12,7 @@
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
-    esc, pickBox, syncPick, myProducts, productColor,
+    esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual,
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
   const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
@@ -50,6 +50,10 @@
     // De gekozen regio's; leeg is overal. Bewust buiten filter: zie hierboven.
     regions: savedRegions(),
     db: { version: 1, hospitals: [] },
+    // Zolang de gegevens onderweg zijn. Een scherm dat dan al openstaat toont
+    // streepjes in plaats van "niets gepland" of nullen: leeg en nog-niet-er
+    // zijn niet hetzelfde.
+    loading: true,
     selectedId: null,
     // Elke filter is een lijst; leeg betekent geen beperking, dezelfde
     // betekenis als een leeg bereik op een gebruiker. derived is er één van
@@ -62,7 +66,7 @@
     dragId: null,
     // Welke maand de agenda toont, en eventueel één gekozen dag.
     // tab: "planned" is de agenda zelf, "log" het logboek ernaast.
-    agenda: { y: new Date().getFullYear(), m: new Date().getMonth(), day: "", tab: "planned" },
+    agenda: { y: new Date().getFullYear(), m: new Date().getMonth(), day: "", tab: "planned", assignees: [], whoOpen: false },
     // Het logboek: alle contactmomenten over de ziekenhuizen heen. Product,
     // land, verantwoordelijke en de zoekterm deelt het met de kaart
     // (state.filter); dit zijn de keuzes die alleen hier bestaan. hospitalId
@@ -185,16 +189,127 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, 400);
   }
+  // ---------- samen werken ----------
+  // base is het document zoals we het laatst van de databank kennen: wat we
+  // laadden, of wat we zelf met succes bewaarden. Daartegen meten we af wat
+  // hier veranderd is en wat bij een collega (merge3 in domain.js).
+  let base = null;
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  let saving = false;
+  // Tijdens een opslag kwam er nog een wijziging bij: die gaat in een volgende.
+  let saveAgain = false;
+  // De pull die onderweg is. Wie er intussen ook om vraagt krijgt dezelfde:
+  // een tweede naast de eerste zou op een verouderde basis samenvoegen, en
+  // "bezet, ga maar door" liet de opslag zonder samenvoegen opnieuw proberen.
+  let pulling = null;
+  // Het samengevoegde document overnemen zonder de objecten te vervangen waar
+  // een open dialoog of de fiche nog naar wijst: een ziekenhuis, een
+  // contactpersoon of een moment dat al bestond blijft hetzelfde object en
+  // krijgt alleen nieuwe inhoud. Anders bewaart een dialoog die openstond
+  // zijn wijziging in een object dat niet meer in het document zit.
+  function refill(target, src) {
+    for (const k of Object.keys(target)) if (!(k in src)) delete target[k];
+    for (const [k, v] of Object.entries(src)) {
+      if (k === "__proto__") continue;
+      const old = target[k];
+      if (Array.isArray(v) && Array.isArray(old) && v.every((r) => r && typeof r === "object" && r.id)) {
+        const known = new Map(old.filter((r) => r && r.id).map((r) => [r.id, r]));
+        target[k] = v.map((r) => (known.has(r.id) ? refill(known.get(r.id), r) : r));
+      } else target[k] = v;
+    }
+    return target;
+  }
+  // Ophalen wat er nu staat en het hier erbovenop leggen. Geeft terug:
+  //   "clean"    het document van de databank, hier is niets meer te bewaren
+  //   "dirty"    samengevoegd, met wijzigingen van hier die nog weg moeten
+  //   "conflict" allebei veranderden hetzelfde, of de toegang is veranderd
+  function pull() {
+    if (!pulling) pulling = doPull().finally(() => { pulling = null; });
+    return pulling;
+  }
+  async function doPull() {
+    // Zonder basis (het laden mislukte) valt niet te zeggen wat hier
+    // veranderd is: dan zou alles van hier winnen van alles van daar.
+    if (!base) return "conflict";
+    const fresh = await store.peek();
+    if (!fresh.sameAccess) return "conflict";
+    fresh.db.version = Math.max(Number(fresh.db.version) || 1, DB_VERSION);
+    fresh.db.hospitals.forEach(normalize);
+    const conflicts = [];
+    const merged = merge3(base, state.db, fresh.db, conflicts);
+    if (conflicts.length) return "conflict";
+    merged.hospitals.forEach(normalize);
+    const mineLeft = !deepEqual(merged, fresh.db);
+    refill(state.db, clone(merged));
+    base = clone(fresh.db);
+    store.accept(fresh.at);
+    // Wie in de fiche aan het typen is, houdt zijn veld: wat hij typt staat
+    // nog niet in het document en zou bij een hertekening weg zijn.
+    const a = document.activeElement;
+    if (a && a.closest && a.closest("#fiche") && a.matches("input, textarea, select")) {
+      renderFilters(); renderKpis(); renderList(); renderMarkers();
+    } else renderAll();
+    return mineLeft ? "dirty" : "clean";
+  }
+  // Stil bijwerken. Wanneer je naar het tabblad terugkeert, en af en toe
+  // terwijl het openstaat, vragen we of er iets veranderd is; zo ja, dan komt
+  // het erbij zonder dat je er iets van merkt. Niet terwijl er een dialoog
+  // openstaat of een opslag onderweg is: die regelen het zelf.
+  async function refreshQuietly() {
+    if (store.mode !== "supabase" || state.loading || document.hidden) return;
+    if (saving || pulling || dirty || document.querySelector("dialog[open]")) return;
+    // Ook niet terwijl je ergens typt, een lijstje openstaat of een speld
+    // versleept: het scherm hertekenen zou dat onder je handen wegnemen. Het
+    // komt een halve minuut later wel.
+    // Een veld dat de focus nog heeft maar niet meer te zien is (in een
+    // dialoog die al dicht is) telt niet: daar typt niemand.
+    const a = document.activeElement;
+    if (a && a.matches && a.matches("input, textarea, select") && a.offsetParent !== null) return;
+    if (state.dragId || state.placing || document.querySelector("details.pick[open]")) return;
+    try {
+      if (!(await store.changed())) return;
+      const result = await pull();
+      if (result === "conflict") showBanner(t("save.conflict"), true, "warn");
+    } catch (e) {
+      // Geen netwerk, even geen databank: dit was maar een beleefdheid, de
+      // eerstvolgende opslag merkt het vanzelf.
+    }
+  }
+  document.addEventListener("visibilitychange", refreshQuietly);
+  window.addEventListener("focus", refreshQuietly);
+  setInterval(refreshQuietly, 30000);
+
   // "import" geldt voor één opslag: de eerstvolgende. Daarna weer gewoon.
   let saveMode = "save";
   async function save() {
+    // Eén opslag tegelijk. Wat ondertussen verandert, gaat in de volgende.
+    if (saving) { saveAgain = true; return; }
     const mode = saveMode;
     saveMode = "save";
+    saving = true;
     try {
-      await store.save(state.db, mode);
-      dirty = false;
+      // Iemand anders bewaarde ondertussen: ophalen, samenvoegen en opnieuw
+      // proberen, zonder er de gebruiker mee lastig te vallen. Een paar keer,
+      // want in de tijd van het ophalen kan er nog iemand bewaard hebben. Een
+      // import voegen we niet samen: die zet bewust alles terug.
+      for (let attempt = 0; ; attempt++) {
+        const sent = clone(state.db);
+        try {
+          await store.save(state.db, mode);
+          base = sent;
+          break;
+        } catch (e) {
+          if (!(e instanceof store.ConflictError) || mode === "import" || attempt >= 3) throw e;
+          if ((await pull()) === "conflict") throw e;
+        }
+      }
+      dirty = saveAgain;
       showSaveState("save.saved");
     } catch (e) {
+      // Een import die niet doorging mag later niet als gewone opslag worden
+      // samengevoegd: dan zou de back-up half over de echte gegevens komen.
+      // Zonder basis weigert pull() alles tot je herlaadt.
+      if (mode === "import") base = null;
       showSaveState("save.failed", true);
       if (e instanceof store.ConflictError) {
         showBanner(t("save.conflict"), true, "warn");
@@ -202,6 +317,9 @@
         const hint = store.mode === "local" ? t("save.errorLocal") : t("save.errorOnline");
         showBanner(t("save.errorBody", { hint, msg: e.message }));
       }
+    } finally {
+      saving = false;
+      if (saveAgain) { saveAgain = false; save(); }
     }
   }
   window.addEventListener("beforeunload", (e) => {
@@ -310,9 +428,17 @@
   }
   // Namen bij de uuid's uit app_users, één keer opgehaald bij het starten.
   const people = new Map();
+  // Per persoon de producten waartoe hij beperkt is; leeg is onbeperkt. Enkel
+  // om bij het toewijzen geen collega aan te bieden die het moment niet zou
+  // zien.
+  const peopleScope = new Map();
   async function loadPeople() {
     try {
-      for (const u of await store.users()) if (u.name) people.set(u.id, u.name);
+      for (const u of await store.users()) {
+        if (!u.name) continue;
+        people.set(u.id, u.name);
+        peopleScope.set(u.id, Array.isArray(u.products) ? u.products : []);
+      }
     } catch (e) {
       // Geen lijst (lokaal, of het schema is nog niet uitgevoerd): dan tonen we
       // gewoon geen namen. Dat is geen reden om de app te laten struikelen.
@@ -379,9 +505,17 @@
     p.product = str(p.product);
     p.contactId = str(p.contactId);
     p.note = str(p.note);
+    // Aan wie het moment is toegewezen. Het veld staat er alleen als iemand
+    // gekozen is: schreven we bij elk ouder moment een lege waarde, dan zou
+    // wie als eerste opslaat de laatste bewerker van de hele agenda worden.
+    if (str(p.assignee)) p.assignee = str(p.assignee); else delete p.assignee;
     stampFields(p);
     return p;
   }
+  // Voor wie een gepland moment is. Zonder toewijzing is dat wie het invoerde:
+  // wie iets plant, volgt het bijna altijd ook op, en zo werkt de filter in de
+  // agenda meteen voor alles wat er al stond.
+  const assigneeOf = (p) => p.assignee || p.createdBy || "";
   // De gegevens van een product per ingreep. Ze staan in de rij van dat
   // product in h.pipeline en niet in een blok op het ziekenhuis zoals unit:
   // Thyroid RFA en Fibroid RFA hebben elk hun eigen goedkeuring, prioriteit en
@@ -460,8 +594,15 @@
   function momentLine(h, r, withType) {
     const c = h.contacts.find((x) => x.id === r.contactId);
     const by = personName(r.createdBy);
+    // Alleen bij een gepland moment, en alleen als het voor iemand anders is
+    // dan jij of dan wie het invoerde: anders staat er op elke regel een naam
+    // die niets zegt.
+    // Een account dat niet meer bestaat is "?", niet niets: anders lijkt het
+    // moment van wie het invoerde.
+    const to = r.assignee && r.assignee !== store.me().id && r.assignee !== r.createdBy && (personName(r.assignee) || "?");
     return [withType && t("act." + r.type), r.product, c && c.name,
       r.rooms ? `${r.rooms} ${t(productKind(r.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
+      to && t("for", { name: to }),
       by && t("by", { name: by })].filter(Boolean).join(" · ");
   }
   // De contactmomenten als CSV, recentste eerst: voor de export van alles en
@@ -497,14 +638,34 @@
     const list = new Map(people);
     const me = store.me();
     if (me.id && me.name) list.set(me.id, me.name);
-    return [...list].sort((a, b) => a[1].localeCompare(b[1]));
+    // Jezelf vooraan: dat is de keuze die je het vaakst maakt. De rest op naam.
+    return [...list].sort((a, b) => (b[0] === me.id) - (a[0] === me.id) || a[1].localeCompare(b[1]));
   }
+  // Een naam in een keuzelijst, met erbij wie jij bent. Alleen in lijsten
+  // waar je kiest: naast een contactmoment staat gewoon de naam.
+  const personLabel = (id) => {
+    const name = personName(id);
+    return name && id === store.me().id ? `${name} ${t("me.suffix")}` : name;
+  };
   // Een id dat we niet (meer) kennen blijft als keuze staan, anders wist een
   // opslag het.
+  // Aan wie je een gepland moment kunt toewijzen: wie het product van dat
+  // moment mag zien. Zonder product is dat iedereen. Een keuze, geen muur: de
+  // databank verbergt het moment sowieso voor wie het product niet heeft.
+  function assigneeOptions(product, current) {
+    const list = owners().filter(([id]) => {
+      const scope = id === store.me().id ? (store.can.products || []) : (peopleScope.get(id) || []);
+      return !product || !scope.length || scope.includes(product);
+    });
+    if (current && !list.some(([id]) => id === current)) list.push([current, personName(current) || "?"]);
+    // "—" alleen als er niemand bekend is (een moment van vóór de stempel):
+    // anders zou het stilzwijgend "wie het invoerde" betekenen.
+    return [...(current ? [] : [opt("", "—", "")]), ...list.map(([id, name]) => opt(id, personLabel(id) || name, current))].join("");
+  }
   function ownerOptions(current) {
     const list = owners();
     if (current && !list.some(([id]) => id === current)) list.push([current, "?"]);
-    return [opt("", "—", current), ...list.map(([id, name]) => opt(id, name, current))].join("");
+    return [opt("", "—", current), ...list.map(([id, name]) => opt(id, personLabel(id) || name, current))].join("");
   }
 
   function normalize(h) {
@@ -810,7 +971,7 @@
     // Wie verantwoordelijk is. De lijst is die van de keuzelijst in de fiche:
     // iedereen met een account. Zonder namen (lokaal, zonder localUser) is er
     // niets om op te filteren en staat de uitklapper er niet.
-    { key: "owners",    leeg: () => t("filter.allOwners"), items: () => owners().map(([id]) => id), label: (id) => personName(id) },
+    { key: "owners",    leeg: () => t("filter.allOwners"), items: () => owners().map(([id]) => id), label: personLabel, voor: () => t("field.owner") },
   ];
   function renderDerived() {
     for (const b of $("#derivedFilters").querySelectorAll(".chip")) {
@@ -823,7 +984,7 @@
         attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`,
         label: f.label(k),
         checked: chosen(f.key).includes(k),
-      })), f.leeg())).join("");
+      })), f.leeg(), false, f.voor && f.voor())).join("");
     $("#regionBtn").textContent = regionLabel("btn.wholeRegion", "btn.allRegions");
     renderDerived();
   }
@@ -1066,9 +1227,9 @@
       <div class="section">
         <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
         ${h.planned.length ? `<ul class="timeline">${h.planned.map((p) => {
-          const c = h.contacts.find((x) => x.id === p.contactId);
-          const by = personName(p.createdBy);
-          const sub = [p.product, c && c.name, by && t("by", { name: by })].filter(Boolean).join(" · ");
+          // Dezelfde regel als in de agenda, zodat ook hier staat voor wie
+          // het moment is.
+          const sub = momentLine(h, p, false);
           return `<li class="${p.date < today() ? "late" : ""}">
             <div class="t-date">${esc(fmtDate(p.date))}<span class="t-rel">${esc(relDays(p.date))}</span></div>
             <div class="t-body">
@@ -1691,7 +1852,12 @@
       contactId: (h.contacts.find((c) => c.primary) || {}).id || "",
       note: "",
     };
-    openDialog(`
+    // Een nieuw moment is voor jezelf tot je iemand anders kiest; een bestaand
+    // toont wie het nu opvolgt.
+    const assignee = p ? assigneeOf(p) : store.me().id;
+    // Lokaal zonder naam is er niemand om aan toe te wijzen: dan geen veld.
+    const canAssign = owners().length > 0 || !!assignee;
+    const form = openDialog(`
       <h2>${esc(p ? t("dlg.plannedEdit") : t("dlg.plannedNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
         <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
@@ -1702,6 +1868,9 @@
         <label class="field">${esc(t("dlg.p.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
+        ${canAssign ? `<label class="field full">${esc(t("dlg.p.assignee"))}
+          <select name="assignee">${assigneeOptions(v.product, assignee)}</select>
+        </label>` : ""}
         <label class="field full">${esc(t("dlg.p.note"))}<textarea name="note" rows="3" placeholder="${esc(t("dlg.p.note.ph"))}">${esc(v.note)}</textarea></label>
       </div>
       ${stampLine(p)}
@@ -1718,6 +1887,13 @@
           date: data.date, type: data.type, product: data.product,
           contactId: data.contactId, note: data.note.trim(),
         });
+        // Het veld komt er alleen bij als het moment voor iemand anders is dan
+        // wie het invoerde: voor die persoon volgt het al uit de stempel. Zo
+        // krijgt een moment dat je voor jezelf plant geen naam mee, en blijft
+        // een ouder moment waar niemand aan de toewijzing kwam onaangeroerd.
+        const chosen = canAssign ? data.assignee : "";
+        if (chosen && chosen !== (p ? p.createdBy || "" : store.me().id)) rec.assignee = chosen;
+        else delete rec.assignee;
         stamp(rec, !p);
         if (!p) h.planned.push(rec);
         h.planned.sort((a, b) => a.date.localeCompare(b.date));
@@ -1726,6 +1902,25 @@
       scheduleSave();
       renderAll();
     }, t("confirm.deletePlanned"));
+    // Een ander product, andere collega's: de lijst volgt de keuze. Wie
+    // gekozen was blijft staan als hij dat product ook heeft.
+    // onchange en geen luisteraar: #dialogForm wordt hergebruikt, en een
+    // luisteraar per geopende dialoog zou zich opstapelen (zie openDialog).
+    form.onchange = (e) => {
+      const pick = form.elements.assignee;
+      if (!pick || e.target.name !== "product") return;
+      const was = pick.value;
+      // Een collega die het nieuwe product niet heeft valt weg. Iemand die we
+      // niet (meer) kennen blijft staan: over hem valt niets te zeggen, en een
+      // ander product kiezen mag het moment niet stil aan jou toewijzen.
+      const unknown = !!was && !owners().some(([id]) => id === was);
+      pick.innerHTML = assigneeOptions(e.target.value, unknown ? was : "");
+      const has = (id) => [...pick.options].some((o) => o.value === id);
+      const next = has(was) ? was : has(store.me().id) ? store.me().id : "";
+      const blank = pick.querySelector('option[value=""]');
+      if (next && blank) blank.remove();
+      pick.value = next;
+    };
   }
 
   // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
@@ -1874,20 +2069,60 @@
   // Het logo brengt je terug naar de kaart, vanuit elk paneel.
   $("#homeBtn").addEventListener("click", () => { closeFiche(); setView("map"); });
 
+  // Welke periode een export beslaat. Alleen de twee lijsten met een datum
+  // luisteren ernaar: contactmomenten en geplande momenten. Een voorkeuze is
+  // "sinds zoveel maanden", zonder einde: zo geeft ze van het logboek het
+  // recente stuk en van de agenda wat onlangs te laat was plus alles wat nog
+  // komt, en hoeft niemand na te denken over wat "de laatste drie maanden"
+  // voor een planning zou betekenen. De keuze blijft staan tot je herlaadt.
+  const EXPORT_PERIODS = { all: 0, m3: 3, m6: 6, y1: 12, custom: 0 };
+  let exportPeriod = { period: "all", from: "", to: "" };
+  function exportRange({ period, from, to }) {
+    if (period === "custom") {
+      const a = dateOrEmpty(from), b = dateOrEmpty(to);
+      // Omgekeerd ingevuld is nog altijd duidelijk wat bedoeld is.
+      return a && b && a > b ? [b, a] : [a, b];
+    }
+    const months = EXPORT_PERIODS[period] || 0;
+    if (!months) return ["", ""];
+    const d = new Date();
+    // Naar de eerste van die maand en dan pas naar de dag, begrensd op de
+    // lengte van die maand: drie maanden terug vanaf 31 mei is eind februari,
+    // niet 3 maart.
+    const s = new Date(d.getFullYear(), d.getMonth() - months, 1);
+    s.setDate(Math.min(d.getDate(), new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate()));
+    return [ymd(s.getFullYear(), s.getMonth(), s.getDate()), ""];
+  }
   $("#exportBtn").addEventListener("click", () => {
-    openDialog(`
+    const form = openDialog(`
       <h2>${esc(t("dlg.export"))}</h2>
       <p class="muted">${esc(t("dlg.exportHint"))}</p>
+      <div class="grid">
+        <label class="field full">${esc(t("log.period"))}
+          <select name="period">${Object.keys(EXPORT_PERIODS).map((k) => opt(k, t("export.period." + k), exportPeriod.period)).join("")}</select>
+        </label>
+        <label class="field" data-export-custom ${exportPeriod.period === "custom" ? "" : "hidden"}>${esc(t("export.from"))}<input type="date" name="from" max="9999-12-31" value="${esc(exportPeriod.from)}"></label>
+        <label class="field" data-export-custom ${exportPeriod.period === "custom" ? "" : "hidden"}>${esc(t("export.to"))}<input type="date" name="to" max="9999-12-31" value="${esc(exportPeriod.to)}"></label>
+      </div>
+      <p class="muted">${esc(t("export.periodHint"))}</p>
       <div style="display:flex;flex-direction:column;gap:8px">
         <button class="btn" value="hospitals">${esc(t("export.hospitals"))}</button>
         <button class="btn" value="contacts">${esc(t("export.contacts"))}</button>
         <button class="btn" value="activities">${esc(t("export.activities"))}</button>
+        <button class="btn" value="planned">${esc(t("export.planned"))}</button>
         ${endoAccount() ? `<button class="btn" value="units">${esc(t("export.units"))}</button>` : ""}
         <button class="btn" value="json">${esc(t("export.json"))}</button>
       </div>
       <div class="actions"><button class="btn" value="cancel">${esc(t("btn.close"))}</button></div>`, (data, kind) => {
       const hs = state.db.hospitals;
       const d = today();
+      exportPeriod = { period: Object.hasOwn(EXPORT_PERIODS, data.period) ? data.period : "all", from: data.from || "", to: data.to || "" };
+      const [from, to] = exportRange(exportPeriod);
+      // Een moment zonder datum hoort in geen enkele periode, en dus alleen
+      // bij "alle datums".
+      const inPeriod = (date) => (date ? (!from || date >= from) && (!to || date <= to) : !from && !to);
+      // De periode in de bestandsnaam, zodat je later nog ziet wat erin zit.
+      const span = from || to ? `${from || "begin"}--${to || d}` : d;
       // De kolom "Demo gepland op" bestaat nog; de datum komt uit het eerste
       // geplande demomoment dat nog moet komen.
       const demoDate = (h) => ((h.planned.find((p) => p.type === "demo" && p.date >= d) || {}).date) || "";
@@ -1921,7 +2156,17 @@
             c.phone, c.email, c.language, c.address, c.products.join(" / "), c.primary ? t("col.yes") : "", c.notes])),
         ]), "text/csv");
       } else if (kind === "activities") {
-        download(`activities-${d}.csv`, activitiesCsv(hs.flatMap((h) => h.activities.map((a) => ({ h, a })))), "text/csv");
+        download(`activities-${span}.csv`, activitiesCsv(hs.flatMap((h) => h.activities.filter((a) => inPeriod(a.date)).map((a) => ({ h, a })))), "text/csv");
+      } else if (kind === "planned") {
+        // De agenda, eerst wat het eerst komt. Voor wie het is staat er
+        // altijd: zonder toewijzing is dat wie het invoerde.
+        download(`planned-${span}.csv`, csv([
+          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("dlg.p.assignee"), t("col.addedBy")],
+          ...hs.flatMap((h) => h.planned.filter((p) => inPeriod(p.date)).map((p) => ({ h, p })))
+            .sort((x, y) => x.p.date.localeCompare(y.p.date) || x.h.name.localeCompare(y.h.name))
+            .map(({ h, p }) => [p.date, h.name, t("act." + p.type), p.product,
+              (h.contacts.find((c) => c.id === p.contactId) || {}).name, p.note, personName(assigneeOf(p)) || (p.assignee ? "?" : ""), personName(p.createdBy)]),
+        ]), "text/csv");
       } else if (kind === "units") {
         download(`units-${d}.csv`, csv([
           [t("col.name"), t("col.country"), t("unit.scopeBrands"), t("unit.scopeNotes"),
@@ -1938,6 +2183,15 @@
       }
       return KEEP_OPEN; // meestal wil je meer dan één lijst
     });
+    // De twee datumvelden staan er alleen bij een eigen periode.
+    form.elements.period.addEventListener("change", (e) => {
+      form.querySelectorAll("[data-export-custom]").forEach((el) => { el.hidden = e.target.value !== "custom"; });
+    });
+    // Enter in een datumveld zou het formulier indienen met de eerste knop en
+    // zo ongevraagd het ziekenhuisoverzicht downloaden.
+    for (const name of ["from", "to"]) {
+      form.elements[name].addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
+    }
   });
 
   $("#importBtn").addEventListener("click", () => {
@@ -1981,8 +2235,26 @@
   // sleutels minder om in twee talen bij te houden.
   function plannedAll() {
     const out = [];
-    for (const h of state.db.hospitals) for (const p of h.planned) out.push({ h, p });
+    // Het rooster, "te laat" en de lijst volgen alle drie de keuze "voor wie".
+    const who = state.agenda.assignees;
+    for (const h of state.db.hospitals) for (const p of h.planned) if (!who.length || who.includes(assigneeOf(p))) out.push({ h, p });
     return out.sort((a, b) => a.p.date.localeCompare(b.p.date) || a.h.name.localeCompare(b.h.name));
+  }
+
+  // Voor wie: dezelfde uitklapper als de filters in het logboek en de zijbalk,
+  // met jezelf vooraan. "Gepland voor" en niet "Toegewezen aan": dat laatste
+  // is wie een product bij een ziekenhuis opvolgt, en die filter staat op het
+  // andere tabblad van deze pagina. Twee keer hetzelfde woord voor twee
+  // verschillende dingen las als één filter. Zonder namen (lokaal zonder naam) valt er niets te
+  // kiezen en staat er niets.
+  function agendaAssignee() {
+    const list = owners();
+    if (!list.length) return "";
+    const open = state.agenda.whoOpen;
+    state.agenda.whoOpen = false;
+    return `<div class="s-filters">${pickBox(list.map(([id]) => ({
+      attrs: `data-ag-who data-value="${esc(id)}"`, label: personLabel(id), checked: state.agenda.assignees.includes(id),
+    })), t("agenda.forAnyone"), open, t("dlg.p.assignee"))}</div>`;
   }
 
   function agendaRow({ h, p }) {
@@ -2004,6 +2276,9 @@
   }
 
   function renderAgenda() {
+    // Zolang de gegevens onderweg zijn tekent de agenda haar eigen streepjes,
+    // wie haar ook oproept: een lege agenda zou "niets gepland" zeggen.
+    if (state.loading) { agendaView.innerHTML = skelAgenda(); return; }
     if (state.agenda.tab === "log") return renderLog();
     const { y, m, day } = state.agenda;
     const items = plannedAll();
@@ -2051,6 +2326,7 @@
           <button class="btn small" data-ag="today">${esc(t("btn.today"))}</button>
           <button class="btn small" data-ag="next" title="${esc(t("btn.nextMonth"))}" aria-label="${esc(t("btn.nextMonth"))}">${icon("next")}</button>
         </div>
+        ${agendaAssignee()}
         ${// De schakelaar als laatste, op beide tabbladen: zo staat hij op
           // dezelfde plaats en verspringt hij niet onder je muis.
           agendaTabs()}
@@ -2062,7 +2338,7 @@
           ${cells.join("")}
         </div>
       </div>
-      ${items.length ? "" : `<p class="muted">${esc(t("agenda.none"))}</p>`}
+      ${items.length ? "" : `<p class="muted">${esc(t(state.agenda.assignees.length ? "agenda.noneFor" : "agenda.none"))}</p>`}
       ${overdue.length && !day && !past ? `<div class="ag-block">
         <h3 class="ag-h">${esc(t("agenda.overdue"))} <span class="badge">${overdue.length}</span></h3>
         <ul class="ag-list">${overdue.map(agendaRow).join("")}</ul>
@@ -2213,21 +2489,25 @@
     const L = state.log;
     const only = L.hospitalId && byId(L.hospitalId);
     if (L.hospitalId && !only) clearLogHospital();
-    const pick = (key, items, label, leeg) => pickBox(items.map((k) => ({
+    const pick = (key, items, label, leeg, voor) => pickBox(items.map((k) => ({
       attrs: `data-log-pick="${esc(key)}" data-value="${esc(k)}"`, label: label(k), checked: L[key].includes(k),
-    })), leeg);
+    })), leeg, false, voor);
     agendaView.innerHTML = `
       <div class="s-head">
         <h2>${esc(t("agenda.title"))}</h2>
         ${agendaTabs()}
       </div>
       <div class="s-filters log-filters">
-        <label>${esc(t("log.period"))} <select data-log-period>${LOG_PERIODS.map((p) => opt(p, t("log.period." + p), L.period)).join("")}</select></label>
+        ${// Eén manier voor de hele rij: wat een veld filtert staat ín het
+          // veld, niet ervoor. De periodes zeggen zelf wat ze zijn; "Ingevoerd
+          // door" en "Toegewezen aan" blijven erbij staan als er namen gekozen
+          // zijn, want een naam alleen zegt niet waarvoor hij staat.
+          ""}<label><select data-log-period aria-label="${esc(t("log.period"))}">${LOG_PERIODS.map((p) => opt(p, t("log.period." + p), L.period)).join("")}</select></label>
         ${only ? "" : FILTERS.filter((f) => f.key !== "statuses" && f.items().length).map((f) => `<label>${pickBox(f.items().map((k) => ({
           attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`, label: f.label(k), checked: chosen(f.key).includes(k),
-        })), f.leeg())}</label>`).join("")}
+        })), f.leeg(), false, f.voor && f.voor())}</label>`).join("")}
         <label>${pick("types", ACT_TYPE_KEYS, (k) => t("act." + k), t("log.allTypes"))}</label>
-        ${owners().length ? `<label>${esc(t("log.author"))} ${pick("authors", owners().map(([id]) => id), personName, t("log.allAuthors"))}</label>` : ""}
+        ${owners().length ? `<label>${pick("authors", owners().map(([id]) => id), personLabel, t("log.anyAuthor"), t("log.author"))}</label>` : ""}
         ${only ? "" : `<input type="search" data-log-search value="${esc(state.filter.query)}" placeholder="${esc(t("log.search"))}" aria-label="${esc(t("log.search"))}">`}
       </div>
       ${only ? `<p class="log-only">${esc(t("log.hospital"))}: <b>${esc(only.name)}</b> <button class="link" data-log-clear>${esc(t("log.allHospitals"))}</button></p>` : ""}
@@ -2241,8 +2521,28 @@
   }
 
   // ---------- start ----------
+  // ---------- wat er staat zolang de gegevens onderweg zijn ----------
+  // Dezelfde streepjes als de lijst in index.html, in de vorm van het scherm
+  // dat komt: zo staat de indeling er meteen en verspringt er weinig wanneer
+  // de echte inhoud arriveert. De glans komt van aria-busy (styles.css).
+  const skelRows = (n) => `<ul class="ag-list" aria-busy="true">${'<li class="ag-row skel"><div><b></b><span></span></div></li>'.repeat(n)}</ul>`;
+  const skelAgenda = () => `
+    <div class="s-head"><h2>${esc(t("agenda.title"))}</h2>${agendaTabs()}</div>
+    <div class="skel-box ${state.agenda.tab === "log" ? "skel-filters" : "skel-cal"}" aria-busy="true"></div>
+    ${skelRows(state.agenda.tab === "log" ? 6 : 3)}`;
+  const skelStats = () => `
+    <div class="s-head"><h2>${esc(t("nav.stats"))}</h2></div>
+    <div class="s-tiles" aria-busy="true">${'<div class="s-tile skel"><span></span><b></b></div>'.repeat(5)}</div>
+    <div class="skel-box skel-card" aria-busy="true"></div>`;
+  // Met een knop om te sluiten: op een telefoon bedekt de fiche het hele
+  // scherm, en wie op een trage verbinding niet wil wachten moet eruit kunnen.
+  const skelFiche = () => `<div class="fiche-skel-head"><button class="icon-btn" data-skel-close title="${esc(t("btn.close"))}" aria-label="${esc(t("btn.close"))}">${icon("close")}</button></div>
+    <div class="fiche-skel skel" aria-busy="true">
+      <b class="skel-title"></b>${"<span></span><b></b><span></span><span></span>".repeat(4)}
+    </div>`;
+
   function renderAll() {
-    if (!statsView.hidden) window.FollowUpStats.render(state.db, statsView, scheduleSave, pickedRegions());
+    if (!statsView.hidden && !state.loading) window.FollowUpStats.render(state.db, statsView, scheduleSave, pickedRegions());
     if (!agendaView.hidden) renderAgenda();
     if (!usersView.hidden) renderUsers();
     renderFilters();
@@ -2275,6 +2575,9 @@
       if (Number(state.db.version) > DB_VERSION) showBanner(t("save.newerVersion"), false, "warn");
       state.db.version = Math.max(Number(state.db.version) || 1, DB_VERSION);
       state.db.hospitals.forEach(normalize);
+      // Wat we nu van de databank kennen; daartegen meten we later af wat hier
+      // veranderde en wat bij een collega.
+      base = clone(state.db);
       // read_state geeft de rol en het bereik mee waarmee dit document is
       // uitgelezen; is daar iets aan veranderd, dan kloppen de knoppen nu pas.
       applyRights();
@@ -2284,9 +2587,17 @@
       showBanner(e.message);
     }
     if (store.mode === "supabase") $("#logoutBtn").hidden = false;
+    // Geladen of mislukt: de streepjes maken plaats voor wat er is.
+    state.loading = false;
+    const place = early && document.body.dataset.view === early.view ? early.place : null;
+    // De fiche alleen als haar streepjes er nog staan: anders is ze gesloten.
+    const open = place && (!place.hospital || $("#fiche .fiche-skel")) ? restoreSelection(place) : null;
     renderAll();
     map.invalidateSize();
-    fitAll();
+    // Alles in beeld brengen is voor wie vers binnenkomt; wie herlaadt houdt
+    // de kaart waar ze stond.
+    if (!placeAt(place)) fitAll();
+    restoreView(place, open);
   }
 
   // Lege online databank: startlijst laden of een back-up importeren.
@@ -2356,7 +2667,9 @@
     $("#agendaBtn").textContent = view === "agenda" ? t("btn.backToMap") : t("btn.agenda");
     document.querySelectorAll(".tabbar [data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     try { localStorage.setItem("followup-view", view); } catch (e) { /* privévenster */ }
-    if (view === "stats") {
+    if (view === "stats" && state.loading) {
+      statsView.innerHTML = skelStats();
+    } else if (view === "stats") {
       // Bij het binnenkomen groeien de balken vanaf de as (styles.css). Alleen
       // dan: bij elke filterklik opnieuw zou het een trucje worden.
       statsView.classList.add("enter");
@@ -2449,6 +2762,16 @@
       state.log[d.logPick] = toggle(state.log[d.logPick], d.value);
     } else if ("logPeriod" in d) {
       state.log.period = el.value;
+    } else if ("agWho" in d) {
+      // De hele agenda hertekent, dus onthouden we dat de uitklapper openstond:
+      // anders klapt hij dicht bij elk vinkje.
+      state.agenda = { ...state.agenda, assignees: toggle(state.agenda.assignees, d.value), day: "", whoOpen: true };
+      renderAgenda();
+      // De hele agenda is hertekend, dus het vakje waar je stond is een nieuw
+      // vakje. Zonder dit staat de focus weer bovenaan de pagina.
+      const again = [...agendaView.querySelectorAll("[data-ag-who]")].find((x) => x.dataset.value === d.value);
+      if (again) again.focus();
+      return;
     } else return;
     state.log.limit = LOG_STEP;
     renderLogBody();
@@ -2476,6 +2799,85 @@
     const saved = localStorage.getItem("followup-view");
     if (saved && !["stats", "agenda", "users"].includes(saved)) setView(saved);
   } catch (e) { /* privévenster */ }
+
+  // Herladen brengt je terug waar je was: hetzelfde scherm, dezelfde fiche,
+  // met de gegevens van nu. In sessionStorage en niet in localStorage: dat is
+  // dit tabblad, dus wie de app opnieuw opent begint gewoon op de kaart. We
+  // schrijven het op bij het weggaan in plaats van bij elke klik — één plaats,
+  // en niets om bij te houden in de schermen zelf.
+  const PLACE_KEY = "followup-place";
+  window.addEventListener("pagehide", () => {
+    try {
+      sessionStorage.setItem(PLACE_KEY, JSON.stringify({
+        view: document.body.dataset.view,
+        hospital: state.ficheOpen ? state.selectedId : null,
+        tab: state.agenda.tab,
+        // Waar de kaart stond, zodat ze er meteen weer staat en niet eerst de
+        // hele Benelux toont. Een verborgen kaart heeft geen zinnig midden.
+        at: map.getContainer().offsetWidth ? [map.getCenter().lat, map.getCenter().lng, map.getZoom()] : null,
+      }));
+    } catch (e) { /* privévenster */ }
+  });
+  function readPlace() {
+    try {
+      const place = JSON.parse(sessionStorage.getItem(PLACE_KEY) || "null");
+      return place && typeof place === "object" ? place : null;
+    } catch (e) { return null; } // privévenster, of iets onleesbaars
+  }
+  // Meteen bij het laden, nog vóór de gegevens er zijn: het scherm waar je was
+  // gaat al open, met streepjes waar de inhoud komt. Anders zag je eerst even
+  // de kaart en sprong de app daarna pas naar je plek.
+  // Wat we bij het laden hebben klaargezet. Zodra de gegevens er zijn maken we
+  // het af, maar alleen als je er nog staat: wie tijdens het wachten naar een
+  // ander scherm ging of de fiche sloot, wordt niet teruggetrokken.
+  let early = null;
+  $("#fiche").addEventListener("click", (e) => {
+    if (!e.target.closest("[data-skel-close]")) return;
+    const el = $("#fiche");
+    el.hidden = true;
+    el.innerHTML = "";
+  });
+  function showPlaceEarly() {
+    const place = readPlace();
+    if (!place) return;
+    if (["planned", "log"].includes(place.tab)) state.agenda.tab = place.tab;
+    // Het gebruikersscherm wacht: wie het mag zien weten we pas na aanmelden.
+    if (["stats", "agenda"].includes(place.view)) setView(place.view);
+    if (place.hospital) {
+      const el = $("#fiche");
+      el.innerHTML = skelFiche();
+      el.hidden = false;
+    }
+    if (placeAt(place)) map.setView(place.at.slice(0, 2), place.at[2], { animate: false });
+    early = { place, view: document.body.dataset.view };
+  }
+  // Drie getallen die ook echt een plek op de kaart zijn. sessionStorage is
+  // van de hele site, niet alleen van deze app.
+  const placeAt = (place) => !!place && Array.isArray(place.at) && place.at.length === 3 && place.at.every(Number.isFinite)
+    && Math.abs(place.at[0]) <= 90 && Math.abs(place.at[1]) <= 180 && place.at[2] >= 0 && place.at[2] <= 19;
+  // Zodra de gegevens er zijn, in twee stappen rond renderAll(): eerst welk
+  // ziekenhuis openstond, zodat de fiche in één keer de echte wordt, en erna
+  // de kaart en het scherm.
+  function restoreSelection(place) {
+    const h = place && place.hospital && byId(place.hospital);
+    if (!h) return null;
+    state.selectedId = h.id;
+    state.ficheOpen = true;
+    return h;
+  }
+  function restoreView(place, h) {
+    if (!place) return;
+    // De kaart staat al waar ze stond. Kennen we die plek niet (ze was
+    // verborgen bij het herladen), dan naar het ziekenhuis, zonder vlucht.
+    if (placeAt(place)) map.setView(place.at.slice(0, 2), place.at[2], { animate: false });
+    else if (h && h.lat != null) {
+      if (map.getContainer().offsetWidth) map.setView([h.lat, h.lng], Math.max(map.getZoom(), 13), { animate: false });
+      else state.pendingFocus = [h.lat, h.lng];
+    }
+    const views = ["map", "list", "stats", "agenda", ...(store.can.manageUsers ? ["users"] : [])];
+    if (views.includes(place.view)) setView(place.view);
+  }
+  showPlaceEarly();
 
   // ---------- gebruikers ----------
   // Wie mag wat. Alleen een beheerder komt hier: de menuknop staat verborgen

@@ -395,6 +395,23 @@ p.muted { margin: 0 0 8px; }
 .u-row.skel b { flex: 1 1 200px; max-width: 180px; margin: 0; }
 .u-row.skel span { flex: 0 0 210px; width: auto; height: var(--ctl); margin: 0; border-radius: var(--radius); }
 .u-row.skel span + span { flex-basis: 240px; }
+/* De schermen die al openstaan terwijl de gegevens nog komen (herladen brengt
+   je terug waar je was): de agenda, de statistieken en de fiche. Hele blokken
+   waar een rooster of een grafiek komt, streepjes waar tekst komt. */
+.skel-box { border-radius: var(--radius-lg); background: var(--press); margin-bottom: 24px; }
+.skel-cal { height: 300px; }
+.skel-card { height: 260px; }
+.skel-filters { height: var(--ctl); max-width: 720px; margin-bottom: 16px; }
+.ag-row.skel > div { flex: 1; }
+.ag-row.skel span { margin-bottom: 6px; }
+.s-tile.skel span { width: 64%; margin: 2px 0 12px; }
+.s-tile.skel b { width: 40%; height: 18px; margin: 0 0 4px; }
+.fiche-skel-head { display: flex; justify-content: flex-end; padding: calc(10px + var(--safe-top, 0px)) 12px 0; }
+.fiche-skel { padding: 12px 20px 22px; }
+/* Twee klassen, anders wint de breedte die .skel:nth-child aan elke b geeft. */
+.fiche-skel.skel .skel-title { width: 58%; height: 16px; margin: 0 0 30px; }
+.fiche-skel span { margin-bottom: 14px; }
+.fiche-skel span:nth-of-type(3n) { margin-bottom: 30px; }
 [aria-busy="true"] { position: relative; overflow: hidden; }
 [aria-busy="true"]::after {
   content: ""; position: absolute; inset: 0; width: 60%; pointer-events: none;
@@ -621,15 +638,25 @@ dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap
 .login {
   position: fixed; inset: 0; z-index: 6000; background: var(--bg);
   display: flex; align-items: center; justify-content: center; padding: 16px;
+  /* Een kaart die hoger is dan het scherm (een telefoon op zijn kant, een
+     lange naam op de toestemmingspagina) moet kunnen schuiven; anders zijn
+     de knoppen onderaan onbereikbaar. */
+  overflow-y: auto;
 }
 .login-card {
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-pop);
   padding: 28px 24px; width: min(360px, 100%); display: flex; flex-direction: column; gap: 12px;
+  /* margin: auto en niet alleen centreren: zo blijft de bovenkant bereikbaar
+     wanneer de kaart overloopt. */
+  margin: auto;
 }
 .login-logo { height: 32px; width: auto; align-self: flex-start; margin-bottom: 8px; }
-.login-card p { margin: 0; }
+.login-card p { margin: 0; overflow-wrap: anywhere; }
 .login-card .btn { min-height: 36px; margin-top: 4px; }
 .login-error { color: var(--red-ink); font-size: var(--t-sm); min-height: 1.45em; }
+/* consent.html: de stappen in dezelfde kaart. :not([hidden]), want display
+   zou het hidden-attribuut anders overstemmen. */
+.consent-step:not([hidden]) { display: flex; flex-direction: column; gap: 12px; }
 
 /* ---------- tabbalk (enkel gsm) ---------- */
 .tabbar { display: none; }
@@ -916,6 +943,13 @@ button.cal-day:focus-visible { outline-offset: -2px; }
   transition: background var(--fast) var(--ease);
 }
 .pick-list label:hover { background: var(--hover); }
+/* Veertig collega's passen niet op een scherm: de lijst schuift zelf. Dat
+   knipt haar niet af, want het is haar eigen overflow en niet die van een
+   voorouder. */
+.pick-list { max-height: min(60vh, 420px); overflow-y: auto; }
+/* In de kop van de agenda groeit de knop anders mee met elke aangevinkte
+   naam, tot hij de schakelaar ernaast wegduwt. */
+.agenda-view .s-head .pick { min-width: 150px; max-width: 280px; }
 .pick-list input { margin: 0; }
 /* De scheiding tussen de rij "alle" en de losse producten. Die rij staat op het
    beheerscherm en op de statistiekpagina. */
@@ -1062,6 +1096,17 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
   .log-filters .pick-list { top: 100%; left: 0; right: 0; min-width: 0; }
   .log-filters input[type="search"] { flex: 1 1 100%; font-size: var(--t-md); }
   .log-filters select { flex: 1 1 auto; min-width: 0; }
+  /* "Toegewezen aan: …" en "Ingevoerd door: …" vullen een halve knop al met
+     hun eigen woorden; de naam erachter was dan niet meer te lezen. Die twee
+     krijgen op een telefoon een hele regel. */
+  .log-filters label:has([data-log-pick="authors"]), .log-filters label:has([data-filter="owners"]) { flex-basis: 100%; }
+  .filters.picks .pick:has([data-filter="owners"]) { grid-column: 1 / -1; }
+  /* De keuze in de kop van de agenda: zo breed als de regel, met de lijst
+     eronder even breed, en lange namen breken af in plaats van uit te steken. */
+  .agenda-view .s-head .s-filters { position: relative; }
+  .agenda-view .s-head .pick { position: static; flex: 1 1 auto; min-width: 0; max-width: none; }
+  .agenda-view .s-head .pick-list { top: 100%; left: 0; right: 0; min-width: 0; }
+  .pick-list label { white-space: normal; overflow-wrap: anywhere; }
   .chip { flex: none; }
   .list li { padding: 12px; }
 
