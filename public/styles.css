@@ -638,13 +638,20 @@ dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap
 .login {
   position: fixed; inset: 0; z-index: 6000; background: var(--bg);
   display: flex; align-items: center; justify-content: center; padding: 16px;
+  /* Een kaart die hoger is dan het scherm (een telefoon op zijn kant, een
+     lange naam op de toestemmingspagina) moet kunnen schuiven; anders zijn
+     de knoppen onderaan onbereikbaar. */
+  overflow-y: auto;
 }
 .login-card {
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-pop);
   padding: 28px 24px; width: min(360px, 100%); display: flex; flex-direction: column; gap: 12px;
+  /* margin: auto en niet alleen centreren: zo blijft de bovenkant bereikbaar
+     wanneer de kaart overloopt. */
+  margin: auto;
 }
 .login-logo { height: 32px; width: auto; align-self: flex-start; margin-bottom: 8px; }
-.login-card p { margin: 0; }
+.login-card p { margin: 0; overflow-wrap: anywhere; }
 .login-card .btn { min-height: 36px; margin-top: 4px; }
 .login-error { color: var(--red-ink); font-size: var(--t-sm); min-height: 1.45em; }
 /* consent.html: de stappen in dezelfde kaart. :not([hidden]), want display
