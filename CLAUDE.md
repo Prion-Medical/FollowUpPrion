@@ -103,6 +103,9 @@ Two things that cost an evening to find out:
 | `public/styles.css` | The look: white panels on cool grey, system font, one blue accent `#2563eb`, light and dark |
 | `server.py` | Local static server + `GET`/`PUT /api/data` |
 | `data/seed.json` | 40 starter hospitals (BE/NL/LU), no contacts, approximate coordinates |
+| `public/consent.html`, `consent.js` | The page where someone allows an assistant to act as them (see The assistant connector) |
+| `supabase/functions/agent/index.ts` | The connector an assistant such as Claude talks to: a Supabase Edge Function, one file, no imports |
+| `docs/agent-instructions.md` | What to paste into the assistant's project so it behaves like a colleague who keeps the log |
 
 ## Conventions
 
@@ -152,7 +155,10 @@ whole point: it therefore knows what is ticked and what each row is called, so i
 the summary on the button, both when first rendered and on every tick. Five screens
 each kept that summary themselves before, with five different data attributes. A screen
 that moves ticks itself calls `syncPick()`, because a checkbox set from JavaScript
-fires no `change`. `attrs` goes into the tag unescaped — they are attributes and not
+fires no `change`. A fourth argument is what goes in front of the names once
+something is ticked — "Assigned to: Anna" — for a dropdown whose rows are people and
+do not say what they stand for; filters carry their wording inside the field and
+never as a label in front of it. `attrs` goes into the tag unescaped — they are attributes and not
 text — so the caller wraps its own values in `esc()`, as everywhere else here. A row
 called "all" is a row like any other, which is why "all products" is also automatically
 the text on the button. `type: "radio"` makes it a choice of one.
@@ -283,6 +289,27 @@ and the CSV working; do not write to them directly. The old `demoDate` field was
 into `planned[]` the same way: `normalize()` turns it into a planned moment of type
 `demo` and drops the field, and the "demo's gepland" KPI and the CSV column both read
 `planned[]` now. There is one place to plan a demo, and it clears itself when ticked off.
+
+**Assigned to.** Two things can be assigned to a person, and they share one word.
+A product at a hospital: `owner` in that product's row in `h.pipeline` (the field
+kept its name; the label became "Assigned to"). And a planned moment: `assignee` on
+the entry in `planned[]`. A planned moment is for whoever entered it unless someone
+else is chosen, so `assigneeOf()` falls back to `createdBy`, and **the field is only
+stored when it differs from the author**. That is not tidiness: writing an empty
+`assignee` onto every older moment would make the first person to save the last
+editor of the whole agenda. The dialog offers only colleagues whose scope includes
+the moment's product — a convenience and not a wall, since the database hides the
+moment from anyone else anyway. Ticking a moment off drops the assignment. Lists of
+people put the signed-in user first, marked "(me)" (`personLabel()`).
+
+**Where you were.** A reload reopens the same screen: `pagehide` writes the view,
+the open hospital, the agenda tab and the map's position to `sessionStorage`
+(`followup-place`) — per tab, so opening the app afresh still starts on the map.
+`showPlaceEarly()` restores it before the data is there, with `state.loading`
+making `setView()` draw placeholders (`skelAgenda()`, `skelStats()`, `skelFiche()`)
+instead of an empty screen; `restoreSelection()` and `restoreView()` finish the job
+around the first `renderAll()`. The users screen waits for the data, because who may
+see it is not known before sign-in.
 
 **The logbook.** The agenda page has two tabs: what is planned (`planned[]`) and the
 logbook, every contact moment across hospitals, newest first and grouped per week
@@ -486,9 +513,58 @@ materially, or it stops guarding anything.
 `supabase/toegang.sql` is the third one, and the one to run now and then rather than
 after a change: it checks that the grants, the RLS and the roles are still what the
 schema intends — `app_state` and `app_state_backups` unreachable, no `usage` on
-`followup`, the two RPCs executable, every account with a row, at least one admin. It
+`followup`, the three RPCs executable, every account with a row, at least one admin. It
 cannot see whether sign-up is disabled or whether 2FA is on, because neither lives in
 the database; the file names both at the foot.
+
+## The assistant connector
+
+`supabase/functions/agent/index.ts` lets an assistant such as Claude work in
+FollowUp on someone's behalf: look hospitals up, log and plan moments, keep contacts
+and follow-up up to date, and answer questions about the agenda, the logbook and the
+figures. It speaks the Model Context Protocol over plain JSON-RPC and is hand-written
+for the same reason everything else is: one file, no imports, no packages. **It has
+run against the development project only.** Nothing of it exists on the live project
+yet.
+
+Three rules it rests on:
+
+- **Narrow tools, never the document.** The function reads, changes and writes; the
+  model only names a hospital and a field. A language model must not carry hundreds
+  of records back and forth.
+- **The signed-in user's own token, never the service key.** It is passed unchanged
+  to `read_state()` and `write_state()`, so the role, the product wall, the stamp and
+  the cap on deletions apply exactly as in the app. `controle.sql` therefore still
+  says everything there is to say about what an assistant can reach.
+- **The rules now exist in a third place.** What a contact moment does to the colour
+  and the stage (`autoStatus`, `stageStatus`, `syncPipeline`, `syncRooms`,
+  `syncNextAction`, `syncProducts`), the fixed lists from `domain.js` and the counting
+  rules from `stats.js` are copied into the function. Change one in `app.js` and it
+  must change there too. If the connector stays, these belong in the database, where
+  the app and the assistant would share them and `controle.sql` could check them.
+
+Signing in goes through Supabase Auth acting as an OAuth server. In the dashboard:
+OAuth Server on, authorization path `/consent.html`, dynamic client registration off,
+and one hand-registered public client for Claude with both
+`https://claude.ai/api/mcp/auth_callback` and the `claude.com` variant as redirect
+URIs. Supabase sends the user to `public/consent.html`, which reuses the app's
+session in that browser — hence the "not you?" link — and loads a newer supabase-js
+than `index.html`, because only that one knows `auth.oauth`. The function is deployed
+by pasting it into the dashboard's editor (there is no CLI here), with **Verify JWT
+off**: an assistant without a token must get the function's own 401, which says where
+to sign in. The token is still checked on every call, and a failure to check it
+answers 503 and not 401 — a 401 makes the assistant throw its token away.
+
+Removing a record always takes two calls: the first returns what would go and a
+code, the second removes. The code is tied to the user, the record and the document's
+timestamp. It forces the two steps; it cannot prove a person said yes, and in Claude's
+Auto mode nothing else does either. The real limit is the database's: a `contributor`
+cannot remove anything, which is the role to give anyone who only dictates.
+
+Open at the time of writing: the first connection dropped within forty minutes and
+the cause was not found, so whether the token renews by itself after an hour is
+unproven; and signing out of the app ends every session of that account, which as
+far as we know includes the assistant's.
 
 ## Git
 
@@ -505,12 +581,24 @@ the database; the file names both at the foot.
 
 Not bugs; decisions. Reviewers will flag them, so the reasoning is recorded here.
 
-- **One JSON document, last-write-wins** with an `updated_at` check. A conflict is
-  detected and reported rather than silently lost, but two people editing at once means
-  one of them redoes their work. Fine for a handful of users; it does not scale further.
-- **Two people editing at once still collide.** The conflict check is per document,
-  not per hospital, so an Ainex and an EndoQ user saving in the same second means one
-  of them redoes their work — even though they touched different records.
+- **One JSON document, with an `updated_at` check per document.** The database
+  still refuses a save when anyone saved in between, whatever they touched. The app
+  no longer passes that on to the user: on a refused save it fetches the current
+  document, lays the local change on top (`merge3()` in `public/domain.js`, driven by
+  `pull()` in `app.js`) and saves again. Only when both sides changed the *same* field
+  of the same record differently does the banner appear, and that person redoes one
+  change. Three things keep this safe and must stay: `store.peek()` reads without
+  adopting the new timestamp and `store.accept()` adopts it only after a successful
+  merge (adopting first and failing to merge would let a stale document overwrite a
+  colleague's work); a changed role or scope is never merged, only reloaded; and an
+  import is never merged, since it replaces everything on purpose. The merge is in
+  the browser, not in the database, so the check per hospital that would make this a
+  property of the data itself is still not there.
+- **The app refreshes itself quietly.** When the tab regains focus, and every thirty
+  seconds while it is open, it asks `state_version()` whether anything was saved and
+  merges it in if so. Not while a dialog is open or a save is under way. The function
+  returns a timestamp and nothing else, so it needs no wall; if it is missing from the
+  database the app simply behaves as before.
 - **"No importing" stops a deletion, not a rewrite.** `mode` comes from the client, so
   a `contributor` with the developer console can send an old backup as an ordinary save:
   if no id disappears, the inventory lets it through and every field is rolled back
