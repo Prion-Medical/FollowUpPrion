@@ -39,13 +39,18 @@ from (
   union all select 7, 'schema followup: anon heeft geen usage', false,
          has_schema_privilege('anon', 'followup', 'usage')
 
-  -- --- de twee deuren die wél open horen te staan --------------------------
+  -- --- de drie deuren die wél open horen te staan --------------------------
   union all select 8, 'read_state: authenticated mag uitvoeren', true,
          has_function_privilege('authenticated', 'public.read_state()', 'execute')
   union all select 9, 'write_state: authenticated mag uitvoeren', true,
          has_function_privilege('authenticated', 'public.write_state(jsonb, timestamptz, text)', 'execute')
   union all select 10, 'read_state: anon mag niet uitvoeren', false,
          has_function_privilege('anon', 'public.read_state()', 'execute')
+  -- Het tijdstip van de laatste opslag, voor het stille herladen in de app.
+  union all select 20, 'state_version: authenticated mag uitvoeren', true,
+         has_function_privilege('authenticated', 'public.state_version()', 'execute')
+  union all select 21, 'state_version: anon mag niet uitvoeren', false,
+         has_function_privilege('anon', 'public.state_version()', 'execute')
 
   -- --- rij-beveiliging staat aan -------------------------------------------
   -- Het vangnet onder de grants: ook een rol die de tabel wél mag zien, komt

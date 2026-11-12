@@ -80,6 +80,10 @@ window.FollowUpStore = (() => {
       if (!res.ok) throw new Error(t("store.localFail"));
       return { db: await res.json(), empty: false };
     },
+    // Lokaal is er maar één gebruiker: er verandert niets achter je rug.
+    async changed() { return false; },
+    async peek() { return { ...(await this.load()), at: null, sameAccess: true }; },
+    accept() {},
     async save(db) {
       const res = await fetch("/api/data", {
         method: "PUT",
@@ -201,6 +205,35 @@ window.FollowUpStore = (() => {
       if (!data || data.data == null) return { db: { version: 1, hospitals: [] }, empty: true };
       return { db: data.data, empty: false };
     },
+    // Heeft iemand anders bewaard sinds wij lazen of schreven? Eén tijdstip
+    // ophalen, niet het document. Bestaat de functie nog niet in de databank
+    // (schema.sql nog niet opnieuw uitgevoerd), dan zeggen we nee: de app werkt
+    // dan zoals voorheen en merkt het bij de eerstvolgende opslag.
+    async changed() {
+      const { data, error } = await client.rpc("state_version");
+      if (error || !data || !lastUpdated) return false;
+      return Date.parse(data) !== Date.parse(lastUpdated);
+    },
+    // Het document van nu ophalen zónder het al als het onze te beschouwen.
+    // Dat onderscheid is de hele veiligheid van het samenvoegen: wie hier het
+    // tijdstip al overnam en daarna niet kan samenvoegen, zou met zijn oude
+    // document het werk van de collega overschrijven. accept() zet het
+    // tijdstip pas wanneer de app het nieuwe document echt heeft overgenomen.
+    async peek() {
+      const { data, error } = await client.rpc("read_state");
+      if (error) throw new Error(error.message);
+      const mine = (me && me.products) || [];
+      const theirs = (data && data.products) || [];
+      return {
+        db: data && data.data != null ? data.data : { version: 1, hospitals: [] },
+        at: (data && data.updated_at) || null,
+        // Een andere rol of een ander bereik betekent een ander stuk van het
+        // document: dat valt niet samen te voegen met wat hier staat.
+        sameAccess: !!data && data.role === (me && me.role)
+          && mine.length === theirs.length && mine.every((p) => theirs.includes(p)),
+      };
+    },
+    accept(at) { lastUpdated = at; },
     // mode "import" is een back-up over de data zetten; alles anders is een
     // gewone opslag. De databank houdt die twee uit elkaar omdat een import
     // niets verwijdert en tóch alles terugdraait.

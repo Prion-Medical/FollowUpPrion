@@ -55,7 +55,10 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   -- eigen rij aan en is de fase van het andere product daarna kwijt.
   ('opvolging_aanvullen', 'pipeline',       'bestaat die functie überhaupt'),
   ('read_state',      'opvolging_aanvullen', 'een oud document wordt omgezet vóór het afgeschermd wordt'),
-  ('write_state',     'opvolging_aanvullen', 'een oud document wordt omgezet vóór het samengevoegd wordt')
+  ('write_state',     'opvolging_aanvullen', 'een oud document wordt omgezet vóór het samengevoegd wordt'),
+  -- Het stille herladen. Ontbreekt deze, dan werkt de app gewoon verder maar
+  -- merkt ze een wijziging van een collega pas bij de eerstvolgende opslag.
+  ('state_version',   'updated_at',     'de app kan vragen of er iets veranderd is')
 )
 select v.functie,
        v.waarvoor,

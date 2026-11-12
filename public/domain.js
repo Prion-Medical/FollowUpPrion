@@ -270,7 +270,88 @@ window.FollowUpDomain = (() => {
     });
   }
 
+  // ---------- twee mensen tegelijk ----------
+  // Het document is één geheel en de databank weigert een opslag zodra iemand
+  // anders ondertussen iets bewaarde, wat het ook was. Hiermee hoeft dat geen
+  // "herlaad en doe het opnieuw" meer te zijn: we leggen drie versies naast
+  // elkaar — basis (wat we laatst van de databank kenden), mine (wat hier nu
+  // staat) en theirs (wat de databank nu heeft) — en nemen van elk stuk de
+  // kant die veranderd is. Pas als allebei hetzelfde stuk anders veranderden
+  // is er echt een conflict, en dat komt in de lijst terecht.
+  //
+  // Zuiver rekenwerk op gewone JSON, zodat het zonder browser na te kijken is.
+  const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  const deepEqual = (a, b) => {
+    if (a === b) return true;
+    if (Array.isArray(a) || Array.isArray(b)) {
+      return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));
+    }
+    if (!isObj(a) || !isObj(b)) return false;
+    // De volgorde van de sleutels telt niet: de app en de databank bouwen
+    // hetzelfde object niet altijd in dezelfde volgorde op.
+    const ka = Object.keys(a).filter((k) => a[k] !== undefined);
+    const kb = Object.keys(b).filter((k) => b[k] !== undefined);
+    return ka.length === kb.length && ka.every((k) => deepEqual(a[k], b[k]));
+  };
+  // Een lijst van records met een id (ziekenhuizen, contactpersonen,
+  // contactmomenten, geplande momenten) of een lijst van losse waarden
+  // (producten, merken). Een lege lijst past bij allebei.
+  const isRecords = (v) => Array.isArray(v) && v.every((x) => isObj(x) && typeof x.id === "string" && x.id);
+  const isValues = (v) => Array.isArray(v) && v.every((x) => !isObj(x) && !Array.isArray(x));
+  // De stempel zet de databank zelf, op wie bewaart: daarover valt niet te
+  // twisten. En wat op het ziekenhuis is afgeleid, rekent normalize() na het
+  // samenvoegen opnieuw uit.
+  const STAMP_KEYS = ["createdBy", "createdAt", "updatedBy", "updatedAt"];
+  const DERIVED_KEYS = ["status", "stage", "nextAction", "nextActionDate"];
+  const settled = (path) => STAMP_KEYS.includes(path[path.length - 1])
+    || (path.length === 3 && path[0] === "hospitals" && DERIVED_KEYS.includes(path[2]));
+  function merge3(base, mine, theirs, conflicts = [], path = []) {
+    if (deepEqual(mine, theirs)) return mine;
+    if (deepEqual(mine, base)) return theirs;
+    if (deepEqual(theirs, base)) return mine;
+    // Vanaf hier veranderden allebei, en niet naar hetzelfde.
+    if (isRecords(mine) && isRecords(theirs) && (base == null || isRecords(base))) {
+      const b = new Map((base || []).map((r) => [r.id, r]));
+      const m = new Map(mine.map((r) => [r.id, r]));
+      const out = [];
+      // Hun volgorde, met wat alleen hier bestaat erachter.
+      for (const r of theirs) {
+        if (m.has(r.id)) out.push(merge3(b.get(r.id), m.get(r.id), r, conflicts, [...path, r.id]));
+        else if (!b.has(r.id)) out.push(r); // door hen toegevoegd
+        // Hier verwijderd. Bleef het bij hen zoals het was, dan is het weg;
+        // werkten zij er net aan, dan mag het niet stil verdwijnen.
+        else if (!deepEqual(r, b.get(r.id))) { conflicts.push([...path, r.id]); out.push(r); }
+      }
+      const seen = new Set(theirs.map((r) => r.id));
+      for (const r of mine) {
+        if (seen.has(r.id)) continue;
+        if (!b.has(r.id)) out.push(r); // hier toegevoegd
+        // Door hen verwijderd terwijl het hier veranderde.
+        else if (!deepEqual(r, b.get(r.id))) { conflicts.push([...path, r.id]); out.push(r); }
+      }
+      return out;
+    }
+    if (isValues(mine) && isValues(theirs) && (base == null || isValues(base))) {
+      // Vinkjes: wat zij hebben, plus wat hier bijkwam, min wat hier wegging.
+      const b = base || [];
+      const gone = b.filter((x) => !mine.includes(x));
+      const added = mine.filter((x) => !b.includes(x));
+      return [...theirs.filter((x) => !gone.includes(x)), ...added.filter((x) => !theirs.includes(x))];
+    }
+    if (isObj(mine) && isObj(theirs) && (base == null || isObj(base))) {
+      const out = {};
+      for (const k of new Set([...Object.keys(theirs), ...Object.keys(mine)])) {
+        const v = merge3(base == null ? undefined : base[k], mine[k], theirs[k], conflicts, [...path, k]);
+        if (v !== undefined) out[k] = v;
+      }
+      return out;
+    }
+    if (!settled(path)) conflicts.push(path);
+    return mine;
+  }
+
   return {
+    merge3, deepEqual,
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,

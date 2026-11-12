@@ -1155,6 +1155,17 @@ begin
 end $$;
 
 
+-- Is er iets veranderd sinds ik laadde? De app vraagt dit wanneer je naar het
+-- tabblad terugkeert, en haalt het document pas op als het antwoord anders is
+-- dan wat ze heeft. Het is alleen het tijdstip van de laatste opslag: daar
+-- staat niets in van welk product ook, dus hier hoeft geen muur omheen.
+-- Geen rij (nog geen document) geeft null terug.
+create or replace function public.state_version() returns timestamptz
+language sql stable security definer set search_path = public as $$
+  select updated_at from public.app_state where id = 'main';
+$$;
+
+
 -- ---------------------------------------------------------------------------
 -- 11. Rechten
 -- ---------------------------------------------------------------------------
@@ -1202,7 +1213,9 @@ create policy "beheerder gebruikers wijzigen" on public.app_users
   with check (public.is_admin());
 
 -- Een functie is standaard voor iedereen uitvoerbaar, en van alles in "public"
--- maakt PostgREST een /rpc/-adres. Daarom hier expliciet welke drie dat zijn.
+-- maakt PostgREST een /rpc/-adres. Daarom hier expliciet welke vier dat zijn.
+revoke all on function public.state_version() from public, anon;
+grant execute on function public.state_version() to authenticated;
 revoke all on function public.read_state() from public, anon;
 revoke all on function public.write_state(jsonb, timestamptz, text) from public, anon;
 revoke all on function public.is_admin() from public, anon;

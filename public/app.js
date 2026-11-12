@@ -12,7 +12,7 @@
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
-    esc, pickBox, syncPick, myProducts, productColor,
+    esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual,
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
   const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
@@ -189,13 +189,106 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, 400);
   }
+  // ---------- samen werken ----------
+  // base is het document zoals we het laatst van de databank kennen: wat we
+  // laadden, of wat we zelf met succes bewaarden. Daartegen meten we af wat
+  // hier veranderd is en wat bij een collega (merge3 in domain.js).
+  let base = null;
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  let saving = false;
+  let pulling = false;
+  // Het samengevoegde document overnemen zonder de objecten te vervangen waar
+  // een open dialoog of de fiche nog naar wijst: een ziekenhuis, een
+  // contactpersoon of een moment dat al bestond blijft hetzelfde object en
+  // krijgt alleen nieuwe inhoud. Anders bewaart een dialoog die openstond
+  // zijn wijziging in een object dat niet meer in het document zit.
+  function refill(target, src) {
+    for (const k of Object.keys(target)) if (!(k in src)) delete target[k];
+    for (const [k, v] of Object.entries(src)) {
+      const old = target[k];
+      if (Array.isArray(v) && Array.isArray(old) && v.every((r) => r && typeof r === "object" && r.id)) {
+        const known = new Map(old.filter((r) => r && r.id).map((r) => [r.id, r]));
+        target[k] = v.map((r) => (known.has(r.id) ? refill(known.get(r.id), r) : r));
+      } else target[k] = v;
+    }
+    return target;
+  }
+  // Ophalen wat er nu staat en het hier erbovenop leggen. Geeft terug:
+  //   "clean"    het document van de databank, hier is niets meer te bewaren
+  //   "dirty"    samengevoegd, met wijzigingen van hier die nog weg moeten
+  //   "conflict" allebei veranderden hetzelfde, of de toegang is veranderd
+  async function pull() {
+    if (pulling) return "busy";
+    pulling = true;
+    try {
+      // Zonder basis (het laden mislukte) valt niet te zeggen wat hier
+      // veranderd is: dan zou alles van hier winnen van alles van daar.
+      if (!base) return "conflict";
+      const fresh = await store.peek();
+      if (!fresh.sameAccess) return "conflict";
+      fresh.db.version = Math.max(Number(fresh.db.version) || 1, DB_VERSION);
+      fresh.db.hospitals.forEach(normalize);
+      const conflicts = [];
+      const merged = merge3(base, state.db, fresh.db, conflicts);
+      if (conflicts.length) return "conflict";
+      merged.hospitals.forEach(normalize);
+      const mineLeft = !deepEqual(merged, fresh.db);
+      refill(state.db, clone(merged));
+      base = clone(fresh.db);
+      store.accept(fresh.at);
+      // Wie in de fiche aan het typen is, houdt zijn veld: wat hij typt staat
+      // nog niet in het document en zou bij een hertekening weg zijn.
+      const a = document.activeElement;
+      if (a && a.closest && a.closest("#fiche") && a.matches("input, textarea, select")) {
+        renderFilters(); renderKpis(); renderList(); renderMarkers();
+      } else renderAll();
+      return mineLeft ? "dirty" : "clean";
+    } finally {
+      pulling = false;
+    }
+  }
+  // Stil bijwerken. Wanneer je naar het tabblad terugkeert, en af en toe
+  // terwijl het openstaat, vragen we of er iets veranderd is; zo ja, dan komt
+  // het erbij zonder dat je er iets van merkt. Niet terwijl er een dialoog
+  // openstaat of een opslag onderweg is: die regelen het zelf.
+  async function refreshQuietly() {
+    if (store.mode !== "supabase" || state.loading || document.hidden) return;
+    if (saving || pulling || dirty || document.querySelector("dialog[open]")) return;
+    try {
+      if (!(await store.changed())) return;
+      const result = await pull();
+      if (result === "conflict") showBanner(t("save.conflict"), true, "warn");
+    } catch (e) {
+      // Geen netwerk, even geen databank: dit was maar een beleefdheid, de
+      // eerstvolgende opslag merkt het vanzelf.
+    }
+  }
+  document.addEventListener("visibilitychange", refreshQuietly);
+  window.addEventListener("focus", refreshQuietly);
+  setInterval(refreshQuietly, 30000);
+
   // "import" geldt voor één opslag: de eerstvolgende. Daarna weer gewoon.
   let saveMode = "save";
   async function save() {
     const mode = saveMode;
     saveMode = "save";
+    saving = true;
     try {
-      await store.save(state.db, mode);
+      // Iemand anders bewaarde ondertussen: ophalen, samenvoegen en opnieuw
+      // proberen, zonder er de gebruiker mee lastig te vallen. Een paar keer,
+      // want in de tijd van het ophalen kan er nog iemand bewaard hebben. Een
+      // import voegen we niet samen: die zet bewust alles terug.
+      for (let attempt = 0; ; attempt++) {
+        const sent = clone(state.db);
+        try {
+          await store.save(state.db, mode);
+          base = sent;
+          break;
+        } catch (e) {
+          if (!(e instanceof store.ConflictError) || mode === "import" || attempt >= 3) throw e;
+          if ((await pull()) === "conflict") throw e;
+        }
+      }
       dirty = false;
       showSaveState("save.saved");
     } catch (e) {
@@ -206,6 +299,8 @@
         const hint = store.mode === "local" ? t("save.errorLocal") : t("save.errorOnline");
         showBanner(t("save.errorBody", { hint, msg: e.message }));
       }
+    } finally {
+      saving = false;
     }
   }
   window.addEventListener("beforeunload", (e) => {
@@ -2393,6 +2488,9 @@
       if (Number(state.db.version) > DB_VERSION) showBanner(t("save.newerVersion"), false, "warn");
       state.db.version = Math.max(Number(state.db.version) || 1, DB_VERSION);
       state.db.hospitals.forEach(normalize);
+      // Wat we nu van de databank kennen; daartegen meten we later af wat hier
+      // veranderde en wat bij een collega.
+      base = clone(state.db);
       // read_state geeft de rol en het bereik mee waarmee dit document is
       // uitgelezen; is daar iets aan veranderd, dan kloppen de knoppen nu pas.
       applyRights();
