@@ -344,14 +344,35 @@ window.FollowUpDomain = (() => {
       out.unit = { ...out.unit, roomsInstalled: Math.max(0, n(base) + dm + dt) };
       drop(["unit", "roomsInstalled"]);
     }
-    // Eén hoofdcontact. Kozen twee mensen elk een ander, dan zouden er na het
-    // samenvoegen twee zijn; die regel woont in de dialoog en niet in
-    // normalize(). Wie nu bewaart heeft het laatste woord.
+    // Eén hoofdcontact per product. Kozen twee mensen elk een ander voor
+    // hetzelfde product, dan zouden er na het samenvoegen twee zijn; die regel
+    // woont in de dialoog en niet in normalize(). Wie nu bewaart heeft het
+    // laatste woord, en wat een collega voor een ander product koos blijft.
     if (Array.isArray(out.contacts) && out.contacts.filter((c) => c && c.primary).length > 1) {
-      const keep = ((mine.contacts || []).find((c) => c && c.primary) || {}).id;
-      out.contacts = out.contacts.map((c) => (c && c.primary && c.id !== keep ? { ...c, primary: false } : c));
+      const kept = out.contacts.filter((c) => c && c.primary && (mine.contacts || []).some((m) => m && m.primary && m.id === c.id));
+      out.contacts = out.contacts.map((c) => (c && c.primary && !kept.includes(c) && kept.some((k) => sameGround(k, c)) ? { ...c, primary: false } : c));
     }
   }
+  // Hoofdcontact is er één per product: het sterretje van een contactpersoon
+  // geldt voor de producten waar hij bij hoort. Twee contactpersonen staan
+  // elkaar in de weg zodra ze een product delen, of zodra een van beide bij
+  // geen enkel product hoort en dus voor het ziekenhuis als geheel geldt. Er
+  // is bewust geen apart veld per product: wie bij twee producten hoort is
+  // hoofdcontact voor allebei of voor geen van beide.
+  const sameGround = (a, b) => {
+    const pa = a.products || [], pb = b.products || [];
+    return !pa.length || !pb.length || pa.some((p) => pb.includes(p));
+  };
+  const setMain = (h, c) => {
+    for (const x of h.contacts) if (x !== c && x.primary && sameGround(x, c)) x.primary = false;
+    c.primary = true;
+  };
+  // Het hoofdcontact voor een product; zonder product het eerste dat er is.
+  const mainContact = (h, product) => {
+    const mains = h.contacts.filter((c) => c.primary);
+    if (!product) return mains[0];
+    return mains.find((c) => (c.products || []).includes(product)) || mains.find((c) => !(c.products || []).length);
+  };
   function merge3(base, mine, theirs, conflicts = [], path = []) {
     if (deepEqual(mine, theirs)) return mine;
     if (deepEqual(mine, base)) return theirs;
@@ -410,7 +431,7 @@ window.FollowUpDomain = (() => {
   }
 
   return {
-    merge3, deepEqual,
+    merge3, deepEqual, setMain, mainContact,
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,

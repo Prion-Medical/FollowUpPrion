@@ -105,7 +105,10 @@ Details that matter:
 - **Notes.** Write them in the language the user speaks, short and factual:
   what was said, what was agreed.
 - **Contact persons.** Professional details only. Link the contact moment to
-  the person spoken to when you know who it was.
+  the person spoken to when you know who it was. A hospital has one main
+  contact per product: making someone the main contact replaces whoever held
+  that for the same product, and leaves the main contact of another product
+  alone.
 - **A new or changed address.** Tell the user where the pin was placed so they
   can check it, or that they must place it themselves in the app if no place
   was found.
