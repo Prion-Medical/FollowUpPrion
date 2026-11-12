@@ -299,12 +299,57 @@ window.FollowUpDomain = (() => {
   const isRecords = (v) => Array.isArray(v) && v.every((x) => isObj(x) && typeof x.id === "string" && x.id);
   const isValues = (v) => Array.isArray(v) && v.every((x) => !isObj(x) && !Array.isArray(x));
   // De stempel zet de databank zelf, op wie bewaart: daarover valt niet te
-  // twisten. En wat op het ziekenhuis is afgeleid, rekent normalize() na het
-  // samenvoegen opnieuw uit.
+  // twisten. nextAction volgt altijd uit planned[], en normalize() rekent het
+  // na het samenvoegen opnieuw uit.
   const STAMP_KEYS = ["createdBy", "createdAt", "updatedBy", "updatedAt"];
-  const DERIVED_KEYS = ["status", "stage", "nextAction", "nextActionDate"];
+  const DERIVED_KEYS = ["nextAction", "nextActionDate"];
+  const isHospital = (path) => path.length === 2 && path[0] === "hospitals";
   const settled = (path) => STAMP_KEYS.includes(path[path.length - 1])
     || (path.length === 3 && path[0] === "hospitals" && DERIVED_KEYS.includes(path[2]));
+  // Een record zonder zijn stempel. De app zet de stempel zelf en de databank
+  // zet hem opnieuw, en die twee zijn niet altijd letterlijk gelijk (de dag
+  // van de browser tegenover die van Brussel). Wie daarop vergelijkt, ziet
+  // een wijziging van de collega waar er geen is.
+  const bare = (r) => {
+    if (!isObj(r)) return r;
+    const o = {};
+    for (const k of Object.keys(r)) if (!STAMP_KEYS.includes(k)) o[k] = r[k];
+    return o;
+  };
+  const untouched = (now, before) => deepEqual(bare(now), bare(before));
+  // Kamers die een contactmoment bijtelt of aftrekt: dezelfde regel als
+  // syncRooms() in app.js, hier nodig om te zien of een gewijzigd aantal
+  // geïnstalleerde kamers uit contactmomenten volgt of met de hand is getypt.
+  const roomsFrom = (h) => ((h && h.activities) || []).reduce((n, a) => {
+    if (!a || !a.rooms || productKind(a.product) !== "subscription") return n;
+    return n + (a.type === "installation" ? a.rooms : a.type === "cancellation" ? -a.rooms : 0);
+  }, 0);
+  // Wat alleen op het niveau van één ziekenhuis te beslissen valt.
+  function settleHospital(base, mine, theirs, out, conflicts, path) {
+    const drop = (key) => {
+      const i = conflicts.findIndex((c) => c.length === path.length + key.length && key.every((k, n) => c[path.length + n] === k));
+      if (i >= 0) conflicts.splice(i, 1);
+    };
+    // Geïnstalleerde kamers zijn een teller: een installatie telt erbij, en
+    // twee mensen die er elk een invoeren moeten bij de som uitkomen, niet bij
+    // één van de twee. Volgt de wijziging aan elke kant precies uit de
+    // contactmomenten van die kant, dan tellen we de twee verschillen op. Is
+    // het getal met de hand gezet, dan blijft het wat het algemene
+    // samenvoegen ervan maakte: gelijk is gelijk, anders een conflict.
+    const n = (h) => Number(h && h.unit && h.unit.roomsInstalled) || 0;
+    const dm = n(mine) - n(base), dt = n(theirs) - n(base);
+    if (dm && dt && dm === roomsFrom(mine) - roomsFrom(base) && dt === roomsFrom(theirs) - roomsFrom(base) && isObj(out.unit)) {
+      out.unit = { ...out.unit, roomsInstalled: Math.max(0, n(base) + dm + dt) };
+      drop(["unit", "roomsInstalled"]);
+    }
+    // Eén hoofdcontact. Kozen twee mensen elk een ander, dan zouden er na het
+    // samenvoegen twee zijn; die regel woont in de dialoog en niet in
+    // normalize(). Wie nu bewaart heeft het laatste woord.
+    if (Array.isArray(out.contacts) && out.contacts.filter((c) => c && c.primary).length > 1) {
+      const keep = ((mine.contacts || []).find((c) => c && c.primary) || {}).id;
+      out.contacts = out.contacts.map((c) => (c && c.primary && c.id !== keep ? { ...c, primary: false } : c));
+    }
+  }
   function merge3(base, mine, theirs, conflicts = [], path = []) {
     if (deepEqual(mine, theirs)) return mine;
     if (deepEqual(mine, base)) return theirs;
@@ -320,14 +365,14 @@ window.FollowUpDomain = (() => {
         else if (!b.has(r.id)) out.push(r); // door hen toegevoegd
         // Hier verwijderd. Bleef het bij hen zoals het was, dan is het weg;
         // werkten zij er net aan, dan mag het niet stil verdwijnen.
-        else if (!deepEqual(r, b.get(r.id))) { conflicts.push([...path, r.id]); out.push(r); }
+        else if (!untouched(r, b.get(r.id))) { conflicts.push([...path, r.id]); out.push(r); }
       }
       const seen = new Set(theirs.map((r) => r.id));
       for (const r of mine) {
         if (seen.has(r.id)) continue;
         if (!b.has(r.id)) out.push(r); // hier toegevoegd
         // Door hen verwijderd terwijl het hier veranderde.
-        else if (!deepEqual(r, b.get(r.id))) { conflicts.push([...path, r.id]); out.push(r); }
+        else if (!untouched(r, b.get(r.id))) { conflicts.push([...path, r.id]); out.push(r); }
       }
       return out;
     }
@@ -340,10 +385,22 @@ window.FollowUpDomain = (() => {
     }
     if (isObj(mine) && isObj(theirs) && (base == null || isObj(base))) {
       const out = {};
-      for (const k of new Set([...Object.keys(theirs), ...Object.keys(mine)])) {
+      const keys = [...new Set([...Object.keys(theirs), ...Object.keys(mine)])];
+      // products eerst: daar hangt van af of de kleur en de fase van het
+      // ziekenhuis afgeleid zijn.
+      if (isHospital(path)) keys.sort((a, b) => (b === "products") - (a === "products"));
+      for (const k of keys) {
+        // Een sleutel met deze naam vervangt het prototype in plaats van een
+        // waarde te zetten. In echte gegevens komt hij niet voor.
+        if (k === "__proto__") continue;
+        // Met een product aangevinkt volgen kleur en fase uit de opvolging per
+        // product en rekent normalize() ze opnieuw uit. Zonder product zijn ze
+        // met de hand gezet, en dan is twee keer anders gewoon een conflict.
+        if (isHospital(path) && (k === "status" || k === "stage") && (out.products || []).length) { out[k] = mine[k]; continue; }
         const v = merge3(base == null ? undefined : base[k], mine[k], theirs[k], conflicts, [...path, k]);
         if (v !== undefined) out[k] = v;
       }
+      if (isHospital(path)) settleHospital(base, mine, theirs, out, conflicts, path);
       return out;
     }
     if (!settled(path)) conflicts.push(path);

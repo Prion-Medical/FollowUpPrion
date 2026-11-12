@@ -196,7 +196,12 @@
   let base = null;
   const clone = (v) => JSON.parse(JSON.stringify(v));
   let saving = false;
-  let pulling = false;
+  // Tijdens een opslag kwam er nog een wijziging bij: die gaat in een volgende.
+  let saveAgain = false;
+  // De pull die onderweg is. Wie er intussen ook om vraagt krijgt dezelfde:
+  // een tweede naast de eerste zou op een verouderde basis samenvoegen, en
+  // "bezet, ga maar door" liet de opslag zonder samenvoegen opnieuw proberen.
+  let pulling = null;
   // Het samengevoegde document overnemen zonder de objecten te vervangen waar
   // een open dialoog of de fiche nog naar wijst: een ziekenhuis, een
   // contactpersoon of een moment dat al bestond blijft hetzelfde object en
@@ -205,6 +210,7 @@
   function refill(target, src) {
     for (const k of Object.keys(target)) if (!(k in src)) delete target[k];
     for (const [k, v] of Object.entries(src)) {
+      if (k === "__proto__") continue;
       const old = target[k];
       if (Array.isArray(v) && Array.isArray(old) && v.every((r) => r && typeof r === "object" && r.id)) {
         const known = new Map(old.filter((r) => r && r.id).map((r) => [r.id, r]));
@@ -217,35 +223,33 @@
   //   "clean"    het document van de databank, hier is niets meer te bewaren
   //   "dirty"    samengevoegd, met wijzigingen van hier die nog weg moeten
   //   "conflict" allebei veranderden hetzelfde, of de toegang is veranderd
-  async function pull() {
-    if (pulling) return "busy";
-    pulling = true;
-    try {
-      // Zonder basis (het laden mislukte) valt niet te zeggen wat hier
-      // veranderd is: dan zou alles van hier winnen van alles van daar.
-      if (!base) return "conflict";
-      const fresh = await store.peek();
-      if (!fresh.sameAccess) return "conflict";
-      fresh.db.version = Math.max(Number(fresh.db.version) || 1, DB_VERSION);
-      fresh.db.hospitals.forEach(normalize);
-      const conflicts = [];
-      const merged = merge3(base, state.db, fresh.db, conflicts);
-      if (conflicts.length) return "conflict";
-      merged.hospitals.forEach(normalize);
-      const mineLeft = !deepEqual(merged, fresh.db);
-      refill(state.db, clone(merged));
-      base = clone(fresh.db);
-      store.accept(fresh.at);
-      // Wie in de fiche aan het typen is, houdt zijn veld: wat hij typt staat
-      // nog niet in het document en zou bij een hertekening weg zijn.
-      const a = document.activeElement;
-      if (a && a.closest && a.closest("#fiche") && a.matches("input, textarea, select")) {
-        renderFilters(); renderKpis(); renderList(); renderMarkers();
-      } else renderAll();
-      return mineLeft ? "dirty" : "clean";
-    } finally {
-      pulling = false;
-    }
+  function pull() {
+    if (!pulling) pulling = doPull().finally(() => { pulling = null; });
+    return pulling;
+  }
+  async function doPull() {
+    // Zonder basis (het laden mislukte) valt niet te zeggen wat hier
+    // veranderd is: dan zou alles van hier winnen van alles van daar.
+    if (!base) return "conflict";
+    const fresh = await store.peek();
+    if (!fresh.sameAccess) return "conflict";
+    fresh.db.version = Math.max(Number(fresh.db.version) || 1, DB_VERSION);
+    fresh.db.hospitals.forEach(normalize);
+    const conflicts = [];
+    const merged = merge3(base, state.db, fresh.db, conflicts);
+    if (conflicts.length) return "conflict";
+    merged.hospitals.forEach(normalize);
+    const mineLeft = !deepEqual(merged, fresh.db);
+    refill(state.db, clone(merged));
+    base = clone(fresh.db);
+    store.accept(fresh.at);
+    // Wie in de fiche aan het typen is, houdt zijn veld: wat hij typt staat
+    // nog niet in het document en zou bij een hertekening weg zijn.
+    const a = document.activeElement;
+    if (a && a.closest && a.closest("#fiche") && a.matches("input, textarea, select")) {
+      renderFilters(); renderKpis(); renderList(); renderMarkers();
+    } else renderAll();
+    return mineLeft ? "dirty" : "clean";
   }
   // Stil bijwerken. Wanneer je naar het tabblad terugkeert, en af en toe
   // terwijl het openstaat, vragen we of er iets veranderd is; zo ja, dan komt
@@ -254,6 +258,14 @@
   async function refreshQuietly() {
     if (store.mode !== "supabase" || state.loading || document.hidden) return;
     if (saving || pulling || dirty || document.querySelector("dialog[open]")) return;
+    // Ook niet terwijl je ergens typt, een lijstje openstaat of een speld
+    // versleept: het scherm hertekenen zou dat onder je handen wegnemen. Het
+    // komt een halve minuut later wel.
+    // Een veld dat de focus nog heeft maar niet meer te zien is (in een
+    // dialoog die al dicht is) telt niet: daar typt niemand.
+    const a = document.activeElement;
+    if (a && a.matches && a.matches("input, textarea, select") && a.offsetParent !== null) return;
+    if (state.dragId || state.placing || document.querySelector("details.pick[open]")) return;
     try {
       if (!(await store.changed())) return;
       const result = await pull();
@@ -270,6 +282,8 @@
   // "import" geldt voor één opslag: de eerstvolgende. Daarna weer gewoon.
   let saveMode = "save";
   async function save() {
+    // Eén opslag tegelijk. Wat ondertussen verandert, gaat in de volgende.
+    if (saving) { saveAgain = true; return; }
     const mode = saveMode;
     saveMode = "save";
     saving = true;
@@ -289,9 +303,13 @@
           if ((await pull()) === "conflict") throw e;
         }
       }
-      dirty = false;
+      dirty = saveAgain;
       showSaveState("save.saved");
     } catch (e) {
+      // Een import die niet doorging mag later niet als gewone opslag worden
+      // samengevoegd: dan zou de back-up half over de echte gegevens komen.
+      // Zonder basis weigert pull() alles tot je herlaadt.
+      if (mode === "import") base = null;
       showSaveState("save.failed", true);
       if (e instanceof store.ConflictError) {
         showBanner(t("save.conflict"), true, "warn");
@@ -301,6 +319,7 @@
       }
     } finally {
       saving = false;
+      if (saveAgain) { saveAgain = false; save(); }
     }
   }
   window.addEventListener("beforeunload", (e) => {
