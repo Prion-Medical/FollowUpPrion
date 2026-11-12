@@ -162,9 +162,22 @@ $$;
 
 -- Deze staat wel in public: de policies op app_users hebben hem nodig, en een
 -- policy kan niet bij een schema waar de aanroeper geen usage op heeft.
+-- Komt deze oproep van een assistent? Wie de koppeling toestaat, geeft de
+-- assistent een sleutel die voor de databank dezelfde gebruiker is. De
+-- koppeling zelf biedt maar een handvol werktuigen aan, maar de sleutel kan
+-- meer: lekt hij, dan kon hij alles wat de app kan. Een sleutel die via de
+-- OAuth-server van Supabase is uitgegeven draagt het id van de aanvrager
+-- (client_id); een gewone aanmelding in de app heeft dat niet. Twee dingen
+-- zijn daarom alleen in de app zelf te doen: gebruikers beheren en een
+-- back-up terugzetten.
+create or replace function followup.via_assistant() returns boolean
+language sql stable set search_path = public as $$
+  select coalesce(auth.jwt() ->> 'client_id', '') <> '';
+$$;
+
 create or replace function public.is_admin() returns boolean
 language sql stable security definer set search_path = public as $$
-  select followup.my_role() = 'admin';
+  select followup.my_role() = 'admin' and not followup.via_assistant();
 $$;
 
 -- Er moet altijd minstens één beheerder overblijven. Zonder deze controle kan
@@ -1038,6 +1051,12 @@ begin
   if mode = 'import' then
     if v_rol not in ('admin', 'editor') then
       raise exception 'followup:no_import importeren mag enkel een bewerker of beheerder'
+        using errcode = 'PT403', hint = 'no_import';
+    end if;
+    if followup.via_assistant() then
+      -- Een back-up terugzetten vervangt alles. Dat doet een mens in de app,
+      -- niet een sleutel die bij een assistent ligt.
+      raise exception 'followup:no_import importeren kan niet via een assistent'
         using errcode = 'PT403', hint = 'no_import';
     end if;
     if v_bereik <> '{}'::text[] then

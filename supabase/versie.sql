@@ -58,7 +58,13 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('write_state',     'opvolging_aanvullen', 'een oud document wordt omgezet vóór het samengevoegd wordt'),
   -- Het stille herladen. Ontbreekt deze, dan werkt de app gewoon verder maar
   -- merkt ze een wijziging van een collega pas bij de eerstvolgende opslag.
-  ('state_version',   'updated_at',     'de app kan vragen of er iets veranderd is')
+  ('state_version',   'updated_at',     'de app kan vragen of er iets veranderd is'),
+  -- Wat de sleutel van een assistent niet mag, ook al is de gebruiker
+  -- beheerder of bewerker. Draait hier een oude versie, dan kan een gelekte
+  -- sleutel gebruikers beheren en een back-up terugzetten.
+  ('via_assistant',   'client_id',      'een sleutel van een assistent is te herkennen'),
+  ('is_admin',        'via_assistant',  'gebruikers beheren kan niet met de sleutel van een assistent'),
+  ('write_state',     'via_assistant',  'een back-up terugzetten kan niet met de sleutel van een assistent')
 )
 select v.functie,
        v.waarvoor,

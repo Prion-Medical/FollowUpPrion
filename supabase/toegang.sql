@@ -104,3 +104,12 @@ select u.email,
 --   2. 2FA aan op elk account dat aan het dashboard kan. Daar hangt de
 --      service-sleutel achter, en die omzeilt alles wat hierboven staat.
 --   3. De service-sleutel hoort nergens in de repo of in een browser.
+--   4. Voor de koppeling met een assistent, onder Authentication → OAuth
+--      Server en OAuth Apps: "dynamic client registration" UIT, en precies
+--      één geregistreerde aanvrager (Claude) met alleen de twee adressen van
+--      claude.ai en claude.com als redirect. De toestemmingspagina vertrouwt
+--      op de naam en het terugkeeradres die Supabase voor die aanvrager
+--      teruggeeft; een tweede aanvrager is een tweede deur.
+--   5. Edge Functions: "Verify JWT" staat alleen UIT voor de functie agent.
+--      Die kijkt de sleutel zelf na; elke andere functie hoort hem aan te
+--      laten staan.
