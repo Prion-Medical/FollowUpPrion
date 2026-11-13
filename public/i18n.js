@@ -373,6 +373,7 @@ window.FollowUpI18n = (() => {
       "btn.prevMonth": "Vorige maand",
       "btn.nextMonth": "Volgende maand",
       "btn.wholeMonth": "hele maand",
+      "act.room": "kamer",
       "act.rooms": "kamers",
       "act.units": "besteld",
 
@@ -905,6 +906,7 @@ window.FollowUpI18n = (() => {
       "btn.prevMonth": "Previous month",
       "btn.nextMonth": "Next month",
       "btn.wholeMonth": "whole month",
+      "act.room": "room",
       "act.rooms": "rooms",
       "act.units": "ordered",
 

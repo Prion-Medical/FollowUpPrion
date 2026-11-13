@@ -150,6 +150,10 @@
   // Te laat: een datum, en die is voorbij. Een moment zonder datum staat
   // klaar tot iemand het doet, en is dus nooit te laat.
   const isLate = (p) => !!p.date && p.date < today();
+  // De plaats van een knop die er bij dit moment niet is (de download bij een
+  // moment zonder datum). Leeg maar even breed, zodat afvinken en bewerken op
+  // elke regel op dezelfde plek staan.
+  const ICON_SLOT = '<span class="icon-btn icon-slot" aria-hidden="true"></span>';
   // Stil gevallen: er is contact geweest, er staat niets gepland en het laatste
   // contactmoment is lang geleden. Zo'n ziekenhuis glipt door alle andere
   // filters — niet rood (er was contact), niet groen (er staat niets), niet
@@ -672,7 +676,7 @@
     // moment van wie het invoerde.
     const to = r.assignee && r.assignee !== store.me().id && r.assignee !== r.createdBy && (personName(r.assignee) || "?");
     return [withType && t("act." + r.type), productsOf(r).join(" + "), r.family && t("family." + r.family), c && c.name,
-      r.rooms ? `${r.rooms} ${t(productKind(productOf(r)) !== "procedure" ? "act.rooms" : r.type === "procedure" ? "act.used" : "act.units")}` : "",
+      r.rooms ? `${r.rooms} ${t(productKind(productOf(r)) !== "procedure" ? (r.rooms === 1 ? "act.room" : "act.rooms") : r.type === "procedure" ? "act.used" : "act.units")}` : "",
       to && t("for", { name: to }),
       by && t("by", { name: by })].filter(Boolean).join(" · ");
   }
@@ -1298,7 +1302,7 @@
           // het moment is.
           const sub = momentLine(h, p, false);
           return `<li class="${isLate(p) ? "late" : ""}">
-            <div class="t-date">${esc(p.date ? fmtDate(p.date) : t("planned.noDate"))}<span class="t-rel">${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
+            <div class="t-date">${esc(p.date ? fmtDate(p.date) : t("planned.noDate"))}${p.time ? `<span class="t-rel">${esc(p.time)}</span>` : ""}<span class="t-rel">${esc(relDays(p.date))}</span></div>
             <div class="t-body">
               <div class="t-type"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(t("act." + p.type))}</div>
               ${sub ? `<div class="t-sub">${esc(sub)}</div>` : ""}
@@ -1307,7 +1311,7 @@
             <div class="t-acts">
               <button class="icon-btn" data-act="done-planned" data-id="${esc(p.id)}" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
               <button class="icon-btn" data-act="edit-planned" data-id="${esc(p.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
-              ${p.date ? `<button class="icon-btn" data-act="ics-planned" data-id="${esc(p.id)}" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>` : ""}
+              ${p.date ? `<button class="icon-btn" data-act="ics-planned" data-id="${esc(p.id)}" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>` : ICON_SLOT}
             </div>
           </li>`;
         }).join("")}</ul>` : `<p class="muted">${esc(t("empty.planned"))}</p>`}
@@ -2577,7 +2581,7 @@
     const when = p.date ? new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" })
       : t("planned.noDate");
     return `<li class="ag-row ${isLate(p) ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
-      <div class="ag-date"><b>${esc(when)}</b><span>${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
+      <div class="ag-date"><b${p.date ? "" : ' class="nodate"'}>${esc(when)}</b><span>${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
       <div class="ag-body">
         <div class="ag-name">${esc(h.name)}</div>
         <div class="ag-sub"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(sub)}</div>
@@ -2586,7 +2590,7 @@
       <div class="ag-acts">
         <button class="icon-btn" data-ag="done" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
         <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
-        ${p.date ? `<button class="icon-btn" data-ag="ics" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>` : ""}
+        ${p.date ? `<button class="icon-btn" data-ag="ics" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>` : ICON_SLOT}
         <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">${icon("arrow")}</button>
       </div>
     </li>`;
@@ -2659,13 +2663,13 @@
         </div>
       </div>
       ${items.length ? "" : `<p class="muted">${esc(t(state.agenda.assignees.length ? "agenda.noneFor" : "agenda.none"))}</p>`}
-      ${undated.length && !day ? `<div class="ag-block">
-        <h3 class="ag-h">${esc(t("agenda.undated"))} <span class="badge neutral">${undated.length}</span></h3>
-        <ul class="ag-list">${undated.map(agendaRow).join("")}</ul>
-      </div>` : ""}
       ${overdue.length && !day && !past ? `<div class="ag-block">
         <h3 class="ag-h">${esc(t("agenda.overdue"))} <span class="badge">${overdue.length}</span></h3>
         <ul class="ag-list">${overdue.map(agendaRow).join("")}</ul>
+      </div>` : ""}
+      ${undated.length && !day ? `<div class="ag-block undated">
+        <h3 class="ag-h">${esc(t("agenda.undated"))} <span class="badge neutral">${undated.length}</span></h3>
+        <ul class="ag-list">${undated.map(agendaRow).join("")}</ul>
       </div>` : ""}
       ${items.length ? `<div class="ag-block">
         <h3 class="ag-h">${esc(day ? fmtDate(day) : monthLabel)}${day ? ` · <button class="link" data-ag="clear">${esc(t("btn.wholeMonth"))}</button>` : ""}</h3>

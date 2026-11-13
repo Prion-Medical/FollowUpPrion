@@ -243,6 +243,8 @@ p.muted { margin: 0 0 8px; }
 }
 .icon-btn:hover { background: var(--hover); color: var(--ink); }
 .icon-btn:active { background: var(--press); transform: scale(0.94); }
+/* De lege plaats van een knop die er bij deze regel niet is: zie ICON_SLOT. */
+.icon-btn.icon-slot { visibility: hidden; }
 .icon-btn[aria-pressed="true"] { color: var(--accent); }
 
 /* ---------- topbalk ---------- */
@@ -529,7 +531,7 @@ body[data-rights~="no-write"] .pipe-name .muted { display: inline; }
    de volle tekstkleur, zodat je ziet waar een nieuw stuk begint. */
 .section h3, .s-card h3 {
   margin: 0 0 10px; min-height: var(--ctl-sm); font-size: var(--t-md); font-weight: 600; letter-spacing: -0.005em; color: var(--ink);
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
 }
 .section h3 .btn { margin-left: auto; letter-spacing: 0; }
 /* Het kopje is de knop waarmee je de sectie open- en dichtklapt. Het pijltje
@@ -538,8 +540,10 @@ body[data-rights~="no-write"] .pipe-name .muted { display: inline; }
   display: inline-flex; align-items: center; gap: 6px; min-height: var(--ctl-sm);
   margin: 0 0 0 -4px; padding: 0 6px 0 2px; border: 0; border-radius: var(--radius);
   background: none; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer;
+  transition: background var(--fast) var(--ease);
 }
 .sec-toggle .ic { color: var(--muted); transform: rotate(90deg); transition: transform var(--fast) var(--ease); }
+.sec-toggle:hover { background: var(--hover); }
 .sec-toggle:hover .ic { color: var(--ink); }
 .section.closed .sec-toggle .ic { transform: none; }
 .section.closed h3 { margin-bottom: 0; }
@@ -609,7 +613,7 @@ label.field.check input[type="checkbox"] { width: 16px; flex: none; }
    afdruk ze allemaal kan tonen (zie @media print). */
 .timeline.capped li.extra { display: none; }
 .more-acts { margin-top: 10px; margin-right: 4px; }
-.timeline .t-date { font-size: var(--t-sm); color: var(--muted); width: 76px; white-space: nowrap; flex: none; padding-top: 1px; font-variant-numeric: tabular-nums; }
+.timeline .t-date { font-size: var(--t-sm); color: var(--muted); width: 80px; white-space: nowrap; flex: none; padding-top: 1px; font-variant-numeric: tabular-nums; }
 .timeline .t-body { flex: 1; min-width: 0; }
 .timeline .t-type { font-weight: 500; }
 .timeline .t-note { font-size: var(--t-base); margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
@@ -738,6 +742,9 @@ button.cal-day:focus-visible { outline-offset: -2px; }
 .ag-block { margin-bottom: 24px; }
 .ag-h { margin: 0 0 8px; font-size: var(--t-base); font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 8px; }
 .ag-h .badge { margin-left: 0; }
+/* Wat nog geen datum heeft, staat onder "Te laat" en stiller: het is een
+   lijst om naar te kijken, niet wat het eerst moet. */
+.ag-block.undated .ag-h { color: var(--muted); font-weight: 500; }
 .ag-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); overflow: hidden; }
 .ag-row { display: flex; gap: 12px; padding: 10px 14px; align-items: flex-start; transition: background var(--fast) var(--ease); }
 .ag-row:hover { background: var(--panel-2); }
@@ -745,11 +752,17 @@ button.cal-day:focus-visible { outline-offset: -2px; }
 .ag-row.late .ag-date b, .ag-row.late .ag-date span { color: var(--red-ink); }
 .ag-date { width: 96px; flex: none; }
 .ag-date b { display: block; font-size: var(--t-base); font-weight: 500; text-transform: capitalize; font-variant-numeric: tabular-nums; }
+/* "Zonder datum" is een zin en geen datum: niet elk woord met een hoofdletter. */
+.ag-date b.nodate { text-transform: none; }
 .ag-date span { font-size: var(--t-sm); color: var(--muted); }
 .ag-body { flex: 1; min-width: 0; }
 .ag-name { font-weight: 500; overflow-wrap: anywhere; }
 .ag-sub { font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
 .ag-note { font-size: var(--t-base); margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); max-width: 75ch; }
+/* In de agenda een lange nota op drie regels: de lijst moet te overlopen
+   blijven. Volledig staat ze in de fiche, waar ook wie niet mag bewerken ze
+   leest. */
+.ag-note { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 .ag-acts { display: flex; gap: 2px; flex: none; }
 
 /* Gepland in de fiche: de relatieve dag onder de datum, te laat in het rood. */
@@ -1227,6 +1240,11 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
   .ag-date b { display: inline; }
   .ag-body { flex: 1 1 100%; }
   .ag-acts { flex: 1 1 100%; justify-content: flex-end; margin: 0 -8px -6px 0; }
+  /* Hetzelfde voor de geplande momenten in de fiche: drie knoppen van 44px
+     naast datum en tekst laten op een smal scherm niets over voor de tekst. */
+  .timeline li:has(.t-acts) { flex-wrap: wrap; }
+  .timeline li:has(.t-acts) .t-body { flex: 1 1 0; }
+  .timeline .t-acts { flex: 1 1 100%; justify-content: flex-end; margin: -6px -8px -6px 0; }
   .u-row { gap: 8px; }
   .u-who, .u-role, .u-scope { flex: 1 1 100%; }
   .s-filters { width: 100%; }
