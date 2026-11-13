@@ -880,6 +880,32 @@ button.cal-day:focus-visible { outline-offset: -2px; }
    rijen hebben zelf geen achtergrond, dus de hoeken blijven zonder clip even
    netjes. */
 .u-list { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+/* Agenda-abonnementen: de dialoog en de lijst voor de beheerder. */
+.feed-h { margin: 18px 0 8px; font-size: var(--t-base); }
+.feed-fresh { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--accent-line); border-radius: var(--radius-lg); background: var(--accent-soft); }
+.feed-fresh p { margin: 0 0 8px; }
+.feed-url { display: flex; gap: 8px; }
+.feed-url input { flex: 1 1 auto; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--t-sm); }
+/* Per agenda de stappen, dichtgeklapt. Het pijltje wijst naar rechts en
+   draait naar beneden als het openstaat, zoals de koppen van de fiche. */
+.feed-how { margin-top: 10px; border-top: 1px solid var(--accent-line); }
+.feed-how details { border-bottom: 1px solid var(--accent-line); }
+.feed-how summary { display: flex; align-items: center; gap: 6px; padding: 8px 0; cursor: pointer; list-style: none; font-weight: 600; font-size: var(--t-sm); }
+.feed-how summary::-webkit-details-marker { display: none; }
+.feed-how summary .ic { transition: transform 0.15s var(--ease); }
+.feed-how details[open] summary .ic { transform: rotate(90deg); }
+.feed-how-body { padding: 0 0 10px 22px; font-size: var(--t-sm); }
+.feed-fresh .feed-how-body p { margin: 0 0 8px; }
+.feed-how-body ol { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.feed-fresh .feed-warn { color: var(--ink-2); font-size: var(--t-sm); margin-bottom: 0; }
+.feed-rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+.feed-row { display: flex; gap: 12px; align-items: center; padding: 10px 14px; }
+.feed-row + .feed-row { border-top: 1px solid var(--line); }
+.feed-what { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.u-feeds { margin-top: 28px; }
+.u-feeds h3 { margin: 0 0 4px; font-size: var(--t-md); }
+.u-feeds > .muted { margin: 0 0 12px; max-width: 75ch; }
+
 .u-row { display: flex; gap: 14px; padding: 12px 16px; align-items: center; flex-wrap: wrap; }
 .u-row + .u-row { border-top: 1px solid var(--line); }
 .u-who { flex: 1 1 200px; min-width: 0; }
@@ -990,7 +1016,7 @@ body[data-rights~="no-write"] #addHospitalBtn,
 body[data-rights~="no-write"] .tabbar [data-action="add"],
 body[data-rights~="no-write"] .status-pick,
 body[data-rights~="no-write"] .c-actions,
-body[data-rights~="no-write"] .fiche [data-act]:not([data-act="close"]):not([data-act="show-map"]),
+body[data-rights~="no-write"] .fiche [data-act]:not([data-act="close"]):not([data-act="show-map"]):not([data-act="ics-planned"]),
 body[data-rights~="no-write"] .agenda-view [data-ag="done"],
 body[data-rights~="no-write"] .agenda-view [data-ag="edit"],
 body[data-rights~="no-delete"] [data-act="delete"],

@@ -22,6 +22,8 @@ window.FollowUpStore = (() => {
     duplicate_id: "rights.badPayload",
     empty_payload: "rights.badPayload",
     too_many_deletes: "rights.tooManyDeletes",
+    feed_limit: "feeds.limit",
+    feed_denied: "feeds.denied",
   };
 
   // Wat elke rol mag. Eén tabel, zodat app.js en stats.js nergens zelf rollen
@@ -58,6 +60,9 @@ window.FollowUpStore = (() => {
 
   const local = {
     mode: "local",
+    // Een agenda-abonnement vraagt een databank die zonder aanmelding te
+    // bereiken is; server.py is dat niet. Lokaal enkel de download.
+    feeds: false,
     ConflictError,
     can,
     me: () => me,
@@ -166,8 +171,33 @@ window.FollowUpStore = (() => {
     });
   }
 
+  // Een fout van de databank als tekst voor de gebruiker: de sleutel in hint
+  // als we die kennen, anders de melding zelf.
+  const melding = (error) => (MELDINGEN[error.hint] ? t(MELDINGEN[error.hint]) : error.message);
+
   return {
     mode: "supabase",
+    feeds: true,
+    // Het adres dat een agenda-app ophaalt. Het geheim zit erin; de databank
+    // kent het enkel gehasht, dus dit is het enige ogenblik dat het bestaat.
+    feedUrl: (secret) => `${cfg.supabaseUrl}/functions/v1/calendar/${secret}.ics`,
+    async feedCreate({ label, mine, products, lang }) {
+      const { data, error } = await client.rpc("feed_create", {
+        p_label: label, p_mine: mine, p_products: products, p_lang: lang,
+      });
+      if (error) throw new Error(melding(error));
+      return data;
+    },
+    async feedList(everyone = false) {
+      const { data, error } = await client.rpc("feed_list", { everyone });
+      if (error) throw new Error(melding(error));
+      return Array.isArray(data) ? data : [];
+    },
+    async feedRemove(id) {
+      const { data, error } = await client.rpc("feed_remove", { p_id: id });
+      if (error) throw new Error(melding(error));
+      return data === true;
+    },
     ConflictError,
     can,
     me: () => me,

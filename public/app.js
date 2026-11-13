@@ -16,6 +16,9 @@
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
   const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
+  // Agendabestanden: zie ics.js. Het abonnement maakt dezelfde afspraken aan de
+  // serverkant (supabase/functions/calendar).
+  const Ics = window.FollowUpIcs;
   // Welk product staat standaard in een nieuw contactmoment of een planning:
   // dat van het ziekenhuis als er maar één is, anders het jouwe als jij er maar
   // één mag.
@@ -93,6 +96,9 @@
     return v === "" || v == null || !Number.isFinite(n) ? null : n;
   };
   const dateOrEmpty = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(str(v)) ? str(v) : "");
+  // Een uur als 14:00. Enkel bij een gepland moment: een contactmoment heeft
+  // een datum en geen uur.
+  const timeOrEmpty = (v) => (/^([01]\d|2[0-3]):[0-5]\d$/.test(str(v)) ? str(v) : "");
   const coord = (v, max) => {
     const n = numOrNull(v);
     return n == null || Math.abs(n) > max ? null : n;
@@ -112,10 +118,14 @@
   // als de kleur: wie op Thyroid RFA filtert wil niet de achterstallige actie
   // van EndoQ zien. planned staat op datum, dus het eerste dat past is de
   // volgende actie — zonder filter is dat gewoon nextActionDate.
+  // Een moment zonder datum kan niet te laat zijn: het eerste mét datum telt.
   function isOverdue(h) {
-    const p = h.planned.find(inFilter);
+    const p = h.planned.find((x) => x.date && inFilter(x));
     return !!p && p.date < today();
   }
+  // Te laat: een datum, en die is voorbij. Een moment zonder datum staat
+  // klaar tot iemand het doet, en is dus nooit te laat.
+  const isLate = (p) => !!p.date && p.date < today();
   // Stil gevallen: er is contact geweest, er staat niets gepland en het laatste
   // contactmoment is lang geleden. Zo'n ziekenhuis glipt door alle andere
   // filters — niet rood (er was contact), niet groen (er staat niets), niet
@@ -129,8 +139,16 @@
   }
   // Een datum als YYYY-MM-DD uit de losse delen. Niet via toISOString(): die
   // rekent in UTC en schuift bij ons 's avonds een dag op.
+  // Op datum, en op dezelfde dag eerst wat een uur heeft, in volgorde: wat
+  // "ergens die dag" is, komt na wat om negen uur begint. Enkel om te tonen:
+  // h.planned zelf blijft op datum, zoals fix_planned() in de databank het
+  // ook legt, anders verschuift elke opslag de volgorde.
+  // Een moment zonder datum heeft een lege datum en komt dus vanzelf vooraan.
+  const byWhen = (a, b) => a.date.localeCompare(b.date) || (a.time || "99").localeCompare(b.time || "99");
   const ymd = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  // nextAction en nextActionDate volgen uit het eerste geplande moment. Zo
+  // nextAction en nextActionDate volgen uit het eerste geplande moment — ook
+  // als dat er een zonder datum is: dat staat bovenaan, dus dat is wat er nu
+  // te doen is. nextActionDate is dan leeg. Zo
   // blijven de lijst, de filter "actie te laat" en de CSV werken zoals
   // voorheen, zonder tweede plaats waar hetzelfde wordt bijgehouden.
   function syncNextAction(h) {
@@ -509,6 +527,9 @@
     // gekozen is: schreven we bij elk ouder moment een lege waarde, dan zou
     // wie als eerste opslaat de laatste bewerker van de hele agenda worden.
     if (str(p.assignee)) p.assignee = str(p.assignee); else delete p.assignee;
+    // Een uur is er alleen als iemand het invulde, om dezelfde reden: een leeg
+    // veld bij elk ouder moment zou het hele rooster als gewijzigd opslaan.
+    if (timeOrEmpty(p.time)) p.time = timeOrEmpty(p.time); else delete p.time;
     stampFields(p);
     return p;
   }
@@ -712,7 +733,9 @@
     }
     delete h.demoDate;
     // Zonder datum is het geen planning, en de agenda rekent op de sortering.
-    h.planned = h.planned.filter((p) => p.date).sort((a, b) => a.date.localeCompare(b.date));
+    // Op datum, en wat geen datum heeft vooraan: dat staat klaar tot iemand
+    // het doet. Dezelfde volgorde als fix_planned() in de databank.
+    h.planned.sort((a, b) => a.date.localeCompare(b.date));
     syncNextAction(h);
     h.createdAt = dateOrEmpty(h.createdAt) || today();
     // Een halve locatie is geen locatie: de kaart rekent op lat én lng.
@@ -1227,12 +1250,12 @@
 
       <div class="section">
         <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
-        ${h.planned.length ? `<ul class="timeline">${h.planned.map((p) => {
+        ${h.planned.length ? `<ul class="timeline">${[...h.planned].sort(byWhen).map((p) => {
           // Dezelfde regel als in de agenda, zodat ook hier staat voor wie
           // het moment is.
           const sub = momentLine(h, p, false);
-          return `<li class="${p.date < today() ? "late" : ""}">
-            <div class="t-date">${esc(fmtDate(p.date))}<span class="t-rel">${esc(relDays(p.date))}</span></div>
+          return `<li class="${isLate(p) ? "late" : ""}">
+            <div class="t-date">${esc(p.date ? fmtDate(p.date) : t("planned.noDate"))}<span class="t-rel">${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
             <div class="t-body">
               <div class="t-type"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(t("act." + p.type))}</div>
               ${sub ? `<div class="t-sub">${esc(sub)}</div>` : ""}
@@ -1241,6 +1264,7 @@
             <div class="t-acts">
               <button class="icon-btn" data-act="done-planned" data-id="${esc(p.id)}" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
               <button class="icon-btn" data-act="edit-planned" data-id="${esc(p.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
+              ${p.date ? `<button class="icon-btn" data-act="ics-planned" data-id="${esc(p.id)}" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>` : ""}
             </div>
           </li>`;
         }).join("")}</ul>` : `<p class="muted">${esc(t("empty.planned"))}</p>`}
@@ -1473,6 +1497,7 @@
       case "edit-activity": return activityDialog(h, h.activities.find((a) => a.id === id));
       case "add-planned": return plannedDialog(h, null);
       case "edit-planned": return plannedDialog(h, h.planned.find((p) => p.id === id));
+      case "ics-planned": return downloadIcs(h, h.planned.find((p) => p.id === id));
       // Afvinken: het geplande moment wordt een contactmoment. De dialoog staat
       // al ingevuld; het aantal kamers vragen we daar voor het eerst.
       case "done-planned": return activityDialog(h, null, h.planned.find((p) => p.id === id));
@@ -1763,7 +1788,9 @@
   }
 
   function activityDialog(h, a, plan) {
-    const v = a || (plan ? { ...plan, rooms: "" } : {
+    // Een plan zonder datum krijgt er hier een: wat gebeurd is, gebeurde op
+    // een dag. Vandaag, tot iemand iets anders kiest.
+    const v = a || (plan ? { ...plan, date: plan.date || today(), rooms: "" } : {
       date: today(),
       type: h.activities.length ? "email" : "prospecting",
       product: defaultProduct(h),
@@ -1859,7 +1886,10 @@
     const form = openDialog(`
       <h2>${esc(p ? t("dlg.plannedEdit") : t("dlg.plannedNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
-        <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
+        <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" value="${esc(v.date)}"
+          title="${esc(t("dlg.p.date.hint"))}"></label>
+        <label class="field">${esc(t("dlg.p.time"))}<input type="time" name="time" value="${esc(v.time || "")}"
+          title="${esc(t("dlg.p.time.hint"))}"></label>
         <label class="field">${esc(t("dlg.p.type"))}
           <select name="type">${ACT_TYPE_KEYS.map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
         </label>
@@ -1883,9 +1913,12 @@
       } else {
         const rec = p || { id: uid() };
         Object.assign(rec, {
-          date: data.date, type: data.type, product: data.product,
+          date: dateOrEmpty(data.date), type: data.type, product: data.product,
           contactId: data.contactId, note: data.note.trim(),
         });
+        // Zonder uur een hele dag in de agenda; met een uur een uur lang. Een
+        // uur zonder dag zegt niets, dus dat valt weg.
+        if (rec.date && timeOrEmpty(data.time)) rec.time = timeOrEmpty(data.time); else delete rec.time;
         // Het veld komt er alleen bij als het moment voor iemand anders is dan
         // wie het invoerde: voor die persoon volgt het al uit de stempel. Zo
         // krijgt een moment dat je voor jezelf plant geen naam mee, en blijft
@@ -2160,10 +2193,10 @@
         // De agenda, eerst wat het eerst komt. Voor wie het is staat er
         // altijd: zonder toewijzing is dat wie het invoerde.
         download(`planned-${span}.csv`, csv([
-          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("dlg.p.assignee"), t("col.addedBy")],
+          [t("col.date"), t("col.time"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("dlg.p.assignee"), t("col.addedBy")],
           ...hs.flatMap((h) => h.planned.filter((p) => inPeriod(p.date)).map((p) => ({ h, p })))
-            .sort((x, y) => x.p.date.localeCompare(y.p.date) || x.h.name.localeCompare(y.h.name))
-            .map(({ h, p }) => [p.date, h.name, t("act." + p.type), p.product,
+            .sort((x, y) => byWhen(x.p, y.p) || x.h.name.localeCompare(y.h.name))
+            .map(({ h, p }) => [p.date, p.time || "", h.name, t("act." + p.type), p.product,
               (h.contacts.find((c) => c.id === p.contactId) || {}).name, p.note, personName(assigneeOf(p)) || (p.assignee ? "?" : ""), personName(p.createdBy)]),
         ]), "text/csv");
       } else if (kind === "units") {
@@ -2237,7 +2270,153 @@
     // Het rooster, "te laat" en de lijst volgen alle drie de keuze "voor wie".
     const who = state.agenda.assignees;
     for (const h of state.db.hospitals) for (const p of h.planned) if (!who.length || who.includes(assigneeOf(p))) out.push({ h, p });
-    return out.sort((a, b) => a.p.date.localeCompare(b.p.date) || a.h.name.localeCompare(b.h.name));
+    return out.sort((a, b) => byWhen(a.p, b.p) || a.h.name.localeCompare(b.h.name));
+  }
+
+  // ---------- agenda-abonnementen ----------
+  // Een gepland moment als afspraak. Dezelfde vorm als in het abonnement: de
+  // soort, het product en het ziekenhuis als titel, het ziekenhuis en zijn
+  // adres als plaats, en de nota. Geen contactpersoon — dat zijn gegevens van
+  // een arts in de agenda van een derde partij.
+  const icsEventOf = (h, p) => ({
+    id: p.id, date: p.date, time: p.time || "", country: h.country,
+    title: Ics.title(t("act." + p.type), p.product ? [p.product] : [], h.name),
+    location: Ics.place(h.name, h.address),
+    description: p.note,
+  });
+  // Eén moment als bestand: een kopie, die niet meeverandert als het plan
+  // verandert. Daarvoor is het abonnement.
+  function downloadIcs(h, p) {
+    if (!h || !p) return;
+    const name = `${p.date}-${h.name}`.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 60);
+    download(`${name || "followup"}.ics`, Ics.calendar([icsEventOf(h, p)], ""), "text/calendar;charset=utf-8");
+  }
+
+  const feedDate = (ts) => (ts ? new Date(ts).toLocaleDateString(I18N.locale, { day: "numeric", month: "short", year: "numeric" }) : "");
+  const feedSummary = (f) => [
+    t(f.mine ? "feeds.mine" : "feeds.everyone"),
+    f.products && f.products.length ? f.products.join(", ") : t("feeds.allProducts"),
+    String(f.lang || "nl").toUpperCase(),
+  ].join(" · ");
+  // Eén abonnement in een lijst. button is de knop om het stop te zetten: in
+  // de dialoog een verzendknop, op het gebruikersscherm een gewone knop.
+  const feedRow = (f, owner, button) => `<li class="feed-row">
+      <div class="feed-what">
+        <b>${esc(f.label || t("feeds.unnamed"))}</b>${owner ? ` <span class="muted">· ${esc(owner)}</span>` : ""}
+        <span class="muted">${esc(feedSummary(f))}</span>
+        <span class="muted">${esc(t("feeds.created", { date: feedDate(f.created_at) }))} · ${
+          esc(f.last_used ? t("feeds.used", { date: feedDate(f.last_used) }) : t("feeds.neverUsed"))}</span>
+      </div>
+      ${button}
+    </li>`;
+
+  // Abonneren: een adres dat je agenda-app zelf ophaalt. De dialoog maakt er
+  // een aan, toont het één keer, en lijst de abonnementen die je al hebt.
+  function feedDialog() {
+    if (!store.feeds) return tell(t("feeds.localOnly"));
+    const products = myProducts();
+    // Een tweede klik terwijl de eerste nog onderweg is, maakt geen tweede adres.
+    let busy = false;
+    const form = openDialog(`
+      <h2>${esc(t("feeds.title"))}</h2>
+      <p class="muted">${esc(t("feeds.intro"))}</p>
+      <div class="feed-fresh" hidden></div>
+      <h3 class="feed-h">${esc(t("feeds.new"))}</h3>
+      <div class="grid">
+        <label class="field full">${esc(t("feeds.label"))}<input name="label" maxlength="80" placeholder="${esc(t("feeds.label.ph"))}"></label>
+        <label class="field">${esc(t("feeds.who"))}
+          <select name="mine">${opt("1", t("feeds.mine"), "1")}${opt("0", t("feeds.everyone"), "1")}</select>
+        </label>
+        <label class="field">${esc(t("feeds.lang"))}
+          <select name="lang">${opt("nl", "Nederlands", I18N.lang)}${opt("en", "English", I18N.lang)}</select>
+        </label>
+        ${products.length > 1 ? `<div class="field full">${esc(t("feeds.products"))}${pickBox([
+          { attrs: `data-feed-all="1"`, label: t("feeds.allProducts"), checked: true, cls: "pick-all" },
+          ...products.map((p) => ({ attrs: `data-feed-product="${esc(p)}"`, label: p, checked: false })),
+        ], t("feeds.allProducts"))}</div>` : ""}
+      </div>
+      <p class="muted">${esc(t("feeds.delay"))}</p>
+      <div class="actions">
+        <button class="btn" value="cancel" formnovalidate>${esc(t("btn.close"))}</button>
+        <button class="btn primary" value="create">${esc(t("feeds.create"))}</button>
+      </div>
+      <h3 class="feed-h">${esc(t("feeds.yours"))}</h3>
+      <div class="feed-list"><p class="muted">${esc(t("feeds.loading"))}</p></div>`, (data, action) => {
+      if (action === "create" && !busy) {
+        busy = true;
+        const chosen = [...form.querySelectorAll("[data-feed-product]:checked")].map((b) => b.dataset.feedProduct);
+        store.feedCreate({ label: data.label.trim(), mine: data.mine === "1", products: chosen, lang: data.lang })
+          .then((r) => { showFresh(store.feedUrl(r.secret)); form.elements.label.value = ""; return loadList(); })
+          .catch((e) => tell(t("feeds.failed", { msg: e.message })))
+          .finally(() => { busy = false; });
+      } else if (action.startsWith("remove:")) {
+        const id = action.slice(7);
+        ask(t("feeds.confirmRemove"), { ok: t("feeds.remove") }).then((yes) => yes && store.feedRemove(id)
+          .then(() => { toast(t("feeds.removed")); return loadList(); })
+          .catch((e) => tell(t("feeds.failed", { msg: e.message }))));
+      }
+      return KEEP_OPEN;
+    });
+    // "Alle producten" en de losse vakjes sluiten elkaar uit, zoals op het
+    // gebruikersscherm. Niets aangevinkt is weer alles.
+    form.onchange = (e) => {
+      const all = form.querySelector("[data-feed-all]");
+      if (!all) return;
+      const boxes = [...form.querySelectorAll("[data-feed-product]")];
+      if (e.target === all) boxes.forEach((b) => { b.checked = false; });
+      else if (e.target.dataset.feedProduct) all.checked = !boxes.some((b) => b.checked);
+      if (!all.checked && !boxes.some((b) => b.checked)) all.checked = true;
+      syncPick(all.closest("details.pick"));
+    };
+    // Het adres, één keer. De databank bewaart enkel een hash: wie het hier
+    // niet kopieert, maakt later een nieuw.
+    function showFresh(url) {
+      const box = $(".feed-fresh", form);
+      const webcal = url.replace(/^https:/, "webcal:");
+      const google = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}`;
+      box.innerHTML = `
+        <p><b>${esc(t("feeds.ready"))}</b></p>
+        <div class="feed-url">
+          <input readonly value="${esc(url)}" aria-label="${esc(t("feeds.address"))}">
+          <button type="button" class="btn small" data-feed-copy>${icon("copy")} ${esc(t("feeds.copy"))}</button>
+        </div>
+        <p class="feed-warn">${esc(t("feeds.secret"))}</p>
+        ${/* Per agenda hoe je het toevoegt, dichtgeklapt: wie Outlook gebruikt,
+             hoeft de stappen voor Apple niet te lezen. name maakt er één groep
+             van, zodat er telkens één openstaat. Gewone <details>, geen
+             .pick: de luisteraar in domain.js laat ze dus met rust. */""}
+        <div class="feed-how">
+          ${[
+            ["apple", `<a class="btn small" href="${esc(webcal)}">${icon("calendar")} ${esc(t("feeds.openApp"))}</a>`],
+            ["google", `<a class="btn small" href="${esc(google)}" target="_blank" rel="noopener noreferrer">${esc(t("feeds.openGoogle"))}</a>`],
+            ["outlook", ""],
+          ].map(([k, button]) => `<details name="feed-how">
+            <summary>${icon("next")}<span>${esc(t("feeds.how." + k))}</span></summary>
+            <div class="feed-how-body">
+              ${button ? `<p>${button}</p>` : ""}
+              <ol>${t("feeds.how." + k + ".steps").split("\n").map((step) => `<li>${esc(step)}</li>`).join("")}</ol>
+            </div>
+          </details>`).join("")}
+        </div>`;
+      box.hidden = false;
+      const input = $("input", box);
+      $("[data-feed-copy]", box).onclick = () => {
+        input.select();
+        (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject())
+          .then(() => toast(t("feeds.copied")), () => { document.execCommand("copy"); toast(t("feeds.copied")); });
+      };
+      input.focus();
+      input.select();
+    }
+    function loadList() {
+      const list = $(".feed-list", form);
+      return store.feedList().then((feeds) => {
+        list.innerHTML = feeds.length ? `<ul class="feed-rows">${feeds.map((f) => feedRow(f, "",
+          `<button class="btn small danger" value="remove:${esc(f.id)}" formnovalidate>${esc(t("feeds.remove"))}</button>`)).join("")}</ul>`
+          : `<p class="muted">${esc(t("feeds.none"))}</p>`;
+      }, (e) => { list.innerHTML = `<p class="login-error">${esc(t("feeds.failed", { msg: e.message }))}</p>`; });
+    }
+    loadList();
   }
 
   // Voor wie: dezelfde uitklapper als de filters in het logboek en de zijbalk,
@@ -2258,9 +2437,10 @@
 
   function agendaRow({ h, p }) {
     const sub = momentLine(h, p, true);
-    const when = new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" });
-    return `<li class="ag-row ${p.date < today() ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
-      <div class="ag-date"><b>${esc(when)}</b><span>${esc(relDays(p.date))}</span></div>
+    const when = p.date ? new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" })
+      : t("planned.noDate");
+    return `<li class="ag-row ${isLate(p) ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
+      <div class="ag-date"><b>${esc(when)}</b><span>${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
       <div class="ag-body">
         <div class="ag-name">${esc(h.name)}</div>
         <div class="ag-sub"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(sub)}</div>
@@ -2269,6 +2449,7 @@
       <div class="ag-acts">
         <button class="icon-btn" data-ag="done" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
         <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
+        ${p.date ? `<button class="icon-btn" data-ag="ics" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>` : ""}
         <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">${icon("arrow")}</button>
       </div>
     </li>`;
@@ -2283,7 +2464,9 @@
     const items = plannedAll();
     const td = today();
     const month = `${y}-${String(m + 1).padStart(2, "0")}`;
-    const overdue = items.filter((x) => x.p.date < td);
+    const overdue = items.filter((x) => isLate(x.p));
+    // Zonder datum: niet in het rooster, wel bovenaan de lijst, tot het gedaan is.
+    const undated = items.filter((x) => !x.p.date);
     const inMonth = items.filter((x) => x.p.date.startsWith(month));
     const byDay = new Map();
     for (const x of inMonth) {
@@ -2326,6 +2509,7 @@
           <button class="btn small" data-ag="next" title="${esc(t("btn.nextMonth"))}" aria-label="${esc(t("btn.nextMonth"))}">${icon("next")}</button>
         </div>
         ${agendaAssignee()}
+        ${store.feeds ? `<button class="btn small" data-ag="subscribe" title="${esc(t("feeds.button.title"))}">${icon("calendar")} ${esc(t("feeds.button"))}</button>` : ""}
         ${// De schakelaar als laatste, op beide tabbladen: zo staat hij op
           // dezelfde plaats en verspringt hij niet onder je muis.
           agendaTabs()}
@@ -2338,6 +2522,10 @@
         </div>
       </div>
       ${items.length ? "" : `<p class="muted">${esc(t(state.agenda.assignees.length ? "agenda.noneFor" : "agenda.none"))}</p>`}
+      ${undated.length && !day ? `<div class="ag-block">
+        <h3 class="ag-h">${esc(t("agenda.undated"))} <span class="badge neutral">${undated.length}</span></h3>
+        <ul class="ag-list">${undated.map(agendaRow).join("")}</ul>
+      </div>` : ""}
       ${overdue.length && !day && !past ? `<div class="ag-block">
         <h3 class="ag-h">${esc(t("agenda.overdue"))} <span class="badge">${overdue.length}</span></h3>
         <ul class="ag-list">${overdue.map(agendaRow).join("")}</ul>
@@ -2721,6 +2909,7 @@
         if (!h || !p) return;
         if (b.dataset.ag === "done") return activityDialog(h, null, p);
         if (b.dataset.ag === "edit") return plannedDialog(h, p);
+        if (b.dataset.ag === "ics") return downloadIcs(h, p);
         if (b.dataset.ag === "open") { setView("map"); select(h.id, true); }
         return;
       }
@@ -2734,6 +2923,8 @@
         state.agenda = { ...a, y: d.getFullYear(), m: d.getMonth(), day: "" };
       } else if (b.dataset.ag === "clear") {
         state.agenda = { ...a, day: "" };
+      } else if (b.dataset.ag === "subscribe") {
+        return feedDialog();
       } else return;
       return renderAgenda();
     }
@@ -2952,8 +3143,39 @@
       </div>
       ${users.length
         ? `<div class="u-list">${users.map(row).join("")}</div>`
-        : `<p class="muted">${esc(t("users.none"))}</p>`}`;
+        : `<p class="muted">${esc(t("users.none"))}</p>`}
+      ${store.feeds ? `<div class="u-feeds">
+        <h3>${esc(t("feeds.allTitle"))}</h3>
+        <p class="muted">${esc(t("feeds.allIntro"))}</p>
+        <div class="feed-list-all"><p class="muted">${esc(t("feeds.loading"))}</p></div>
+      </div>` : ""}`;
+    loadAllFeeds();
   }
+
+  // Elk abonnement van iedereen, voor een beheerder: wie welk adres heeft en
+  // of een agenda het nog ophaalt. Stopzetten maakt het adres meteen
+  // ongeldig; het abonnement zelf zien of overnemen kan niet, het geheim
+  // staat nergens.
+  function loadAllFeeds() {
+    const box = usersView.querySelector(".feed-list-all");
+    if (!box) return;
+    store.feedList(true).then((feeds) => {
+      box.innerHTML = feeds.length ? `<ul class="feed-rows">${feeds.map((f) => feedRow(f, f.owner_name || "?",
+        `<button type="button" class="btn small danger" data-feed-remove="${esc(f.id)}">${esc(t("feeds.remove"))}</button>`)).join("")}</ul>`
+        : `<p class="muted">${esc(t("feeds.noneAll"))}</p>`;
+    }, (e) => { box.innerHTML = `<p class="login-error">${esc(t("feeds.failed", { msg: e.message }))}</p>`; });
+  }
+  usersView.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-feed-remove]");
+    if (!b || !(await ask(t("feeds.confirmRemoveOther"), { ok: t("feeds.remove") }))) return;
+    try {
+      await store.feedRemove(b.dataset.feedRemove);
+      toast(t("feeds.removed"));
+    } catch (err) {
+      tell(t("feeds.failed", { msg: err.message }));
+    }
+    loadAllFeeds();
+  });
 
   usersView.addEventListener("change", async (e) => {
     const el = e.target.closest("[data-uid]");
