@@ -14,7 +14,7 @@
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
     typesAmong, productsOf, productOf, familiesFor, wantsFamily, factsFor,
     esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual, setMain, mainContact,
-    normalizeFacts, syncPipeline, zonderProduct, syncRooms, shared, byWhen, assigneeOf, tickOffDate,
+    normalizeFacts, syncPipeline, zonderProduct, syncRooms, shared, byWhen, assigneeOf, tickOffDate, typesInAll,
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
   const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
@@ -1787,8 +1787,8 @@
   // producten waar dit account mee werkt. Een moment dat al een soort heeft
   // die hier niet (meer) wordt aangeboden, houdt haar: de lijst versmalt de
   // keuze, ze herschrijft niets.
-  function typeOptions(products, current) {
-    const keys = typesAmong(products, myProducts());
+  // keys: de soorten die de dialoog aanbiedt (zie soortenVan in de dialogen).
+  function typeOptions(keys, current) {
     return (current && !keys.includes(current) ? [current, ...keys] : keys).map((k) => opt(k, t("act." + k), current)).join("");
   }
   // De producten van een moment: vinkjes in dezelfde uitklapper als overal.
@@ -1806,10 +1806,49 @@
   }
   // Een ander product gekozen in de dialoog: de lijst volgt. Bestaat de
   // gekozen soort daar niet, dan valt de keuze terug op de eerste.
-  function retype(select, products) {
-    const keys = typesAmong(products, myProducts());
+  // Geeft de soort terug die moest wijken, of niets. De dialoog zegt dat
+  // dan: anders staat er bij het opslaan stil een andere soort dan gekozen.
+  function retype(select, keys) {
     const was = select.value;
     select.innerHTML = keys.map((k) => opt(k, t("act." + k), keys.includes(was) ? was : keys[0])).join("");
+    return was && !keys.includes(was) ? was : "";
+  }
+  // De regel onder de keuzes die zegt welke soort moest wijken. Kiest
+  // iemand daarna zelf een soort, dan is de melding achterhaald.
+  function typeNote(form, e, weg) {
+    const note = $("#typeNote", form);
+    if (weg) {
+      note.textContent = t("dlg.typeChanged", { was: t("act." + weg), now: t("act." + form.elements.type.value) });
+      note.hidden = false;
+    } else if (e && (e.target.name === "type" || e.target.dataset.mproduct)) note.hidden = true;
+  }
+
+  // Wat beide momentdialogen samen hebben: de producten bepalen de soorten,
+  // de soort en het product bepalen of er een soort stent bij hoort, en een
+  // moment over meer producten (of een in de lijstvorm, zie shared() in
+  // domain.js) draagt geen aantal en geen soort. Geeft een functie terug die
+  // de dialoog bij elke wijziging aanroept, met wat de dialoog daarna nog
+  // zelf nodig heeft.
+  // soortenVan(keuze) geeft de soorten die bij een keuze van producten passen.
+  function momentFields(form, v, soortenVan) {
+    const lijst = shared(v);
+    let familyFor = null;
+    return (e) => {
+      const keuze = pickedProducts(form);
+      const gedeeld = lijst || keuze.length > 1;
+      const product = gedeeld ? "" : keuze[0] || "";
+      const veranderd = !!(e && e.target.dataset.mproduct);
+      typeNote(form, e, veranderd ? retype(form.elements.type, soortenVan(keuze)) : "");
+      const type = form.elements.type.value;
+      const fam = form.elements.family;
+      if (familyFor !== product) {
+        const was = familyFor === null ? v.family || "" : fam.value;
+        fam.innerHTML = [opt("", "—", was), ...familiesFor(product).map((k) => opt(k, t("family." + k), was))].join("");
+        familyFor = product;
+      }
+      $("#familyField", form).hidden = !wantsFamily(type, product);
+      return { keuze, gedeeld, product, type, veranderd };
+    };
   }
 
   function activityDialog(h, a, plan) {
@@ -1824,18 +1863,30 @@
       rooms: "", note: "",
     });
     const had = productsOf(v);
+    // Een nieuw contactmoment (ook een afgevinkt plan) over meer producten
+    // mag een soort met een aantal hebben: bij het bewaren wordt het één
+    // contactmoment per product, elk met zijn eigen aantal. Niet bij een
+    // bestaand moment, en niet bij een gedeeld plan voor wie maar een deel van
+    // de producten mag: daar kan een product van een collega in zitten dat
+    // deze gebruiker niet ziet, en de databank houdt dat op één moment.
+    const beperkt = myProducts().length < PRODUCTS.length;
+    const splitsen = !a && !(plan && shared(plan) && beperkt);
+    const soortenVan = (keuze) => (splitsen ? typesInAll(keuze, myProducts()) : typesAmong(keuze, myProducts(), shared(v)));
     const form = openDialog(`
       <h2>${esc(a ? t("dlg.actEdit") : t("dlg.actNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
         <label class="field">${esc(t("dlg.a.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
         <label class="field">${esc(t("dlg.a.type"))}
-          <select name="type">${typeOptions(had, v.type)}</select>
+          <select name="type">${typeOptions(soortenVan(had), v.type)}</select>
         </label>
-        <div class="field">${esc(t("dlg.a.product"))}${productMany(had)}</div>
+        <div class="field full">${esc(t("dlg.a.product"))}${productMany(had)}</div>
         <label class="field">${esc(t("dlg.a.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
-        <label class="field" id="roomsField"><span id="roomsLabel">${esc(t("dlg.a.rooms"))}</span><input type="number" min="0" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
+        <p class="muted full" id="typeNote" hidden></p>
+        <p class="muted full" id="manyHint" hidden>${esc(t("dlg.a.many.hint"))}</p>
+        <div class="full per-product" id="perProduct" hidden></div>
+        <label class="field" id="roomsField"><span id="roomsLabel">${esc(t("dlg.a.rooms"))}</span><input type="number" min="0" max="100000" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
         <label class="field" id="familyField">${esc(t("dlg.a.family"))}<select name="family"></select></label>
         <p class="muted full" id="roomsHint">${esc(t("dlg.a.used.hint"))}</p>
         <label class="field full">${esc(t("dlg.a.note"))}<textarea name="note" rows="4" placeholder="${esc(t("dlg.a.note.ph"))}">${esc(v.note)}</textarea></label>
@@ -1855,30 +1906,52 @@
         // plan. De databank ziet dan dat p:<id> verdwijnt en a:<id> opduikt, en
         // weet dat dit afvinken is en geen verwijderen. Niets verwijst naar een
         // id van een gepland moment, dus hergebruiken kan veilig.
-        const rec = a || { id: plan ? plan.id : uid() };
+        // Was het plan een gesprek over meer producten, dan blijft het
+        // contactmoment in de lijstvorm: wie maar één product mag, ziet er
+        // maar één, en de databank zet dat van de collega er weer bij.
         const keuze = pickedProducts(form);
-        const product = keuze.length === 1 ? keuze[0] : "";
-        const wantsRooms = keuze.length <= 1 && wantsQuantity(data.type, product);
-        // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
-        const before = a ? { type: rec.type, rooms: rec.rooms, product: productOf(rec) } : null;
-        Object.assign(rec, {
-          date: data.date, type: data.type, contactId: data.contactId,
-          rooms: wantsRooms ? num(data.rooms) : null, note: data.note.trim(),
-        });
-        setProducts(rec, keuze);
-        if (wantsFamily(data.type, product) && data.family) rec.family = data.family;
-        else delete rec.family;
-        stamp(rec, !a);
-        if (!a) h.activities.push(rec);
-        // Een contactmoment voor een product zet dat product bij het
-        // ziekenhuis: anders is er geen opvolging om bij te werken.
-        for (const p of productsOf(rec)) if (!h.products.includes(p)) h.products.push(p);
-        syncPipeline(h);
-        // Ook bij een wijziging: een contactmoment dat nú een installatie of
-        // een bestelling is, zet de kleur en de fase mee goed.
-        if (!a || before.type !== rec.type) autoStatus(h, rec);
-        // Een installatie of demo met aantal kamers werkt de afdelingsgegevens bij.
-        syncRooms(h, before, rec);
+        if (splitsen && keuze.length > 1 && keuze.some((p) => wantsQuantity(data.type, p))) {
+          // Eén contactmoment per product, elk met zijn eigen aantal (en soort
+          // stent). Het eerste erft het id van het plan, zodat de databank ziet
+          // dat dit afvinken is.
+          keuze.forEach((p, i) => {
+            const rec = {
+              id: i === 0 && plan ? plan.id : uid(), date: data.date, type: data.type, product: p,
+              contactId: data.contactId, note: data.note.trim(),
+              rooms: wantsQuantity(data.type, p) ? num(data["q:" + p]) : null,
+            };
+            if (wantsFamily(data.type, p) && data["f:" + p]) rec.family = data["f:" + p];
+            stamp(rec, true);
+            h.activities.push(rec);
+            if (!h.products.includes(p)) h.products.push(p);
+            syncPipeline(h);
+            autoStatus(h, rec);
+            syncRooms(h, null, rec);
+          });
+        } else {
+          const rec = a || { id: plan ? plan.id : uid(), ...(plan && shared(plan) ? { products: [] } : {}) };
+          // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
+          const before = a ? { type: rec.type, rooms: rec.rooms, product: productOf(rec) } : null;
+          setProducts(rec, keuze);
+          const product = shared(rec) ? "" : productOf(rec);
+          Object.assign(rec, {
+            date: data.date, type: data.type, contactId: data.contactId,
+            rooms: wantsNumber(data.type, rec) ? num(data.rooms) : null, note: data.note.trim(),
+          });
+          if (wantsFamily(data.type, product) && data.family) rec.family = data.family;
+          else delete rec.family;
+          stamp(rec, !a);
+          if (!a) h.activities.push(rec);
+          // Een contactmoment voor een product zet dat product bij het
+          // ziekenhuis: anders is er geen opvolging om bij te werken.
+          for (const p of productsOf(rec)) if (!h.products.includes(p)) h.products.push(p);
+          syncPipeline(h);
+          // Ook bij een wijziging: een contactmoment dat nú een installatie of
+          // een bestelling is, zet de kleur en de fase mee goed.
+          if (!a || before.type !== rec.type) autoStatus(h, rec);
+          // Een installatie of demo met aantal kamers werkt de afdelingsgegevens bij.
+          syncRooms(h, before, rec);
+        }
         // Kwam dit uit de agenda, dan is het nu gebeurd en hoeft het niet meer
         // gepland te staan.
         if (plan) {
@@ -1895,25 +1968,37 @@
     // opschrift volgt het product.
     // De soorten volgen het product, en de soort binnen het product (bij
     // stents) staat er alleen waar ook het aantal staat.
-    let familyFor = null;
+    const velden = momentFields(form, v, soortenVan);
+    // Per product een aantal (en een soort stent), voor een nieuw moment over
+    // meer producten met een soort die een aantal draagt. Enkel opnieuw
+    // getekend als de producten of de soort veranderen: anders verdween bij
+    // elk ingevuld veld de cursor uit het volgende.
+    let perProductVan = "";
+    const aantalLabel = (p, type) => t(productKind(p) !== "procedure" ? "dlg.a.rooms" : type === "procedure" ? "dlg.a.used" : "dlg.a.quantity");
+    const perProduct = (keuze, type) => {
+      const box = $("#perProduct", form);
+      const sleutel = `${type}|${keuze.join("|")}`;
+      if (sleutel === perProductVan) return;
+      perProductVan = sleutel;
+      const was = Object.fromEntries([...box.querySelectorAll("[name]")].map((x) => [x.name, x.value]));
+      box.innerHTML = keuze.map((p) => `<div class="pp-row">
+          <span class="pp-name">${esc(p)}</span>
+          ${wantsQuantity(type, p) ? `<label class="field">${esc(aantalLabel(p, type))}<input type="number" min="0" max="100000" name="q:${esc(p)}" value="${esc(was["q:" + p] ?? "")}" placeholder="1"></label>` : ""}
+          ${wantsFamily(type, p) ? `<label class="field">${esc(t("dlg.a.family"))}<select name="f:${esc(p)}">${[opt("", "—", was["f:" + p] || ""), ...familiesFor(p).map((k) => opt(k, t("family." + k), was["f:" + p] || ""))].join("")}</select></label>` : ""}
+        </div>`).join("") + `<p class="muted">${esc(t("dlg.a.split.hint"))}</p>`;
+    };
     const sync = (e) => {
-      const keuze = pickedProducts(form);
-      const product = keuze.length === 1 ? keuze[0] : "";
-      if (e && e.target.dataset.mproduct) retype(form.elements.type, keuze);
-      const type = form.elements.type.value;
+      const { keuze, gedeeld, product, type } = velden(e);
+      const perStuk = splitsen && keuze.length > 1 && keuze.some((p) => wantsQuantity(type, p));
+      $("#manyHint", form).hidden = !gedeeld || perStuk;
+      $("#perProduct", form).hidden = !perStuk;
+      if (perStuk) perProduct(keuze, type);
       const perPiece = productKind(product) === "procedure";
-      const number = keuze.length <= 1 && wantsQuantity(type, product);
+      const number = !gedeeld && wantsQuantity(type, product);
       $("#roomsField", form).hidden = !number;
-      $("#roomsLabel", form).textContent = t(!perPiece ? "dlg.a.rooms" : type === "procedure" ? "dlg.a.used" : "dlg.a.quantity");
-      $("#roomsHint", form).hidden = !(perPiece && number);
+      $("#roomsLabel", form).textContent = aantalLabel(product, type);
+      $("#roomsHint", form).hidden = !((perPiece && number) || (perStuk && keuze.some((p) => productKind(p) === "procedure")));
       $("#noteHint", form).hidden = type !== "procedure";
-      const fam = form.elements.family;
-      if (familyFor !== product) {
-        const was = familyFor === null ? v.family || "" : fam.value;
-        fam.innerHTML = [opt("", "—", was), ...familiesFor(product).map((k) => opt(k, t("family." + k), was))].join("");
-        familyFor = product;
-      }
-      $("#familyField", form).hidden = !wantsFamily(type, product);
     };
     form.onchange = sync;
     sync();
@@ -1939,20 +2024,20 @@
     const form = openDialog(`
       <h2>${esc(p ? t("dlg.plannedEdit") : t("dlg.plannedNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
-        <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" value="${esc(v.date)}"
-          title="${esc(t("dlg.p.date.hint"))}"></label>
-        <label class="field">${esc(t("dlg.p.time"))}<input type="time" name="time" value="${esc(v.time || "")}"
-          title="${esc(t("dlg.p.time.hint"))}"></label>
+        <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" value="${esc(v.date)}"></label>
+        <label class="field">${esc(t("dlg.p.time"))}<input type="time" name="time" value="${esc(v.time || "")}"></label>
+        <p class="muted full">${esc(t("dlg.p.when.hint"))}</p>
+        <div class="field full">${esc(t("dlg.p.product"))}${productMany(had)}</div>
         <label class="field">${esc(t("dlg.p.type"))}
-          <select name="type">${typeOptions(had, v.type)}</select>
+          <select name="type">${typeOptions(typesInAll(had, myProducts()), v.type)}</select>
         </label>
-        <div class="field">${esc(t("dlg.p.product"))}${productMany(had)}</div>
         <label class="field">${esc(t("dlg.p.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
         ${canAssign ? `<label class="field full">${esc(t("dlg.p.assignee"))}
           <select name="assignee">${assigneeOptions(had, assignee)}</select>
         </label>` : ""}
+        <p class="muted full" id="typeNote" hidden></p>
         <label class="field full" id="familyField">${esc(t("dlg.a.family"))}<select name="family"></select></label>
         <label class="field full">${esc(t("dlg.p.note"))}<textarea name="note" rows="3" placeholder="${esc(t("dlg.p.note.ph"))}">${esc(v.note)}</textarea></label>
       </div>
@@ -1973,10 +2058,10 @@
         // Zonder uur een hele dag in de agenda; met een uur een uur lang. Een
         // uur zonder dag zegt niets, dus dat valt weg.
         if (rec.date && timeOrEmpty(data.time)) rec.time = timeOrEmpty(data.time); else delete rec.time;
-        const keuze = pickedProducts(form);
-        setProducts(rec, keuze);
+        setProducts(rec, pickedProducts(form));
         // De soort stent kan al bij het plannen: bij het afvinken gaat ze mee.
-        if (keuze.length === 1 && wantsFamily(data.type, keuze[0]) && data.family) rec.family = data.family;
+        const product = shared(rec) ? "" : productOf(rec);
+        if (wantsFamily(data.type, product) && data.family) rec.family = data.family;
         else delete rec.family;
         // Het veld komt er alleen bij als het moment voor iemand anders is dan
         // wie het invoerde: voor die persoon volgt het al uit de stempel. Zo
@@ -1997,24 +2082,17 @@
     // gekozen was blijft staan als hij dat product ook heeft.
     // onchange en geen luisteraar: #dialogForm wordt hergebruikt, en een
     // luisteraar per geopende dialoog zou zich opstapelen (zie openDialog).
-    let familyFor = null;
-    const family = () => {
-      const keuze = pickedProducts(form);
-      const product = keuze.length === 1 ? keuze[0] : "";
-      const fam = form.elements.family;
-      if (familyFor !== product) {
-        const was = familyFor === null ? v.family || "" : fam.value;
-        fam.innerHTML = [opt("", "—", was), ...familiesFor(product).map((k) => opt(k, t("family." + k), was))].join("");
-        familyFor = product;
-      }
-      $("#familyField", form).hidden = !wantsFamily(form.elements.type.value, product);
-    };
-    family();
+    // Een plan draagt geen aantal: elke soort die bij alle gekozen producten
+    // bestaat, mag. Het aantal komt bij het afvinken, per product.
+    const velden = momentFields(form, v, (keuze) => typesInAll(keuze, myProducts()));
+    velden();
+    // Een uur zonder dag zegt niets: zonder datum staat het uur uit, en dat
+    // ziet wie het invult, in plaats van dat het bij het opslaan stil wegvalt.
+    const when = () => { form.elements.time.disabled = !form.elements.date.value; };
+    when();
     form.onchange = (e) => {
-      const changed = !!e.target.dataset.mproduct;
-      const keuze = pickedProducts(form);
-      if (changed) retype(form.elements.type, keuze);
-      family();
+      if (e.target.name === "date") when();
+      const { veranderd: changed, keuze } = velden(e);
       const pick = form.elements.assignee;
       if (!pick || !changed) return;
       const was = pick.value;

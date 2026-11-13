@@ -1257,6 +1257,9 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
   /* 16px, zoals elk veld op gsm: anders zoomt iOS in zodra het adres
      geselecteerd wordt. */
   .feed-url input { font-size: var(--t-md); }
+  /* Het product boven zijn velden: drie kolommen passen niet naast elkaar. */
+  .pp-row { grid-template-columns: 1fr 1fr; }
+  .pp-name { grid-column: 1 / -1; padding-bottom: 0; }
   .u-row { gap: 8px; }
   .u-who, .u-role, .u-scope { flex: 1 1 100%; }
   .s-filters { width: 100%; }

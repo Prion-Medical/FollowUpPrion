@@ -124,6 +124,12 @@ window.FollowUpDomain = (() => {
   // lijst). Zo'n moment draagt nooit een aantal of een soort stent; de
   // databank haalt ze er ook zelf af (zonder_aantal() in schema.sql).
   const shared = (r) => !!r && Array.isArray(r.products);
+  // De soorten die elk van de gekozen producten kent, ook die met een aantal.
+  // Voor een plan (dat draagt nooit een aantal) en voor een nieuw contactmoment
+  // over meer producten met een aantal: dat wordt bij het bewaren één
+  // contactmoment per product, elk met zijn eigen aantal.
+  const typesInAll = (list, mine) => (!list.length ? typesOffered(mine)
+    : Object.keys(ACT_TYPES).filter((k) => list.every((p) => typesFor(p).includes(k))));
   // Welke producten deze gebruiker mag gebruiken. Een leeg bereik betekent
   // onbeperkt, dus dan zijn het ze allemaal. De databank schermt het document
   // al af; dit is er zodat de app geen keuze aanbiedt die toch geweigerd wordt.
@@ -688,7 +694,7 @@ window.FollowUpDomain = (() => {
     normalizeFacts, syncPipeline, zonderProduct, stageStatus, autoStatus, syncRooms,
     byWhen, assigneeOf, tickOffDate, rooms, signedRooms, units,
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, SOLD_TYPES, typesFor, typesOffered, typesAmong, shared, productsOf, productOf, familiesFor, wantsFamily, factsFor, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
+    ROOM_TYPES, SOLD_TYPES, typesFor, typesOffered, typesAmong, typesInAll, shared, productsOf, productOf, familiesFor, wantsFamily, factsFor, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
   };
 })();

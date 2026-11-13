@@ -309,9 +309,17 @@ one person the last editor of the whole logbook; the list appears when someone
 ticks a second product, and from then on that record stays a list even if one
 product is left. That last part is not tidiness: a restricted user holds only
 their own part of the list, and the database only adds the colleague's part back
-while the record is a list. Whatever carries a number belongs to one product, so
-with several ticked the dialog offers only the types without a number
-(`typesAmong()`), and there is no quantity and no kind of stent. Such a moment
+while the record is a list. Whatever carries a number belongs to one product. So a
+*new* contact moment about several products with a type that carries a number (an
+order for Fibroid RFA and Stents) asks for a number per product and is saved as one
+contact moment per product, each with its own number and kind of stent; the first
+keeps a ticked-off plan's id. A plan carries no number, so it may be any type all its
+products know (`typesInAll()`); the numbers come when it is ticked off. An existing
+moment in the list form, and a shared plan ticked off by someone who may not see all
+its products, offer only the types without a number (`typesAmong()`), with no
+quantity and no kind of stent: the colleague's product may be hidden in it. The
+connector does not split: it refuses a number on several products and says to log
+one moment per product. Such a moment
 moves the follow-up of each of its products, shows under each in the filters,
 and counts once as a contact moment. Its note is shared between the people who
 can see it, as a contact's fields are, and either of them can remove it.
