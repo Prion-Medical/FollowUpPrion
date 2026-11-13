@@ -95,16 +95,21 @@ window.FollowUpStats = (() => {
     return `<div class="s-tile"><b>${esc(value)}</b><span>${esc(label)}</span>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`;
   }
 
+  // Een reeks in een grafiek: de sleutel in b.values / i.values, en wat de
+  // legende en de staaf ervan tonen. Meestal is dat een product (asSeries);
+  // de verkochte stuks splitsen het nog in besteld en tijdens procedures.
+  const asSeries = (p) => ({ key: p, label: productLabel(p), color: productColor(p) });
   function legend(series) {
-    return `<div class="s-legend">${series.map((p) => `<span><i style="background:${productColor(p)}"></i>${esc(productLabel(p))}</span>`).join("")}</div>`;
+    return `<div class="s-legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join("")}</div>`;
   }
 
   // Verticale gestapelde staven (bv. per maand).
   function columns(buckets, series) {
-    const max = niceMax(Math.max(1, ...buckets.map((b) => sum(series, (s) => b.values[s] || 0))));
+    const v = (b, s) => b.values[s.key] || 0;
+    const max = niceMax(Math.max(1, ...buckets.map((b) => sum(series, (s) => v(b, s)))));
     const ticks = [max, max / 2, 0];
     // Lege assen zeggen niets: één zin is eerlijker dan een grafiek zonder balken.
-    if (!buckets.some((b) => sum(series, (x) => b.values[x] || 0))) return `<p class="muted s-empty">${esc(t("stats.empty"))}</p>`;
+    if (!buckets.some((b) => sum(series, (s) => v(b, s)))) return `<p class="muted s-empty">${esc(t("stats.empty"))}</p>`;
     return `
       <div class="s-cols">
         <div class="s-yaxis">${ticks.map((v) => `<span>${fmt(v)}</span>`).join("")}</div>
@@ -112,11 +117,11 @@ window.FollowUpStats = (() => {
           ${ticks.map((v) => `<div class="s-grid" style="bottom:${(v / max) * 100}%"></div>`).join("")}
           <div class="s-bars">
             ${buckets.map((b) => {
-              const total = sum(series, (s) => b.values[s] || 0);
-              const tipText = [`${b.label}: ${total}`, ...series.filter((s) => b.values[s]).map((s) => `${productLabel(s)}: ${b.values[s]}`)].join("\n");
+              const total = sum(series, (s) => v(b, s));
+              const tipText = [`${b.label}: ${fmt(total)}`, ...series.filter((s) => v(b, s)).map((s) => `${s.label}: ${fmt(v(b, s))}`)].join("\n");
               return `<div class="s-col" data-tip="${esc(tipText)}" tabindex="0">
                 <div class="s-stack" style="height:${(total / max) * 100}%">
-                  ${series.filter((s) => b.values[s]).map((s) => `<div style="flex:${b.values[s]};background:${productColor(s)}"></div>`).join("")}
+                  ${series.filter((s) => v(b, s)).map((s) => `<div style="flex:${v(b, s)};background:${s.color}"></div>`).join("")}
                 </div>
                 <span class="s-xlabel">${esc(b.short)}</span>
               </div>`;
@@ -131,12 +136,12 @@ window.FollowUpStats = (() => {
     if (!items.length) return `<p class="muted">${esc(empty)}</p>`;
     const max = Math.max(1, ...items.map((i) => i.total));
     return `<div class="s-hbars">${items.map((i) => {
-      const tipText = [`${i.label}: ${i.total}`, ...(series ? series.filter((s) => i.values[s]).map((s) => `${productLabel(s)}: ${i.values[s]}`) : [])].join("\n");
+      const tipText = [`${i.label}: ${fmt(i.total)}`, ...(series ? series.filter((s) => i.values[s.key]).map((s) => `${s.label}: ${fmt(i.values[s.key])}`) : [])].join("\n");
       return `<div class="s-hrow" data-tip="${esc(tipText)}" tabindex="0">
         <span class="s-hlabel">${esc(i.label)}</span>
         <div class="s-htrack"><div class="s-hbar" style="width:${(i.total / max) * 100}%">
           ${series
-            ? series.filter((s) => i.values[s]).map((s) => `<div style="flex:${i.values[s]};background:${productColor(s)}"></div>`).join("")
+            ? series.filter((s) => i.values[s.key]).map((s) => `<div style="flex:${i.values[s.key]};background:${s.color}"></div>`).join("")
             : `<div style="flex:1;background:${i.color || "var(--series-1)"}"></div>`}
         </div></div>
         <span class="s-hval">${fmt(i.total)}</span>
@@ -148,9 +153,10 @@ window.FollowUpStats = (() => {
     return `<section class="s-card ${extra}"><h3>${esc(title)}</h3>${body}</section>`;
   }
 
+  // De producten die in de lijst voorkomen, als reeksen, in de vaste volgorde.
   function seriesIn(list) {
     const present = new Set(list.map((a) => a.product || ""));
-    return [...PRODUCTS, ""].filter((p) => present.has(p));
+    return [...PRODUCTS, ""].filter((p) => present.has(p)).map(asSeries);
   }
 
   // ---------- secties ----------
@@ -213,7 +219,7 @@ window.FollowUpStats = (() => {
       for (const p of Object.keys(b.values)) b.values[p] = Math.max(0, b.values[p]);
     }
     const series = seriesIn(events);
-    return card(t("stats.activeSubs"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [myProducts()[0]]), "wide");
+    return card(t("stats.activeSubs"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [asSeries(myProducts()[0])]), "wide");
   }
 
   // Nieuwe installaties per maand. Voor EndoQ en Ainex zegt de grafiek hierboven
@@ -226,20 +232,41 @@ window.FollowUpStats = (() => {
       if (b) b.values[a.product || ""] = (b.values[a.product || ""] || 0) + rooms(a);
     }
     const series = seriesIn(installs);
-    return card(t("stats.perMonth"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [myProducts()[0]]), "wide");
+    return card(t("stats.perMonth"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [asSeries(myProducts()[0])]), "wide");
   }
 
   // Bestellingen per maand, voor de producten die per ingreep verbruikt worden.
   // Geen stand zoals de abonnementen maar een optelsom per maand: wat er die
   // maand besteld is. Een bestelling zonder aantal telt als één.
+  //
+  // Eén getal, maar twee bronnen: wat besteld werd en wat tijdens een
+  // procedure verbruikt werd. Elk product houdt zijn eigen kleur, zodat de
+  // staaf per product blijft lezen; het deel uit procedures krijgt in die
+  // kleur strepen: per product twee reeksen.
   function ordersCard(orders) {
+    const bron = (a) => (a.type === "procedure" ? "procedure" : "order");
+    const deel = (p, how) => {
+      const s = asSeries(p);
+      return {
+        key: `${p}|${how}`,
+        label: `${s.label} · ${t(how === "procedure" ? "stats.fromProcedures" : "stats.fromOrders")}`,
+        color: how === "procedure"
+          ? `repeating-linear-gradient(135deg, ${s.color} 0 3px, color-mix(in srgb, ${s.color} 35%, var(--panel)) 3px 6px)`
+          : s.color,
+      };
+    };
     const buckets = monthBuckets();
     for (const a of orders) {
       const b = buckets.find((x) => x.key === (a.date || "").slice(0, 7));
-      if (b) b.values[a.product || ""] = (b.values[a.product || ""] || 0) + units(a);
+      const k = `${a.product || ""}|${bron(a)}`;
+      if (b) b.values[k] = (b.values[k] || 0) + units(a);
     }
-    const series = seriesIn(orders);
-    return card(t("stats.orders"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [myProducts().find((p) => productKind(p) === "procedure")]), "wide");
+    const present = new Set(orders.filter((a) => units(a) > 0).map((a) => `${a.product || ""}|${bron(a)}`));
+    const series = seriesIn(orders).flatMap((s) => [deel(s.key, "order"), deel(s.key, "procedure")]).filter((s) => present.has(s.key));
+    const fallback = myProducts().find((p) => productKind(p) === "procedure");
+    // Een legende ook bij één product: de strepen moeten uitgelegd zijn.
+    return card(t("stats.orders"), (series.length ? legend(series) : "")
+      + columns(buckets, series.length ? series : [deel(fallback, "order")]), "wide");
   }
 
   // Verkochte stuks per soort, voor een product dat soorten kent (stents).
@@ -270,7 +297,7 @@ window.FollowUpStats = (() => {
       for (const r of hit) values[r.p] = (values[r.p] || 0) + 1;
       return { label: k ? t("rfa.cmm." + k) : t("rfa.cmm.unknown"), total: hit.length, values };
     }).filter((i) => i.total);
-    const series = procedure.filter((p) => rows.some((r) => r.p === p));
+    const series = procedure.filter((p) => rows.some((r) => r.p === p)).map(asSeries);
     return card(t("stats.cmm"), (series.length > 1 ? legend(series) : "") + hbars(items, series.length > 1 ? series : null, t("stats.noData")));
   }
 
