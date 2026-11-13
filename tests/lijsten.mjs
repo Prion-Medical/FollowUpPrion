@@ -23,17 +23,23 @@ await geval("producten", () => {
   assert.deepEqual(sqlLijst("producten"), D.PRODUCTS, "followup.producten() ≠ domain.js");
   assert.deepEqual(letterlijk(agent, "PROCEDURE"), D.PRODUCTS.filter((p) => D.productKind(p) === "procedure"),
     "producten per stuk: koppeling ≠ productKind() in domain.js");
+  assert.deepEqual(sqlLijst("per_ingreep"), D.PRODUCTS.filter((p) => D.productKind(p) === "procedure"),
+    "producten per stuk: followup.per_ingreep() ≠ productKind() in domain.js");
 });
 
 // --- fases -----------------------------------------------------------------
 await geval("fases", () => {
   assert.deepEqual(letterlijk(agent, "STAGES"), D.STAGES, "koppeling ≠ domain.js");
   assert.deepEqual(sqlLijst("fases"), D.STAGES, "followup.fases() ≠ domain.js");
+  // De fases vóór de verkoop: een bestelling of installatie maakt daar klant.
+  // De koppeling heeft er geen kopie meer van; de databank beslist (issue 21).
+  assert.deepEqual(sqlLijst("voor_verkoop"), D.PRE_SALE, "followup.voor_verkoop() ≠ PRE_SALE in domain.js");
 });
 
 // --- soorten contactmoment -------------------------------------------------
 const soorten = Object.keys(D.ACT_TYPES);
 await geval("soorten", () => {
+  assert.deepEqual(sqlLijst("soorten"), soorten, "followup.soorten() ≠ ACT_TYPES in domain.js (ook de volgorde)");
   // De koppeling houdt twee lijsten: alles wat bestaat (KNOWN_TYPES =
   // ["prospecting", ...ACT_TYPES], ook om op te zoeken) en wat nog gekozen
   // kan worden (ACT_TYPES). Dat KNOWN_TYPES zo opgebouwd is, kijken we na.
@@ -74,7 +80,7 @@ await geval("gegevens per product", () => {
 // koppeling niet altijd, dus hier staat het.
 await geval("andere lijsten", () => {
   for (const [naam, waarde] of [["COUNTRIES", D.COUNTRIES], ["CMM_STATES", D.CMM_STATES], ["YES_NO", D.YES_NO],
-    ["PRE_SALE", D.PRE_SALE], ["DEPARTMENTS", D.DEPARTMENTS], ["SECTORS", D.SECTORS], ["LANGUAGES", D.LANGUAGES]]) {
+    ["DEPARTMENTS", D.DEPARTMENTS], ["SECTORS", D.SECTORS], ["LANGUAGES", D.LANGUAGES]]) {
     assert.deepEqual(letterlijk(agent, naam), waarde, `${naam}: koppeling ≠ domain.js`);
   }
   assert.deepEqual(letterlijk(agent, "BRANDS"), D.SCOPE_BRANDS, "BRANDS (koppeling) ≠ SCOPE_BRANDS (domain.js)");

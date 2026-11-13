@@ -91,7 +91,37 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('merge_products',  'products_of',    'een contactmoment in de oude vorm verliest bij het samenvoegen zijn product niet'),
   ('merge_entries',   'zonder_aantal',  'een moment over meer producten draagt geen aantal'),
   ('merge_entries',   'left join lateral', 'een afgevinkt plan geeft zijn producten, niet zijn plaats'),
-  ('merge_hospital',  'afgevinkt',      'afvinken houdt het product van de collega op het contactmoment')
+  ('merge_hospital',  'afgevinkt',      'afvinken houdt het product van de collega op het contactmoment'),
+  -- Issue 21: de databank beslist wat een contactmoment met de opvolging
+  -- doet. Draait er een oude write_state, dan beweegt een moment dat via de
+  -- koppeling binnenkomt niets meer: de koppeling rekent het niet meer zelf.
+  ('write_state',     'opvolging_bijwerken_doc', 'een nieuw contactmoment verzet de opvolging en de kamers'),
+  ('opvolging_bijwerken_doc', 'mode is distinct from ''save''', 'een import wordt niet opnieuw beslist'),
+  ('opvolging_bijwerken', 'fix_rooms_installed', 'de kamers: opgeslagen getal plus het verschil'),
+  ('opvolging_bijwerken', 'fix_pipeline',  'de rijen en wat een nieuw moment ermee doet'),
+  ('opvolging_bijwerken', 'is distinct from (stored -> ''pipeline'')', 'een fase met de hand of een afgevinkt product: het ziekenhuis volgt'),
+  ('fix_pipeline',    'soort_van',      'ook een moment waarvan de soort veranderde, gelezen zoals de app'),
+  ('fix_pipeline',    'zonder_id_sleutel', 'een opgeslagen moment zonder id dat de app een id gaf, is niet nieuw'),
+  ('fix_pipeline',    'v_pijp',         'lineair: de opvolging gaat als variabele door de lus'),
+  ('fix_pipeline',    'not v_beperkt or x = any(allowed)', 'een beperkte opslag maakt geen rij voor de collega'),
+  ('fix_pipeline',    'q.x = any(allowed)', 'een beperkte opslag verzet de rij van de collega niet'),
+  ('fix_pipeline',    'v_naam && allowed', 'een moment buiten het bereik verzet niets'),
+  ('fix_rooms_installed', 'geinstalleerd', 'de kamers: opgeslagen getal plus het verschil'),
+  ('zonder_id_sleutel', 'datum_van',    'bestaat die functie überhaupt'),
+  ('kent_fase',       'per_ingreep',    'bestaat die functie überhaupt'),
+  ('soort_van',       'soorten',        'bestaat die functie überhaupt'),
+  ('datum_van',       'jsonb_typeof(a -> ''date'')', 'een datum zoals dateOrEmpty() in de app'),
+  ('geinstalleerd',   'a ? ''products''', 'een moment in de lijstvorm telt geen kamers'),
+  ('write_state',     'v_basis',        'de regels vergelijken met hetzelfde omgezette document als het samenvoegen'),
+  ('opvolging_bijwerken_doc', 'jsonb_object_agg', 'de opgeslagen ziekenhuizen één keer op id'),
+  ('geinstalleerd',   'getal',          'kamers als tekst tellen zoals in de app'),
+  ('getal',           'jsonb_typeof',   'bestaat die functie überhaupt'),
+  ('soorten',         'cancellation',   'de soorten contactmoment aan de databankkant'),
+  ('na_moment',       'voor_verkoop',   'bestaat die functie überhaupt'),
+  ('geinstalleerd',   'per_ingreep',    'stuks van een product per ingreep zijn geen kamers'),
+  ('per_ingreep',     'Stents',         'de producten per ingreep aan de databankkant'),
+  ('voor_verkoop',    'purchasing',     'de fases vóór de verkoop aan de databankkant'),
+  ('opvolging_aanvullen', 'kent_fase',  'een fase die het product niet kent schuift naar evaluatie')
 )
 select v.functie,
        v.waarvoor,
