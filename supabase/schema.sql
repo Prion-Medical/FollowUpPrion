@@ -431,7 +431,9 @@ create or replace function followup.fix_planned(h jsonb) returns jsonb
 language sql immutable set search_path = public as $$
   with p as (
     select coalesce((
-      select jsonb_agg(t.e order by coalesce(t.e ->> 'date', ''), t.i)
+      -- Op datum, op dezelfde dag op uur (wat geen uur heeft na wat er een
+      -- heeft), wat geen datum heeft vooraan: zoals byWhen() in de app.
+      select jsonb_agg(t.e order by coalesce(t.e ->> 'date', ''), coalesce(t.e ->> 'time', '99'), t.i)
         from jsonb_array_elements(followup.arr(h -> 'planned')) with ordinality t(e, i)
     ), '[]'::jsonb) as lijst
   )

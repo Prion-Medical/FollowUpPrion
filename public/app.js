@@ -189,7 +189,9 @@
   // staat het gewoon in de agenda, zodat de teller en de agenda hetzelfde zien.
   function hasDemoPlanned(h) {
     const d = today();
-    return h.planned.some((p) => p.type === "demo" && p.date >= d && inFilter(p));
+    // Ook een demo die nog geen datum heeft: die moet geregeld worden, en is
+    // dus gepland.
+    return h.planned.some((p) => p.type === "demo" && (!p.date || p.date >= d) && inFilter(p));
   }
   function relDays(d) {
     if (!d) return "";
@@ -720,7 +722,7 @@
     // Zonder datum is het geen planning, en de agenda rekent op de sortering.
     // Op datum, en wat geen datum heeft vooraan: dat staat klaar tot iemand
     // het doet. Dezelfde volgorde als fix_planned() in de databank.
-    h.planned.sort((a, b) => a.date.localeCompare(b.date));
+    h.planned.sort(byWhen);
     syncNextAction(h);
     h.createdAt = dateOrEmpty(h.createdAt) || today();
     // Een halve locatie is geen locatie: de kaart rekent op lat én lng.
@@ -1800,9 +1802,10 @@
   }
 
   function activityDialog(h, a, plan) {
-    // Een plan zonder datum krijgt er hier een: wat gebeurd is, gebeurde op
-    // een dag. Vandaag, tot iemand iets anders kiest.
-    const v = a || (plan ? { ...plan, date: plan.date || today(), rooms: "" } : {
+    // Wat afgevinkt wordt, gebeurde ten laatste vandaag: een plan zonder datum
+    // of voor volgende week staat dan op vandaag, tot iemand iets anders
+    // kiest. Dezelfde regel als complete_planned_moment in de koppeling.
+    const v = a || (plan ? { ...plan, date: tickOffDate(plan, today()), rooms: "" } : {
       date: today(),
       type: "email",
       product: defaultProduct(h),
@@ -1973,7 +1976,7 @@
         else delete rec.assignee;
         stamp(rec, !p);
         if (!p) h.planned.push(rec);
-        h.planned.sort((a, b) => a.date.localeCompare(b.date));
+        h.planned.sort(byWhen);
       }
       syncNextAction(h);
       scheduleSave();

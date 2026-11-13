@@ -79,6 +79,7 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   -- Momenten zonder datum. Een oude fix_planned gooit ze bij elke opslag weg;
   -- een oude doc_keys laat een contributor ze ongezien verwijderen.
   ('fix_planned',     'order by coalesce(t.e ->> ''date''', 'een gepland moment zonder datum blijft staan'),
+  ('fix_planned',     'coalesce(t.e ->> ''time'', ''99'')', 'op dezelfde dag op uur, zoals de agenda'),
   ('doc_keys',        'ook een gepland moment zonder datum', 'een moment zonder datum verwijderen is verwijderen'),
   -- Uit de veiligheidscontrole van 2026-11-13.
   ('check_payload',   '[[:cntrl:]]',    'een id met een regeleinde komt het document niet in'),

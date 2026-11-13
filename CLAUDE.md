@@ -355,7 +355,8 @@ first planned item by `syncNextAction()`, which keeps the list, the "actie te la
 and the CSV working; do not write to them directly. The old `demoDate` field was folded
 into `planned[]` the same way: `normalize()` turns it into a planned moment of type
 `demo` and drops the field, and the "demo's gepland" KPI and the CSV column both read
-`planned[]` now. There is one place to plan a demo, and it clears itself when ticked off.
+`planned[]` now. There is one place to plan a demo, and it clears itself when ticked off. A demo planned
+without a date counts as planned too: it still has to be arranged.
 
 A planned moment may have **no date**: something that has to happen but has no day
 yet. It sorts first (an empty date sorts before any other, in `normalize()`,
@@ -374,8 +375,11 @@ A planned moment can carry a `time` (`"14:00"`), and only when someone gave one 
 like `assignee`, writing an empty one onto every older moment would make the first
 saver the last editor of the agenda. It belongs to the plan: ticking off builds a
 fresh contact moment, so the time is dropped, and a contact moment has a date and
-no time. `h.planned` stays sorted by date alone, as `fix_planned()` sorts it in the
-database; `byWhen()` orders by time as well, for display only.
+no time. `h.planned` is stored in `byWhen()` order — date, then time (a moment
+without a time after those with one), undated first — and `fix_planned()` and the
+connector's `sortPlanned()` sort the same way, so the next action is the moment the
+agenda shows first. Ticking off dates the contact moment at the latest today
+(`tickOffDate()`): a plan for next week ticked off now happened today.
 
 **Assigned to, and planned for.** Two things belong to a person, and they have two
 words on purpose. A product at a hospital is *assigned to* someone: `owner` in that

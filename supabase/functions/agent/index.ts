@@ -460,8 +460,12 @@ function useProduct(h: Any, product: string) {
 // syncNextAction() uit app.js; de databank rekent dit zelf ook na.
 // Op datum, met wat geen datum heeft vooraan, zoals fix_planned() in de
 // databank en normalize() in de app.
+// Op datum en op dezelfde dag op uur, wat geen uur heeft na wat er een heeft,
+// en wat geen datum heeft vooraan: zoals byWhen() in de app en fix_planned()
+// in de databank. nextAction is dan het moment dat de agenda als eerste toont.
 function sortPlanned(h: Any) {
-  h.planned.sort((a: Any, b: Any) => String(a.date || "").localeCompare(String(b.date || "")));
+  h.planned.sort((a: Any, b: Any) => String(a.date || "").localeCompare(String(b.date || ""))
+    || String(a.time || "99").localeCompare(String(b.time || "99")));
   const p = h.planned[0];
   h.nextActionDate = p ? p.date : "";
   h.nextAction = p ? p.note : "";
@@ -1446,7 +1450,7 @@ const TOOLS = [
         planned_for: { type: "string", description: "A colleague's name, when someone else will do it. Leave out for the signed-in user." },
         note: { type: "string", description: "What is to be done." },
       },
-      required: ["hospital_id", "date", "type"], additionalProperties: false,
+      required: ["hospital_id", "type"], additionalProperties: false,
     },
     annotations: WRITES,
   },
