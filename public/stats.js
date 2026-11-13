@@ -17,7 +17,7 @@ window.FollowUpStats = (() => {
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
   const { PRODUCTS, CMM_STATES, STAGES, STATUSES, COUNTRIES, regionOf, SCOPE_BRANDS, PROCESSOR_BRANDS,
           esc, pickBox, myProducts, productColor, productKind, pipelineView, emptyTargets,
-          SOLD_TYPES, familiesFor, factsFor, productsOf, productOf } = window.FollowUpDomain;
+          SOLD_TYPES, familiesFor, factsFor, productsOf, productOf, rooms, signedRooms, units } = window.FollowUpDomain;
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Een doelcijfer aanpassen is schrijven. Zonder dat recht staat het getal er
   // nog wel — het hoort bij de cijfers — maar op slot. storage.js is op dit
@@ -41,15 +41,9 @@ window.FollowUpStats = (() => {
   let tip;
 
   const fmt = (n, d = 0) => (n == null || isNaN(n) ? "—" : Number(n).toLocaleString(I18N.locale, { maximumFractionDigits: d, minimumFractionDigits: d }));
-  const rooms = (a) => Number(a.rooms) || 1;   // een installatie zonder aantal telt als één kamer
-  // Een stopzetting telt negatief, zodat "actief" echt actief blijft.
-  const signedRooms = (a) => (a.type === "cancellation" ? -rooms(a) : rooms(a));
-  // Verkochte stuks: wat besteld is, en wat verbruikt is tijdens een
-  // procedure. Zonder aantal telt een bestelling als één, maar een ingevulde
-  // nul is nul: een gratis proefzending is geen verkoop. Een procedure zonder
-  // aantal telt níet: daar is het aantal net wat ze tot een verkoop maakt, en
-  // wat er gebruikt werd kan evengoed al op een bestelling staan.
-  const units = (a) => (a.rooms == null || a.rooms === "" ? (a.type === "procedure" ? 0 : 1) : Math.max(0, Number(a.rooms) || 0));
+  // Hoe kamers en stuks geteld worden (rooms, signedRooms, units) staat in
+  // domain.js: de koppeling telt mee met een kopie, en tests/cijfers.mjs legt
+  // de twee naast elkaar.
   const sum = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
   const months = () => Array.from({ length: 12 }, (_, i) => new Date(2021, i, 1).toLocaleDateString(I18N.locale, { month: "short" }));
   const productLabel = (p) => p || t("stats.noProduct");

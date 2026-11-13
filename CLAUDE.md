@@ -93,7 +93,7 @@ Two things that cost an evening to find out:
 
 | File | What it is |
 |---|---|
-| `public/domain.js` | Fixed values both app.js and stats.js need, plus `esc()` and `pickBox()` |
+| `public/domain.js` | Fixed values and pure rules both app.js and stats.js need: what a contact moment does to colour, stage and rooms (`autoStatus`, `syncPipeline`, `syncRooms`), the order of planned moments (`byWhen`), how units and rooms are counted, plus `esc()` and `pickBox()`. The connector copies these; `tests/` compares the copies |
 | `public/ui.js` | What the page does without knowing about hospitals: icons, `leave()`, `ask()`, row motion, the sliding switch, the select list |
 | `public/app.js` | The whole app: map, list, record, agenda, dialogs, export/import (~1,500 lines) |
 | `public/i18n.js` | NL/EN dictionaries and `t()` |
@@ -640,12 +640,13 @@ Three rules it rests on:
   the cap on deletions apply exactly as in the app. `controle.sql` therefore still
   says everything there is to say about what an assistant can reach.
 - **The rules now exist in a third place.** What a contact moment does to the colour
-  and the stage (`autoStatus`, `stageStatus`, `syncPipeline`, `syncRooms`,
-  `syncNextAction`, `syncProducts`), the fixed lists from `domain.js` (products,
-types per product, kinds of stent, facts per product) and the counting
-  rules from `stats.js` are copied into the function. Change one in `app.js` and it
-  must change there too. If the connector stays, these belong in the database, where
-  the app and the assistant would share them and `controle.sql` could check them.
+  and the stage (`autoStatus`, `stageStatus`, `syncPipeline`, `syncRooms`), the
+  order of planned moments (`byWhen`, `tickOffDate`), the fixed lists and the type
+  rules (`typesFor`, `typesAmong`, `shared`) and the counting rules (`units`,
+  `rooms`, `signedRooms`) live in `domain.js` and are copied into the function.
+  Change one in `domain.js` and it must change there too. `tests/` runs the same
+  moments, plans and figures through both and fails when they disagree. If the connector stays, these belong in the database, where the app and the
+  assistant would share them and `controle.sql` could check them (issue #21).
 
 Signing in goes through Supabase Auth acting as an OAuth server. In the dashboard:
 OAuth Server on, authorization path `/consent.html`, dynamic client registration off,

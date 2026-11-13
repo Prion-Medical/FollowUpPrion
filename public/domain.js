@@ -486,8 +486,198 @@ window.FollowUpDomain = (() => {
     return mine;
   }
 
+  // ---------- wat een contactmoment met de opvolging doet ----------
+  // Hier en niet in app.js: de koppeling voor een assistent houdt er een kopie
+  // van, en tests/regels.mjs legt de twee naast elkaar. Geen meldingen: wat
+  // een kleur veranderde geven stageStatus() en autoStatus() terug, en de app
+  // toont dat.
+  const str = (v) => (v == null ? "" : String(v));
+  // De gegevens van een product per ingreep. Ze staan in de rij van dat
+  // product in h.pipeline en niet in een blok op het ziekenhuis zoals unit:
+  // Thyroid RFA en Fibroid RFA hebben elk hun eigen goedkeuring, prioriteit en
+  // concurrent in hetzelfde ziekenhuis, en zo vallen ze vanzelf binnen de
+  // productmuur — de databank schermt die rijen al af per product.
+  // Welke er bij een product horen zegt factsFor() in domain.js: bij stents
+  // alleen de notitie. Wat er niet bij hoort krijgt ook geen
+  // lege sleutel.
+  function normalizeFacts(e, p) {
+    const has = (k) => factsFor(p).includes(k);
+    if (has("cmm")) e.cmm = CMM_STATES.includes(e.cmm) ? e.cmm : "";
+    if (has("prio")) e.prio = [1, 2, 3].includes(Number(e.prio)) ? Number(e.prio) : null;
+    if (has("doesAlready")) e.doesAlready = YES_NO.includes(e.doesAlready) ? e.doesAlready : "";
+    if (has("currentSystem")) e.currentSystem = str(e.currentSystem);
+    if (has("notes")) e.notes = str(e.notes);
+    return e;
+  }
+
+  // De opvolging per product. Elk product dat bij het ziekenhuis aangevinkt
+  // staat krijgt een eigen fase, kleur en verantwoordelijke; wat op het
+  // ziekenhuis zelf staat volgt daaruit (zie pipelineView in domain.js).
+  //
+  // Vroeger was er één fase per ziekenhuis. Die wordt hier de fase van elk
+  // product dat er toen aangevinkt stond — de app wist niet beter, en twee
+  // keer dezelfde fase is juister dan één van de twee op prospect zetten. Een
+  // product dat er láter bijkomt begint vooraan: prospect, of eerste contact
+  // als er al een contactmoment voor bestaat.
+  //
+  // Een rij verdwijnt hier nooit, ook niet als het vinkje weggaat. Wie
+  // afgeschermd is krijgt h.products gesnoeid op zijn eigen bereik, en zou
+  // anders de opvolging van een collega wissen bij de eerste opslag.
+  function syncPipeline(h) {
+    if (!h.pipeline || typeof h.pipeline !== "object" || Array.isArray(h.pipeline)) h.pipeline = {};
+    for (const [p, e] of Object.entries(h.pipeline)) {
+      if (!e || typeof e !== "object") { delete h.pipeline[p]; continue; }
+      e.stage = STAGES.includes(e.stage) ? e.stage : "prospect";
+      e.status = STATUSES.includes(e.status) ? e.status : "red";
+      e.owner = str(e.owner);
+      if (productKind(p) === "procedure") normalizeFacts(e, p);
+    }
+    const eerste = !Object.keys(h.pipeline).length;
+    for (const p of h.products) {
+      if (h.pipeline[p]) continue;
+      const contacted = h.activities.some((a) => productsOf(a).includes(p));
+      const e = eerste ? { stage: h.stage, status: h.status, owner: "" }
+        : { stage: contacted ? "first_contact" : "prospect", status: contacted ? "orange" : "red", owner: "" };
+      // Een fase die dit product niet kent, schuift naar de dichtste die het
+      // wel kent: allebei liggen ze net voor of net na de evaluatie.
+      if (!stagesFor(p).includes(e.stage)) e.stage = "evaluation";
+      if (productKind(p) === "procedure") normalizeFacts(e, p);
+      h.pipeline[p] = e;
+    }
+    if (h.products.length) {
+      const f = furthest(h.products.map((p) => h.pipeline[p]));
+      h.status = f.status;
+      h.stage = f.stage;
+    } else if (!stagesFor("").includes(h.stage)) {
+      // Zonder product geldt de keuzelijst van het ziekenhuis zelf, en die
+      // kent niet elke fase.
+      h.stage = "evaluation";
+    }
+  }
+
+  // Het laatste product is afgevinkt. De kleur en de fase op het ziekenhuis
+  // waren die van dat product; ze laten staan zou zeggen dat een ziekenhuis
+  // zonder product klant is. Terug naar wat de contactmomenten zeggen. Wat er
+  // per product stond blijft bewaard en komt terug als het vinkje terugkomt.
+  function zonderProduct(h) {
+    if (h.products.length) return;
+    const contacted = h.activities.length > 0;
+    h.status = contacted ? "orange" : "red";
+    h.stage = contacted ? "first_contact" : "prospect";
+  }
+
+  // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
+  // x is waar de fase en de kleur staan: de opvolging van één product, of het
+  // ziekenhuis zelf zolang er geen product aan hangt.
+  function stageStatus(x, contacted) {
+    const before = x.status;
+    if (x.stage === "customer") x.status = "green";
+    else if (x.stage === "prospect") x.status = contacted ? x.status : "red";
+    else if (x.stage !== "not_interested" && x.status !== "green") x.status = "orange";
+    // De nieuwe kleur als ze veranderde, anders niets: de app toont er een
+    // melding bij, de koppeling en de controles niet.
+    return x.status !== before ? x.status : null;
+  }
+
+  // Kleur automatisch mee laten evolueren; manueel aanpassen blijft altijd mogelijk.
+  // Een contactmoment hoort bij één product, dus het is de opvolging van dát
+  // product die meebeweegt — een bestelling voor het ene maakt het andere niet
+  // groen.
+  function autoStatus(h, act) {
+    // Zonder product op het contactmoment: hangt er precies één product aan
+    // het ziekenhuis, dan is het dat. Hangen er meer aan, dan valt niet te
+    // raden welk — en dan blijft alles staan, liever dan het verkeerde product
+    // groen te maken. Hangt er geen aan, dan is het het ziekenhuis zelf.
+    // Gaat het over meer dan één product, dan beweegt elk van die rijen mee.
+    const rows = myProducts().filter((p) => h.products.includes(p) && h.pipeline[p]);
+    const named = productsOf(act).filter((p) => h.pipeline[p]);
+    const targets = named.length ? named.map((p) => [h.pipeline[p], p])
+      : rows.length === 1 ? [[h.pipeline[rows[0]], rows[0]]] : rows.length ? [] : [[h, ""]];
+    // Welke kleur erbij kwam, voor de melding in de app: groen wint.
+    let naar = null;
+    for (const [x, p] of targets) {
+      if ((act.type === "installation" || act.type === "order") && x.status !== "green") {
+        x.status = "green";
+        if (PRE_SALE.includes(x.stage)) x.stage = "customer";
+        naar = "green";
+      } else if (x.status === "red") {
+        x.status = "orange";
+        if (x.stage === "prospect") x.stage = "first_contact";
+        if (naar !== "green") naar = "orange";
+      }
+      // Na een demo: geïnstalleerd bij een product per abonnement, in evaluatie
+      // bij een product per ingreep, waar niets geïnstalleerd wordt. Een
+      // procedure waar een van ons bij stond is daar hetzelfde: het product is
+      // gebruikt, dus het wordt geëvalueerd. Een klant blijft klant.
+      if ((act.type === "demo" || act.type === "procedure") && ["prospect", "first_contact", "meeting", "demo_planned"].includes(x.stage)) {
+        x.stage = productKind(p) === "procedure" ? "evaluation" : "demo_installed";
+      }
+    }
+    syncPipeline(h);
+    return naar;
+  }
+
+  // Kamers van de afdeling bijwerken na een demo, installatie of stopzetting.
+  //
+  // Installaties tellen op: na een installatie van 2 en later nog een van 3
+  // staan er 5 kamers live. Een stopgezet abonnement telt er weer af. We passen
+  // het verschil toe en niet de som van alle contactmomenten, zodat een aantal
+  // dat hier al handmatig stond blijft staan.
+  // Een demo overschrijft wél: dat is de huidige toestand, geen optelsom — we
+  // nemen het aantal van de laatste demo waarvoor een aantal is ingevuld.
+  function syncRooms(h, before, after) {
+    // Alleen voor een product per abonnement: het aantal bij een RFA-bestelling
+    // zijn stuks, geen kamers, en hoort dus niet bij de afdeling opgeteld.
+    const perKamer = (a) => !!a && productKind(productOf(a)) === "subscription";
+    const installed = (a) => {
+      if (!perKamer(a) || !a.rooms) return 0;
+      if (a.type === "installation") return a.rooms;
+      if (a.type === "cancellation") return -a.rooms;
+      return 0;
+    };
+    const delta = installed(after) - installed(before);
+    if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
+      h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);
+    }
+    if ((perKamer(before) && before.type === "demo") || (perKamer(after) && after.type === "demo")) {
+      const demos = h.activities.filter((a) => a.type === "demo" && a.rooms && perKamer(a));
+      if (demos.length) h.unit.roomsDemo = demos.sort((a, b) => b.date.localeCompare(a.date))[0].rooms;
+    }
+  }
+
+  // ---------- planning en tellen ----------
+  // Ook hier omdat de koppeling (en voor de volgorde ook de databank) een
+  // kopie houdt, en tests/ die kopieën naast deze legt.
+  //
+  // De volgorde van geplande momenten: op datum, en op dezelfde dag eerst wat
+  // een uur heeft, in volgorde; wat "ergens die dag" is, komt na wat om negen
+  // uur begint. Een moment zonder datum heeft een lege datum en komt dus
+  // vooraan. Zo ligt h.planned opgeslagen, net als in fix_planned() in de
+  // databank en sortPlanned() in de koppeling: nextAction is dan wat de
+  // agenda als eerste toont.
+  const byWhen = (a, b) => (a.date || "").localeCompare(b.date || "") || (a.time || "99").localeCompare(b.time || "99");
+  // Voor wie een gepland moment is. Zonder toewijzing is dat wie het invoerde:
+  // wie iets plant, volgt het bijna altijd ook op, en zo werkt de filter in de
+  // agenda meteen voor alles wat er al stond.
+  const assigneeOf = (p) => p.assignee || p.createdBy || "";
+  // Wat afgevinkt wordt, gebeurde ten laatste vandaag: een plan zonder datum
+  // of voor volgende week staat dan op vandaag, tot iemand iets anders kiest.
+  const tickOffDate = (plan, vandaag) => (plan.date && plan.date <= vandaag ? plan.date : vandaag);
+  // Een installatie zonder aantal telt als één kamer; een stopzetting telt
+  // negatief, zodat "actief" echt actief blijft.
+  const rooms = (a) => Number(a.rooms) || 1;
+  const signedRooms = (a) => (a.type === "cancellation" ? -rooms(a) : rooms(a));
+  // Verkochte stuks: wat besteld is, en wat verbruikt is tijdens een
+  // procedure. Zonder aantal telt een bestelling als één, maar een ingevulde
+  // nul is nul: een gratis proefzending is geen verkoop. Een procedure zonder
+  // aantal telt níet: daar is het aantal net wat ze tot een verkoop maakt, en
+  // wat er gebruikt werd kan evengoed al op een bestelling staan.
+  const units = (a) => (a.rooms == null || a.rooms === "" ? (a.type === "procedure" ? 0 : 1) : Math.max(0, Number(a.rooms) || 0));
+
   return {
     merge3, deepEqual, setMain, mainContact,
+    normalizeFacts, syncPipeline, zonderProduct, stageStatus, autoStatus, syncRooms,
+    byWhen, assigneeOf, tickOffDate, rooms, signedRooms, units,
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, SOLD_TYPES, typesFor, typesOffered, typesAmong, productsOf, productOf, familiesFor, wantsFamily, factsFor, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,

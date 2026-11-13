@@ -14,12 +14,19 @@
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
     typesAmong, productsOf, productOf, familiesFor, wantsFamily, factsFor,
     esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual, setMain, mainContact,
+    normalizeFacts, syncPipeline, zonderProduct, syncRooms, byWhen, assigneeOf, tickOffDate,
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
   const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
   // Agendabestanden: zie ics.js. Het abonnement maakt dezelfde afspraken aan de
   // serverkant (supabase/functions/calendar).
   const Ics = window.FollowUpIcs;
+
+  // De regels voor kleur en fase staan in domain.js. Ze geven terug welke
+  // kleur erbij kwam; hier komt de melding erbij.
+  const kleurMelding = (kleur) => { if (kleur) toast(t(kleur === "green" ? "status.toGreen" : "status.toOrange")); };
+  const stageStatus = (x, contacted) => kleurMelding(window.FollowUpDomain.stageStatus(x, contacted));
+  const autoStatus = (h, act) => kleurMelding(window.FollowUpDomain.autoStatus(h, act));
   // Welk product staat standaard in een nieuw contactmoment of een planning:
   // dat van het ziekenhuis als er maar één is, anders het jouwe als jij er maar
   // één mag.
@@ -167,12 +174,6 @@
   }
   // Een datum als YYYY-MM-DD uit de losse delen. Niet via toISOString(): die
   // rekent in UTC en schuift bij ons 's avonds een dag op.
-  // Op datum, en op dezelfde dag eerst wat een uur heeft, in volgorde: wat
-  // "ergens die dag" is, komt na wat om negen uur begint. Enkel om te tonen:
-  // h.planned zelf blijft op datum, zoals fix_planned() in de databank het
-  // ook legt, anders verschuift elke opslag de volgorde.
-  // Een moment zonder datum heeft een lege datum en komt dus vanzelf vooraan.
-  const byWhen = (a, b) => a.date.localeCompare(b.date) || (a.time || "99").localeCompare(b.time || "99");
   const ymd = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   // nextAction en nextActionDate volgen uit het eerste geplande moment — ook
   // als dat er een zonder datum is: dat staat bovenaan, dus dat is wat er nu
@@ -582,81 +583,6 @@
     if (timeOrEmpty(p.time)) p.time = timeOrEmpty(p.time); else delete p.time;
     stampFields(p);
     return p;
-  }
-  // Voor wie een gepland moment is. Zonder toewijzing is dat wie het invoerde:
-  // wie iets plant, volgt het bijna altijd ook op, en zo werkt de filter in de
-  // agenda meteen voor alles wat er al stond.
-  const assigneeOf = (p) => p.assignee || p.createdBy || "";
-  // De gegevens van een product per ingreep. Ze staan in de rij van dat
-  // product in h.pipeline en niet in een blok op het ziekenhuis zoals unit:
-  // Thyroid RFA en Fibroid RFA hebben elk hun eigen goedkeuring, prioriteit en
-  // concurrent in hetzelfde ziekenhuis, en zo vallen ze vanzelf binnen de
-  // productmuur — de databank schermt die rijen al af per product.
-  // Welke er bij een product horen zegt factsFor() in domain.js: bij stents
-  // alleen de notitie. Wat er niet bij hoort krijgt ook geen
-  // lege sleutel.
-  function normalizeFacts(e, p) {
-    const has = (k) => factsFor(p).includes(k);
-    if (has("cmm")) e.cmm = CMM_STATES.includes(e.cmm) ? e.cmm : "";
-    if (has("prio")) e.prio = [1, 2, 3].includes(Number(e.prio)) ? Number(e.prio) : null;
-    if (has("doesAlready")) e.doesAlready = YES_NO.includes(e.doesAlready) ? e.doesAlready : "";
-    if (has("currentSystem")) e.currentSystem = str(e.currentSystem);
-    if (has("notes")) e.notes = str(e.notes);
-    return e;
-  }
-  // De opvolging per product. Elk product dat bij het ziekenhuis aangevinkt
-  // staat krijgt een eigen fase, kleur en verantwoordelijke; wat op het
-  // ziekenhuis zelf staat volgt daaruit (zie pipelineView in domain.js).
-  //
-  // Vroeger was er één fase per ziekenhuis. Die wordt hier de fase van elk
-  // product dat er toen aangevinkt stond — de app wist niet beter, en twee
-  // keer dezelfde fase is juister dan één van de twee op prospect zetten. Een
-  // product dat er láter bijkomt begint vooraan: prospect, of eerste contact
-  // als er al een contactmoment voor bestaat.
-  //
-  // Een rij verdwijnt hier nooit, ook niet als het vinkje weggaat. Wie
-  // afgeschermd is krijgt h.products gesnoeid op zijn eigen bereik, en zou
-  // anders de opvolging van een collega wissen bij de eerste opslag.
-  function syncPipeline(h) {
-    if (!h.pipeline || typeof h.pipeline !== "object" || Array.isArray(h.pipeline)) h.pipeline = {};
-    for (const [p, e] of Object.entries(h.pipeline)) {
-      if (!e || typeof e !== "object") { delete h.pipeline[p]; continue; }
-      e.stage = STAGES.includes(e.stage) ? e.stage : "prospect";
-      e.status = STATUSES.includes(e.status) ? e.status : "red";
-      e.owner = str(e.owner);
-      if (productKind(p) === "procedure") normalizeFacts(e, p);
-    }
-    const eerste = !Object.keys(h.pipeline).length;
-    for (const p of h.products) {
-      if (h.pipeline[p]) continue;
-      const contacted = h.activities.some((a) => productsOf(a).includes(p));
-      const e = eerste ? { stage: h.stage, status: h.status, owner: "" }
-        : { stage: contacted ? "first_contact" : "prospect", status: contacted ? "orange" : "red", owner: "" };
-      // Een fase die dit product niet kent, schuift naar de dichtste die het
-      // wel kent: allebei liggen ze net voor of net na de evaluatie.
-      if (!stagesFor(p).includes(e.stage)) e.stage = "evaluation";
-      if (productKind(p) === "procedure") normalizeFacts(e, p);
-      h.pipeline[p] = e;
-    }
-    if (h.products.length) {
-      const f = furthest(h.products.map((p) => h.pipeline[p]));
-      h.status = f.status;
-      h.stage = f.stage;
-    } else if (!stagesFor("").includes(h.stage)) {
-      // Zonder product geldt de keuzelijst van het ziekenhuis zelf, en die
-      // kent niet elke fase.
-      h.stage = "evaluation";
-    }
-  }
-  // Het laatste product is afgevinkt. De kleur en de fase op het ziekenhuis
-  // waren die van dat product; ze laten staan zou zeggen dat een ziekenhuis
-  // zonder product klant is. Terug naar wat de contactmomenten zeggen. Wat er
-  // per product stond blijft bewaard en komt terug als het vinkje terugkomt.
-  function zonderProduct(h) {
-    if (h.products.length) return;
-    const contacted = h.activities.length > 0;
-    h.status = contacted ? "orange" : "red";
-    h.stage = contacted ? "first_contact" : "prospect";
   }
   // Wat de kaart, de lijst en de tellers van een ziekenhuis tonen: het volgt
   // de productfilter in de zijbalk.
@@ -2089,80 +2015,6 @@
       if (next && blank) blank.remove();
       pick.value = next;
     };
-  }
-
-  // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
-  // x is waar de fase en de kleur staan: de opvolging van één product, of het
-  // ziekenhuis zelf zolang er geen product aan hangt.
-  function stageStatus(x, contacted) {
-    const before = x.status;
-    if (x.stage === "customer") x.status = "green";
-    else if (x.stage === "prospect") x.status = contacted ? x.status : "red";
-    else if (x.stage !== "not_interested" && x.status !== "green") x.status = "orange";
-    if (x.status !== before) toast(x.status === "green" ? t("status.toGreen") : t("status.toOrange"));
-  }
-
-  // Kleur automatisch mee laten evolueren; manueel aanpassen blijft altijd mogelijk.
-  // Een contactmoment hoort bij één product, dus het is de opvolging van dát
-  // product die meebeweegt — een bestelling voor het ene maakt het andere niet
-  // groen.
-  function autoStatus(h, act) {
-    // Zonder product op het contactmoment: hangt er precies één product aan
-    // het ziekenhuis, dan is het dat. Hangen er meer aan, dan valt niet te
-    // raden welk — en dan blijft alles staan, liever dan het verkeerde product
-    // groen te maken. Hangt er geen aan, dan is het het ziekenhuis zelf.
-    // Gaat het over meer dan één product, dan beweegt elk van die rijen mee.
-    const rows = myProducts().filter((p) => h.products.includes(p) && h.pipeline[p]);
-    const named = productsOf(act).filter((p) => h.pipeline[p]);
-    const targets = named.length ? named.map((p) => [h.pipeline[p], p])
-      : rows.length === 1 ? [[h.pipeline[rows[0]], rows[0]]] : rows.length ? [] : [[h, ""]];
-    for (const [x, p] of targets) {
-      if ((act.type === "installation" || act.type === "order") && x.status !== "green") {
-        x.status = "green";
-        if (PRE_SALE.includes(x.stage)) x.stage = "customer";
-        toast(t("status.toGreen"));
-      } else if (x.status === "red") {
-        x.status = "orange";
-        if (x.stage === "prospect") x.stage = "first_contact";
-        toast(t("status.toOrange"));
-      }
-      // Na een demo: geïnstalleerd bij een product per abonnement, in evaluatie
-      // bij een product per ingreep, waar niets geïnstalleerd wordt. Een
-      // procedure waar een van ons bij stond is daar hetzelfde: het product is
-      // gebruikt, dus het wordt geëvalueerd. Een klant blijft klant.
-      if ((act.type === "demo" || act.type === "procedure") && ["prospect", "first_contact", "meeting", "demo_planned"].includes(x.stage)) {
-        x.stage = productKind(p) === "procedure" ? "evaluation" : "demo_installed";
-      }
-    }
-    syncPipeline(h);
-  }
-
-  // Kamers van de afdeling bijwerken na een demo, installatie of stopzetting.
-  //
-  // Installaties tellen op: na een installatie van 2 en later nog een van 3
-  // staan er 5 kamers live. Een stopgezet abonnement telt er weer af. We passen
-  // het verschil toe en niet de som van alle contactmomenten, zodat een aantal
-  // dat hier al handmatig stond blijft staan.
-  // Een demo overschrijft wél: dat is de huidige toestand, geen optelsom — we
-  // nemen het aantal van de laatste demo waarvoor een aantal is ingevuld.
-  function syncRooms(h, before, after) {
-    // Alleen voor een product per abonnement: het aantal bij een RFA-bestelling
-    // zijn stuks, geen kamers, en hoort dus niet bij de afdeling opgeteld.
-    const perKamer = (a) => !!a && productKind(productOf(a)) === "subscription";
-    const installed = (a) => {
-      if (!perKamer(a) || !a.rooms) return 0;
-      if (a.type === "installation") return a.rooms;
-      if (a.type === "cancellation") return -a.rooms;
-      return 0;
-    };
-    const delta = installed(after) - installed(before);
-    if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
-      h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);
-    }
-    if ((perKamer(before) && before.type === "demo") || (perKamer(after) && after.type === "demo")) {
-      const demos = h.activities.filter((a) => a.type === "demo" && a.rooms && perKamer(a));
-      if (demos.length) h.unit.roomsDemo = demos.sort((a, b) => b.date.localeCompare(a.date))[0].rooms;
-    }
   }
 
   // ---------- nieuw ziekenhuis ----------
