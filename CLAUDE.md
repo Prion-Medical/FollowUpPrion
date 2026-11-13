@@ -48,6 +48,35 @@ Pushing to `main` deploys: GitHub Pages serves the repository root, where `index
 redirects to `public/`. Browsers keep the old files until the `?v=` stamp changes, so a
 deploy that skips the stamp bump ships nothing.
 
+## Checking the copies
+
+Some rules live in more than one place, because the app, the connector, the database
+and the calendar feed cannot share a file: the product, stage and type lists, the type
+names, what a contact moment does to the colour, stage and rooms, and what an event
+looks like. Nothing fails when two copies drift apart, so `tests/` checks it:
+
+```bash
+node --experimental-strip-types tests/alles.mjs   # the flag can go from Node 23.6
+```
+
+| File | Checks |
+|---|---|
+| `tests/lijsten.mjs` | Products, stages, types (and their names), kinds of stent and facts per product agree between `domain.js`, `i18n.js`, the connector, the calendar function and `schema.sql` |
+| `tests/vertalingen.mjs` | Every key in both languages, and every key the code asks for exists |
+| `tests/regels.mjs` | The same contact moments, new and edited, through `domain.js` and the connector's `add_contact_moment` / `update_moment` give the same colour, stage, follow-up, rooms and stored record; the connector accepts exactly the types `typesAmong()` offers, for no product, one, two, a shared moment and a restricted account |
+| `tests/planning.mjs` | Planned moments: planning without a date, the order (date, time, undated first) in the app, the connector and `fix_planned()`, ticking off (id reused, time dropped, kind of stent kept, date at the latest today) and "planned for" |
+| `tests/cijfers.mjs` | Units sold, per kind of stent, and active rooms: `domain.js`'s counting against the connector's `get_statistics`, with awkward quantities |
+| `tests/samenvoegen.mjs` | `merge3()`: both sides' edits survive, a real clash is a conflict, deletions, stamps, ticks, the list form |
+| `tests/agenda.mjs` | The download (`ics.js`) and the feed write the same events, and the feed answers 404 / 503 correctly |
+
+Each file runs in its own process (`alles.mjs`), and within a file every case is
+reported, so one run lists everything that is broken. Run it before every commit,
+the way `controle.sql` is run after every schema change.
+It needs no browser, no database and no network: the rules come from `domain.js`, and
+the Edge Functions run against a faked `fetch`. It uses invented
+data only — the repository is public. `roomsDemo` is left out of the comparison on
+purpose: the connector leaves it to `fix_rooms_demo()` in the database.
+
 ## Two databases
 
 There are two Supabase projects: the live one and a development one. `public/config.js`
@@ -831,7 +860,8 @@ Not bugs; decisions. Reviewers will flag them, so the reasoning is recorded here
 - **Restoring a backup is a dashboard job.** `app_state_backups` is revoked from
   `authenticated`, because it holds the full unscoped document and would have been a
   door next to the wall.
-- **No tests.** If this changes, plain Node assertions over the pure functions
-  (`normalize`, VRR-style maths, CSV writing, i18n key coverage) — not a test framework.
+- **Tests only for the copies.** `tests/` holds plain Node assertions, no framework
+  and no packages (see Checking the copies). They check that rules kept in more than one
+  place still agree, not the app as a whole.
 - **`app.js` is large** for a single file. Splitting it is reasonable eventually, but
   there is no module bundler and no appetite for one, so it stays until the pain is real.
