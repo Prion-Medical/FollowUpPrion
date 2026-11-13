@@ -14,7 +14,7 @@
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
     typesAmong, productsOf, productOf, familiesFor, wantsFamily, factsFor,
     esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual, setMain, mainContact,
-    normalizeFacts, syncPipeline, zonderProduct, syncRooms, byWhen, assigneeOf, tickOffDate,
+    normalizeFacts, syncPipeline, zonderProduct, syncRooms, shared, byWhen, assigneeOf, tickOffDate,
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
   const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
@@ -542,12 +542,12 @@
   }
   // Een aantal hoort bij één product: gaat het moment over meer, dan is er
   // geen aantal.
-  const wantsNumber = (type, r) => productsOf(r).length <= 1 && wantsQuantity(type, productOf(r));
+  const wantsNumber = (type, r) => !shared(r) && wantsQuantity(type, productOf(r));
   // De soort binnen het product (bij stents). Het veld staat er alleen als
   // er een gekozen is: een lege waarde bij elk ouder moment zou wie als
   // eerste opslaat de laatste bewerker van het hele logboek maken.
   function familyShape(r) {
-    const p = productOf(r);
+    const p = shared(r) ? "" : productOf(r);
     if (wantsFamily(r.type, p) && familiesFor(p).includes(r.family)) r.family = str(r.family);
     else delete r.family;
   }

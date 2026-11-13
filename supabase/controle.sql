@@ -214,7 +214,36 @@ feedids as (
       ('keuze-endoq',   '{}',      '00000000-0000-0000-0000-0000000000a1', false, '{EndoQ}'),
       ('mijn-u1',       '{}',      '00000000-0000-0000-0000-0000000000a1', true,  '{}'),
       ('mijn-u2',       '{}',      '00000000-0000-0000-0000-0000000000a2', true,  '{}')
-    ) v(k, sc, ow, mi, pr))
+    ) v(k, sc, ow, mi, pr)),
+
+-- Een gesprek en een plan over Thyroid RFA én Fibroid RFA, gezien door
+-- iemand die enkel Thyroid RFA mag. Hij ziet van beide enkel het zijne.
+gedeeld as (select $j${
+  "version": 1,
+  "hospitals": [
+    { "id": "s1", "name": "AZ Gedeeld Gesprek", "products": ["Thyroid RFA", "Fibroid RFA"],
+      "nextAction": "", "nextActionDate": "", "unit": {}, "contacts": [],
+      "activities": [
+        { "id": "sa1", "date": "2026-10-01", "type": "visit", "products": ["Thyroid RFA", "Fibroid RFA"], "note": "" } ],
+      "planned": [
+        { "id": "sp1", "date": "2026-12-01", "type": "visit", "products": ["Thyroid RFA", "Fibroid RFA"], "note": "samen" } ] }
+  ]}$j$::jsonb as d),
+gedeeldmijn as (select d, followup.scope_doc(d, '{Thyroid RFA}'::text[]) as s from gedeeld),
+-- Hij maakt van het gesprek een bestelling met een aantal en een soort.
+gedeeldaantal as (
+  select followup.merge_doc(d,
+           jsonb_set(s, '{hospitals,0,activities,0}',
+             (s #> '{hospitals,0,activities,0}') || '{"type": "order", "rooms": 5, "family": "other"}'::jsonb),
+           '{Thyroid RFA}'::text[], false) as n
+  from gedeeldmijn),
+-- Hij vinkt het plan af, zoals een oudere app het deed: met één "product".
+gedeeldaf as (
+  select followup.merge_doc(d,
+           jsonb_set(jsonb_set(s, '{hospitals,0,planned}', '[]'::jsonb),
+             '{hospitals,0,activities}', (s #> '{hospitals,0,activities}') ||
+             '[{"id": "sp1", "date": "2026-11-13", "type": "visit", "product": "Thyroid RFA", "note": "samen"}]'::jsonb),
+           '{Thyroid RFA}'::text[], false) as n
+  from gedeeldmijn)
 
 select nr, controle,
        case when verwacht is not distinct from gekregen then 'OK' else '>>> FOUT' end as uitslag,
@@ -463,6 +492,22 @@ from (
          to_jsonb(false),
          to_jsonb(followup.feed_events(d, '{}', '00000000-0000-0000-0000-0000000000a1', false, '{}', '0000-01-01')
                   @> '[{"id": "f6"}]'::jsonb) from feed
+
+  -- --- een moment over meer producten, door wie er maar één mag --------------
+  union all select 71, 'gedeeld moment: een aantal en een soort blijven er niet op staan',
+         '[null, null]'::jsonb,
+         jsonb_build_array(n #> '{hospitals,0,activities,0,rooms}', n #> '{hospitals,0,activities,0,family}')
+         from gedeeldaantal
+  union all select 72, 'gedeeld moment: het product van de collega blijft erop',
+         '["Thyroid RFA", "Fibroid RFA"]'::jsonb, n #> '{hospitals,0,activities,0,products}' from gedeeldaantal
+  union all select 73, 'afvinken van een gedeeld plan: het contactmoment houdt het product van de collega',
+         '["Thyroid RFA", "Fibroid RFA"]'::jsonb,
+         (select a -> 'products' from jsonb_array_elements(n #> '{hospitals,0,activities}') a where a ->> 'id' = 'sp1')
+         from gedeeldaf
+  union all select 74, 'afvinken van een gedeeld plan: geen los "product" ernaast',
+         to_jsonb(false),
+         to_jsonb((select a ? 'product' from jsonb_array_elements(n #> '{hospitals,0,activities}') a where a ->> 'id' = 'sp1'))
+         from gedeeldaf
 ) q(nr, controle, verwacht, gekregen)
 order by nr;
 

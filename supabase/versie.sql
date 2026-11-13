@@ -24,8 +24,7 @@
 
 with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('scope_hospital',  'fix_planned',    'nextAction van het andere product niet meesturen'),
-  ('scope_hospital',  'scope_contacts', 'de productlijst van een contactpersoon afschermen'),
-  ('scope_contacts',  'both_in',        'bestaat die functie überhaupt'),
+  ('scope_hospital',  'scope_entries(h -> ''contacts''', 'de productlijst van een contactpersoon afschermen'),
   -- Deze is de belangrijkste van de lijst. Draait er nog een oude in_scope,
   -- dan kijkt die enkel naar "product" en leest ze een contactpersoon met een
   -- "products"-lijst als "heeft geen product" — en dan is die voor iedereen
@@ -85,7 +84,13 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('check_payload',   '[[:cntrl:]]',    'een id met een regeleinde komt het document niet in'),
   ('feed_create',     'pg_advisory_xact_lock', 'het maximum aan abonnementen geldt ook bij gelijktijdige oproepen'),
   ('feed_list',       'via_assistant',  'een assistent ziet geen abonnementen'),
-  ('feed_remove',     'via_assistant',  'een assistent zet geen abonnement stop')
+  ('feed_remove',     'via_assistant',  'een assistent zet geen abonnement stop'),
+  -- Uit de review van 2026-11-13: momenten over meer producten.
+  ('in_scope',        'products_of',    'beide vormen via één functie'),
+  ('merge_products',  'products_of',    'een contactmoment in de oude vorm verliest bij het samenvoegen zijn product niet'),
+  ('merge_entries',   'zonder_aantal',  'een moment over meer producten draagt geen aantal'),
+  ('merge_entries',   'left join lateral', 'een afgevinkt plan geeft zijn producten, niet zijn plaats'),
+  ('merge_hospital',  'afgevinkt',      'afvinken houdt het product van de collega op het contactmoment')
 )
 select v.functie,
        v.waarvoor,

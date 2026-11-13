@@ -310,10 +310,22 @@ with several ticked the dialog offers only the types without a number
 (`typesAmong()`), and there is no quantity and no kind of stent. Such a moment
 moves the follow-up of each of its products, shows under each in the filters,
 and counts once as a contact moment. Its note is shared between the people who
-can see it, as a contact's fields are, and either of them can remove it. `normalizeContact()` migrates the old single `product`
+can see it, as a contact's fields are, and either of them can remove it.
+
+**A moment in the list form is shared, and never carries a number.** That holds
+even when only one product is left in the list, and even when someone who may see
+only one product looks at it: the database has trimmed the list for them, so it
+looks like a single-product moment but is not. `shared()` in `domain.js` is the
+test; `typesAmong(list, mine, gedeeld)` then offers no type with a number, the
+dialogs show no quantity and no kind of stent, `normalize()` drops them, and the
+connector refuses them. The database is the safety net: `followup.zonder_aantal()`
+strips `rooms` and `family` from any list-form record it merges. Ticking off a
+shared plan keeps the list form, and `followup.afgevinkt()` hands the merge the
+stored plan as the stored side of the new contact moment, so the colleague's
+product stays on it (`controle.sql` 71–74). `normalizeContact()` migrates the old single `product`
 and drops the field, the way `demoDate` was folded into `planned[]`. The database
-reads both shapes — `followup.in_scope()` branches on whether the record has a
-`products` key — and deliberately does **not** rewrite the old shape on the way out:
+reads both shapes through `followup.products_of()`, the counterpart of `productsOf()`,
+and deliberately does **not** rewrite the old shape on the way out:
 that would make loading and saving return a different document and break the check
 that matters most. A contact is visible as soon as one product overlaps your scope,
 and `products` is then trimmed to your scope and merged back with the same

@@ -112,9 +112,18 @@ window.FollowUpDomain = (() => {
   // wat het account kan kiezen. Eén: de soorten van dat product. Meer: wat
   // bij elk ervan bestaat en bij geen ervan een aantal draagt, want een
   // aantal is niet over twee producten te verdelen.
-  const typesAmong = (list, mine) => (!list.length ? typesOffered(mine)
-    : list.length === 1 ? typesFor(list[0])
+  //
+  // gedeeld: het moment staat in de lijstvorm (shared() hieronder). Wie
+  // maar één product mag, ziet van een gesprek over twee producten enkel het
+  // zijne; het is toch een moment over meer, en draagt dus geen aantal.
+  const typesAmong = (list, mine, gedeeld = false) => (!list.length ? typesOffered(mine)
+    : list.length === 1 && !gedeeld ? typesFor(list[0])
     : Object.keys(ACT_TYPES).filter((k) => list.every((p) => typesFor(p).includes(k) && !wantsQuantity(k, p))));
+  // Staat een moment in de lijstvorm, dan gaat het over meer dan één product,
+  // ook als wie het bekijkt er maar één van ziet (de databank snoeit de
+  // lijst). Zo'n moment draagt nooit een aantal of een soort stent; de
+  // databank haalt ze er ook zelf af (zonder_aantal() in schema.sql).
+  const shared = (r) => !!r && Array.isArray(r.products);
   // Welke producten deze gebruiker mag gebruiken. Een leeg bereik betekent
   // onbeperkt, dus dan zijn het ze allemaal. De databank schermt het document
   // al af; dit is er zodat de app geen keuze aanbiedt die toch geweigerd wordt.
@@ -679,7 +688,7 @@ window.FollowUpDomain = (() => {
     normalizeFacts, syncPipeline, zonderProduct, stageStatus, autoStatus, syncRooms,
     byWhen, assigneeOf, tickOffDate, rooms, signedRooms, units,
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, SOLD_TYPES, typesFor, typesOffered, typesAmong, productsOf, productOf, familiesFor, wantsFamily, factsFor, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
+    ROOM_TYPES, SOLD_TYPES, typesFor, typesOffered, typesAmong, shared, productsOf, productOf, familiesFor, wantsFamily, factsFor, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
   };
 })();

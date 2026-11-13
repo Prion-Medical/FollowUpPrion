@@ -102,16 +102,32 @@ const productOf = (r: Any): string => { const l = productsOf(r); return l.length
 // Hoe een antwoord de producten van een moment noemt.
 const named = (r: Any) => (productsOf(r).length > 1 ? { products: productsOf(r) } : { product: productOf(r) });
 const factsFor = (p: string) => (!isProcedure(p) ? [] : own(PRODUCT_FACTS, p) || FACTS);
-// typesFor() uit domain.js: een product per ingreep wordt niet geïnstalleerd
-// of stopgezet, en een procedure bestaat alleen daar. Zonder product mag alles.
-function checkType(type: string, product: string) {
-  if (!product) return;
-  if (isProcedure(product) && (type === "installation" || type === "cancellation")) {
-    throw new ToolError(`${product} is sold per piece: it has no ${type}. Use 'order' for units sold, or 'procedure' when a colleague attended and units were used.`);
-  }
-  if (!isProcedure(product) && type === "procedure") {
-    throw new ToolError(`'procedure' exists for the products sold per piece only (${PROCEDURE.join(", ")}). For ${product} a demo is the counterpart.`);
-  }
+// typesFor(), typesOffered() en typesAmong() uit domain.js, letterlijk: welke
+// soorten bij een keuze van producten passen. tests/regels.mjs legt ze naast
+// die van de app. gedeeld: het moment staat in de lijstvorm (shared()).
+const RETIRED_TYPES = ["prospecting"];
+const typesFor = (p: string) => KNOWN_TYPES.filter((k) => !RETIRED_TYPES.includes(k)
+  && !(isProcedure(p) ? ["installation", "cancellation"] : ["procedure"]).includes(k));
+const typesOffered = (products: string[]) => KNOWN_TYPES.filter((k) => products.some((p) => typesFor(p).includes(k)));
+const typesAmong = (list: string[], mine: string[], gedeeld = false) => (!list.length ? typesOffered(mine)
+  : list.length === 1 && !gedeeld ? typesFor(list[0])
+  : KNOWN_TYPES.filter((k) => list.every((p) => typesFor(p).includes(k) && !wantsQuantity(k, p))));
+const shared = (r: Any) => !!r && Array.isArray(r.products);
+// De ene plaats waar een soort tegen de producten van het moment wordt
+// nagekeken: wat de app in die situatie aanbiedt, en niets anders.
+function checkTypes(type: string, list: string[], scope: string[], gedeeld = false) {
+  const ok = typesAmong(list, scope, gedeeld);
+  if (ok.includes(type)) return;
+  const meer = list.length > 1 || gedeeld;
+  const waarom = meer && list.some((p) => wantsQuantity(type, p))
+    ? " A number belongs to one product: log it once per product."
+    : list.length === 1 && isProcedure(list[0]) && (type === "installation" || type === "cancellation")
+      ? ` ${list[0]} is sold per piece: use 'order' for units sold, or 'procedure' when a colleague attended and units were used.`
+      : list.length === 1 && !isProcedure(list[0]) && type === "procedure"
+        ? ` 'procedure' exists for the products sold per piece only (${PROCEDURE.join(", ")}); for ${list[0]} a demo is the counterpart.`
+        : "";
+  const waar = meer ? "a moment about several products" : list.length ? list[0] : "the products this account works on";
+  throw new ToolError(`'${type}' is not possible for ${waar}. Possible: ${ok.join(", ")}.${waarom}`);
 }
 // De soort (bij stents), nagekeken tegen het product. undefined: niet gegeven.
 function family(args: Any, type: string, product: string) {
@@ -373,11 +389,12 @@ function hospitalIn(doc: Any, id: unknown) {
 function momentProducts(args: Any, type: string, scope: string[]): string[] {
   if (has(args, "products") && has(args, "product")) throw new ToolError("Give product or products, not both.");
   const list: string[] = has(args, "products") ? [...new Set((args.products as unknown[]).map(String))] : args.product ? [String(args.product)] : [];
-  for (const p of list) { checkProduct(p, scope); checkType(type, p); }
-  if (list.length > 1) {
-    if (list.some((p) => wantsQuantity(type, p))) throw new ToolError(`A ${type} carries a number, which belongs to one product. Log it once per product.`);
-    if (has(args, "quantity") || has(args, "family")) throw new ToolError("A moment about several products has no quantity and no family.");
-  }
+  // Een lege naam in een lijst is geen product: de app ruimt ze op bij het
+  // laden, maar ze horen er van in het begin niet in.
+  if (has(args, "products") && list.some((p) => !p.trim())) throw new ToolError("products holds an empty name. Name each product, or leave products out.");
+  for (const p of list) checkProduct(p, scope);
+  checkTypes(type, list, scope);
+  if (list.length > 1 && (has(args, "quantity") || has(args, "family"))) throw new ToolError("A moment about several products has no quantity and no family.");
   return list;
 }
 // In de vorm die erbij hoort: een lijst vanaf twee, anders de ene naam.
@@ -576,9 +593,13 @@ async function completePlannedMoment(token: string, args: Any) {
     if (!plan) throw new ToolError("No planned moment with that id at this hospital. Use get_hospital to see what is planned.");
     const type = has(args, "type") ? oneOf(args.type, ACT_TYPES, "type") : plan.type;
     const list = productsOf(plan);
-    const product = list.length === 1 ? list[0] : "";
-    for (const p of list) { checkProduct(p, scope); if (has(args, "type")) checkType(type, p); }
-    if (list.length > 1 && (list.some((p) => wantsQuantity(type, p)) || has(args, "quantity") || has(args, "family"))) {
+    // Een plan in de lijstvorm is van meer producten, ook als dit account er
+    // maar één van ziet: geen aantal, geen soort.
+    const gedeeld = shared(plan) || list.length > 1;
+    const product = gedeeld ? "" : productOf(plan);
+    for (const p of list) checkProduct(p, scope);
+    if (has(args, "type") || gedeeld) checkTypes(type, list, scope, gedeeld);
+    if (gedeeld && (has(args, "quantity") || has(args, "family"))) {
       throw new ToolError("This planned moment is about several products, and a number belongs to one. Log it per product with add_contact_moment and remove the plan.");
     }
     // De soort die bij het plannen al gekozen was, gaat mee.
@@ -591,8 +612,8 @@ async function completePlannedMoment(token: string, args: Any) {
     sortPlanned(h);
     // Het uur gaat niet mee: een contactmoment heeft een datum en geen uur.
     return logActivity(h, {
-      id: plan.id, date, type, ...(Array.isArray(plan.products) ? { products: list } : { product }), contactId: String(plan.contactId || ""),
-      rooms: list.length <= 1 && wantsQuantity(type, product) ? qty : null, ...(fam ? { family: fam } : {}),
+      id: plan.id, date, type, ...(shared(plan) ? { products: list } : { product }), contactId: String(plan.contactId || ""),
+      rooms: !gedeeld && wantsQuantity(type, product) ? qty : null, ...(fam ? { family: fam } : {}),
       note: has(args, "note") ? String(args.note).trim() : String(plan.note || ""),
     }, scope);
   });
@@ -1146,11 +1167,12 @@ async function updateMoment(token: string, args: Any, user: Any) {
       if (has(args, "time")) throw new ToolError("A time needs a date. Give a date too, or leave the time out.");
       delete rec.time;
     }
-    if (has(args, "type") || has(args, "product")) for (const p of productsOf(rec)) checkType(rec.type, p);
-    if (productsOf(rec).length > 1 && (productsOf(rec).some((p) => wantsQuantity(rec.type, p)) || qty !== undefined || has(args, "family"))) {
+    const gedeeld = shared(rec) || productsOf(rec).length > 1;
+    if (has(args, "type") || has(args, "product")) checkTypes(rec.type, productsOf(rec), scope, gedeeld);
+    if (gedeeld && (qty !== undefined || has(args, "family"))) {
       throw new ToolError("This moment is about several products, and a number or a family belongs to one.");
     }
-    const one = productOf(rec);
+    const one = gedeeld ? "" : productOf(rec);
     // Het product dat er al stond is niet nagekeken toen het werd opgeslagen.
     if (productsOf(rec).some((p) => !PRODUCTS.includes(p))) throw new ToolError("This moment has a product this connector does not know. Correct it in the app.");
     if (kind === "planned_moment") {
@@ -1183,7 +1205,7 @@ async function updateMoment(token: string, args: Any, user: Any) {
     const fam = family(args, rec.type, one);
     if (!changed.length && qty === undefined && fam === undefined) throw new ToolError("Nothing to change: give at least one field.");
     if (qty !== undefined) { rec.rooms = qty; changed.push("quantity"); }
-    if (productsOf(rec).length > 1 || !wantsQuantity(rec.type, one)) rec.rooms = null;
+    if (gedeeld || !wantsQuantity(rec.type, one)) rec.rooms = null;
     if (fam !== undefined) { if (fam) rec.family = fam; else delete rec.family; changed.push("family"); }
     // Een ander product of een andere soort moment: wat er niet meer bij
     // hoort gaat weg, zoals normalize() in de app het ook zou doen.
