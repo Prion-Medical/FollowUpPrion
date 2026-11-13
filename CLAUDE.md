@@ -105,6 +105,8 @@ Two things that cost an evening to find out:
 | `data/seed.json` | 40 starter hospitals (BE/NL/LU), no contacts, approximate coordinates |
 | `public/consent.html`, `consent.js` | The page where someone allows an assistant to act as them (see The assistant connector) |
 | `supabase/functions/agent/index.ts` | The connector an assistant such as Claude talks to: a Supabase Edge Function, one file, no imports |
+| `public/ics.js` | Writes iCalendar: one planned moment as a file to download |
+| `supabase/functions/calendar/index.ts` | The calendar feed a calendar app fetches: an Edge Function, one file, no imports (see The calendar feed) |
 | `docs/agent-instructions.md` | What to paste into the assistant's project so it behaves like a colleague who keeps the log |
 
 ## Conventions
@@ -343,6 +345,26 @@ into `planned[]` the same way: `normalize()` turns it into a planned moment of t
 `demo` and drops the field, and the "demo's gepland" KPI and the CSV column both read
 `planned[]` now. There is one place to plan a demo, and it clears itself when ticked off.
 
+A planned moment may have **no date**: something that has to happen but has no day
+yet. It sorts first (an empty date sorts before any other, in `normalize()`,
+`byWhen()`, `sortPlanned()` in the connector and `fix_planned()` in the database),
+stays at the top of the hospital's planned moments and in its own block above the
+agenda, is never overdue (`isLate()`, and `isOverdue()` looks at the first moment
+*with* a date), and is the next action with an empty `nextActionDate`. Ticking it off
+asks for a date, today by default. It is not in a calendar feed and has no download.
+Until November 2026 such a moment was thrown away in three places — `normalize()`,
+`fix_planned()` and `doc_keys()` — and an older app or schema still does that, so
+**this schema and this app go live together**: an old app would drop every undated
+moment on its next save. `doc_keys()` now counts them, so removing one is a deletion
+like any other and a `contributor` cannot.
+
+A planned moment can carry a `time` (`"14:00"`), and only when someone gave one —
+like `assignee`, writing an empty one onto every older moment would make the first
+saver the last editor of the agenda. It belongs to the plan: ticking off builds a
+fresh contact moment, so the time is dropped, and a contact moment has a date and
+no time. `h.planned` stays sorted by date alone, as `fix_planned()` sorts it in the
+database; `byWhen()` orders by time as well, for display only.
+
 **Assigned to, and planned for.** Two things belong to a person, and they have two
 words on purpose. A product at a hospital is *assigned to* someone: `owner` in that
 product's row in `h.pipeline` (the field kept its name; the label became "Assigned
@@ -454,6 +476,14 @@ clinicians' names, numbers and the notes about them go to it and into that chat'
 history, outside the database. That was already true of the workbook it replaces,
 but it is now something this project does on purpose, and it belongs in whatever
 record of processing Prion keeps.
+
+A calendar feed is another such recipient. Each subscription sends the agenda —
+hospital names and addresses, the type, product, time and note of each planned
+moment — to whichever calendar provider the subscriber uses, from where it reaches
+phones and lock screens, and the note travels further than before. The address is a
+key that works without signing in until it is stopped. Supabase's function logs
+record the address too, secret included, for as long as they are kept. This belongs
+in the same record of processing.
 
 What protects the data is the login, not the repository. Sign-up is disabled on the
 Supabase project, so only users created by hand under Authentication → Users can sign
@@ -673,6 +703,45 @@ Open at the time of writing: the first connection dropped within forty minutes a
 the cause was not found, so whether the token renews by itself after an hour is
 unproven; and signing out of the app ends every session of that account, which as
 far as we know includes the assistant's.
+
+## The calendar feed
+
+Someone can subscribe to the agenda from Outlook, Google or Apple: "Abonneren" on
+the agenda's planned tab makes an address that the calendar app fetches by itself.
+One way only — the calendar shows, planning stays here. A planned moment becomes an
+event with the type, product and hospital as its title, the hospital's name and
+address as the location, and the note; with a `time` it lasts an hour, without one
+it is a whole day. No contact person: that is a clinician's name in a third
+party's calendar, on lock screens. A single moment can also be downloaded as a
+file (`public/ics.js`), which is a copy that does not follow changes.
+
+- **The address is the key.** A calendar app signs in as nobody, so the address
+  carries a 64-hex secret. `public.calendar_feeds` keeps only its SHA-256, so the
+  app shows it once, at creation. The table is revoked and has RLS with no
+  policy; everything goes through `feed_create()`, `feed_list()`,
+  `feed_remove()` (owner or admin) and `calendar_feed()`, the only function
+  `anon` may execute. Not through the assistant's key: `feed_create()` refuses
+  `via_assistant()`.
+- **The wall is the owner's, as it stands now.** `followup.feed_events()` runs
+  the stored document through `scope_doc()` with the owner's current
+  `app_users.products`, then narrows by the subscription's own choice ("planned
+  for me" follows `assigneeOf()`; a product choice leaves out moments without a
+  product). Narrowing someone's products narrows their feeds at the next fetch.
+  It is pure, so `controle.sql` checks it on a literal document (60–66).
+- **A subscription belongs to an account**: `owner` references `app_users` with
+  `on delete cascade`, which itself cascades from `auth.users`. An admin sees
+  and stops every subscription at the foot of the users screen.
+- **The Edge Function** `supabase/functions/calendar/index.ts` turns
+  `calendar_feed()` into `text/calendar`. It runs with the public key and no
+  service key, needs **Verify JWT off** (a calendar sends no token), answers 404
+  for an unknown or stopped address and 503 when the database fails, because a
+  404 makes some calendars drop the subscription. It holds a copy of `ics.js`
+  and of the type labels in both languages; the language is chosen per
+  subscription.
+- **From thirty days back onwards**, so an overdue moment stays until ticked off.
+  The logbook is not in the feed, and neither is a planned moment without a date.
+- **It is not instant**: Apple lets you choose, Outlook takes hours, Google up to
+  a day. The dialog says so.
 
 ## Git
 

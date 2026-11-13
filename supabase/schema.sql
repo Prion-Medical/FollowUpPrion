@@ -405,8 +405,15 @@ $$;
 -- nextAction en nextActionDate volgen uit planned[0]. Zou een beperkte
 -- gebruiker ze zelf schrijven, dan stond zijn volgende actie in een veld dat
 -- ook de collega van het andere product en de CSV-export lezen. Zelfde regel
--- als syncNextAction() in de app: sorteren op datum, momenten zonder datum
--- vallen weg, dan het eerste.
+-- als syncNextAction() in de app: sorteren op datum, met de momenten zonder
+-- datum vooraan, dan het eerste.
+--
+-- Een moment zonder datum is iets dat moet gebeuren maar nog geen dag heeft.
+-- Het blijft bovenaan staan tot iemand het afvinkt; nextActionDate is dan
+-- leeg en nextAction is zijn nota. Tot november 2026 vielen zulke momenten
+-- hier weg, en de app gooide ze bij het laden ook weg. Een oudere app tegen
+-- deze databank gooit ze dus nog steeds weg: zet de app en dit schema samen
+-- online.
 --
 -- Draait ook bij het afschermen, en daar is het meer dan opruimen:
 -- nextAction is de nota van het eerste geplande moment, en dat kan er een
@@ -416,9 +423,8 @@ create or replace function followup.fix_planned(h jsonb) returns jsonb
 language sql immutable set search_path = public as $$
   with p as (
     select coalesce((
-      select jsonb_agg(t.e order by (t.e ->> 'date'), t.i)
+      select jsonb_agg(t.e order by coalesce(t.e ->> 'date', ''), t.i)
         from jsonb_array_elements(followup.arr(h -> 'planned')) with ordinality t(e, i)
-       where coalesce(t.e ->> 'date', '') <> ''
     ), '[]'::jsonb) as lijst
   )
   select h || jsonb_build_object(
@@ -536,13 +542,13 @@ $$;
 -- wát er verdwenen is in plaats van enkel dát er iets weg is — het verschil
 -- tussen een bruikbare melding en "opslaan mislukt".
 --
--- Twee dingen tellen bewust niet mee:
---  * een record zonder id. Dat is niet te volgen, en normalize() in de app
---    geeft het bij het laden een nieuw id — dan leek elke eerste opslag na zo'n
---    document op een verwijdering.
---  * een gepland moment zonder datum. Dat is geen planning; normalize() gooit
---    het bij het laden weg, dus wij rekenen het ook niet mee. Zonder deze
---    uitzondering kon een contributor zo'n document nooit meer opslaan.
+-- Een record zonder id telt bewust niet mee. Dat is niet te volgen, en
+-- normalize() in de app geeft het bij het laden een nieuw id — dan leek elke
+-- eerste opslag na zo'n document op een verwijdering.
+--
+-- Een gepland moment zonder datum telt wél mee, sinds dat een gewoon moment
+-- is dat bovenaan blijft staan. Telde het niet, dan kon een contributor het
+-- ongezien weghalen.
 create or replace function followup.doc_keys(doc jsonb) returns text[]
 language sql immutable set search_path = public as $$
   select coalesce(array_agg(k), '{}'::text[]) from (
@@ -556,7 +562,7 @@ language sql immutable set search_path = public as $$
       cross join lateral jsonb_array_elements(followup.arr(t.e -> a.arr)) c(e)
      where coalesce(t.e ->> 'id', '') <> ''
        and coalesce(c.e ->> 'id', '') <> ''
-       and (a.tag <> 'p' or coalesce(c.e ->> 'date', '') <> '')
+       -- ook een gepland moment zonder datum: zie hierboven
   ) q;
 $$;
 
@@ -1278,3 +1284,224 @@ update public.app_state
    set data = followup.opvolging_aanvullen(data)
  where id = 'main'
    and data is distinct from followup.opvolging_aanvullen(data);
+
+
+-- ---------------------------------------------------------------------------
+-- 12. Agenda-abonnementen
+-- ---------------------------------------------------------------------------
+-- Een agenda-app (Outlook, Google, Apple) haalt een adres op zonder dat er
+-- iemand aangemeld is. Het adres zelf draagt dus het geheim, en wat het mag
+-- tonen wordt hier beslist, met de muur van read_state(): een abonnement toont
+-- nooit meer dan zijn eigenaar in de app ziet, en wie een product verliest,
+-- verliest het bij de volgende ophaalbeurt ook in zijn agenda.
+--
+-- Het geheim staat hier enkel gehasht. De app krijgt het één keer te zien, bij
+-- het aanmaken; wie het adres kwijt is, maakt een nieuw abonnement. Een
+-- abonnement hoort bij een account (on delete cascade via app_users, dat zelf
+-- aan auth.users hangt): verdwijnt het account, dan werken zijn adressen niet
+-- meer.
+create table if not exists public.calendar_feeds (
+  id           uuid primary key default gen_random_uuid(),
+  owner        uuid not null references public.app_users(id) on delete cascade,
+  label        text not null default '',
+  -- true: enkel wat voor de eigenaar gepland is. false: voor iedereen.
+  mine         boolean not null default true,
+  -- Leeg is alles wat de eigenaar mag, net als bij app_users.products.
+  products     text[] not null default '{}',
+  lang         text not null default 'nl' check (lang in ('nl', 'en')),
+  secret_hash  text not null unique,
+  created_at   timestamptz not null default now(),
+  -- Wanneer een agenda het adres laatst ophaalde. Zo ziet een beheerder welke
+  -- abonnementen nog leven en welke al lang niemand meer gebruikt.
+  last_used    timestamptz
+);
+create index if not exists calendar_feeds_owner on public.calendar_feeds (owner);
+
+-- Net als app_state: onbereikbaar via de Data API, alles loopt door de
+-- functies hieronder. Rij-beveiliging aan en geen enkele policy, zodat ook een
+-- grant die later per ongeluk terugkomt niets opent.
+alter table public.calendar_feeds enable row level security;
+revoke all on public.calendar_feeds from anon, authenticated;
+
+-- Het geheim: 64 hextekens uit twee keer gen_random_uuid(), samen 244 bits
+-- toeval. Beide zitten in Postgres zelf, er is geen extensie voor nodig.
+create or replace function followup.feed_hash(secret text) returns text
+language sql immutable set search_path = public as $$
+  select encode(sha256(convert_to(secret, 'UTF8')), 'hex');
+$$;
+
+-- Een abonnement aanmaken. Geeft het id en het geheim terug; dat laatste
+-- wordt nergens bewaard en is dus maar één keer te zien.
+--
+-- Niet met de sleutel van een assistent: een abonnement is een tweede sleutel
+-- die niet verloopt, en die hoort een mens zelf aan te maken.
+create or replace function public.feed_create(p_label text, p_mine boolean,
+                                              p_products text[], p_lang text) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  c_max      constant int := 10;
+  v_mine     text[] := followup.my_products();
+  v_products text[];
+  v_secret   text;
+  v_id       uuid;
+begin
+  if auth.uid() is null
+     or not exists (select 1 from public.app_users where id = auth.uid()) then
+    raise exception 'followup:feed_denied niet aangemeld'
+      using errcode = 'PT403', hint = 'feed_denied';
+  end if;
+  if followup.via_assistant() then
+    raise exception 'followup:feed_denied een abonnement maak je in de app'
+      using errcode = 'PT403', hint = 'feed_denied';
+  end if;
+  if (select count(*) from public.calendar_feeds where owner = auth.uid()) >= c_max then
+    raise exception 'followup:feed_limit al % abonnementen', c_max
+      using errcode = 'PT422', hint = 'feed_limit';
+  end if;
+
+  -- Enkel producten die bestaan, en voor een beperkt account enkel de zijne.
+  -- Bleef er van een keuze niets over, dan zou leeg hier "alles" betekenen:
+  -- dat is het omgekeerde van wat gevraagd werd, dus weigeren.
+  v_products := followup.product_sort(followup.both_in(coalesce(p_products, '{}'), followup.producten()));
+  if v_mine <> '{}'::text[] then
+    v_products := followup.both_in(v_products, v_mine);
+  end if;
+  if coalesce(array_length(p_products, 1), 0) > 0 and v_products = '{}'::text[] then
+    raise exception 'followup:out_of_scope geen van die producten mag je zien'
+      using errcode = 'PT403', hint = 'out_of_scope';
+  end if;
+
+  v_secret := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+  insert into public.calendar_feeds (owner, label, mine, products, lang, secret_hash)
+  values (auth.uid(), left(btrim(coalesce(p_label, '')), 80), coalesce(p_mine, true),
+          v_products, case when p_lang = 'en' then 'en' else 'nl' end,
+          followup.feed_hash(v_secret))
+  returning id into v_id;
+  return jsonb_build_object('id', v_id, 'secret', v_secret);
+end $$;
+
+-- De eigen abonnementen, of met everyone die van iedereen voor een beheerder.
+-- Het geheim en de hash gaan nooit mee.
+create or replace function public.feed_list(everyone boolean default false) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if everyone and not public.is_admin() then
+    raise exception 'followup:feed_denied enkel een beheerder ziet alle abonnementen'
+      using errcode = 'PT403', hint = 'feed_denied';
+  end if;
+  return coalesce((
+    select jsonb_agg(jsonb_build_object(
+             'id', f.id, 'owner', f.owner, 'owner_name', coalesce(u.name, ''),
+             'label', f.label, 'mine', f.mine, 'products', to_jsonb(f.products),
+             'lang', f.lang, 'created_at', f.created_at, 'last_used', f.last_used)
+           order by u.name, f.created_at)
+      from public.calendar_feeds f
+      join public.app_users u on u.id = f.owner
+     where everyone or f.owner = auth.uid()
+  ), '[]'::jsonb);
+end $$;
+
+-- Een abonnement stopzetten: door de eigenaar, of door een beheerder. Het
+-- adres werkt vanaf dan niet meer. Geeft false als er niets te verwijderen
+-- viel.
+create or replace function public.feed_remove(p_id uuid) returns boolean
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  v_n int;
+begin
+  delete from public.calendar_feeds
+   where id = p_id
+     and (owner = auth.uid() or public.is_admin());
+  get diagnostics v_n = row_count;
+  return v_n > 0;
+end $$;
+
+-- De geplande momenten van één abonnement, uit een document. Puur, zodat
+-- controle.sql het met een verzonnen document kan nakijken zonder een
+-- abonnement of een geheim aan te maken.
+--
+-- Eerst de muur van read_state(), met het bereik van de eigenaar; daarna pas
+-- de keuzes van het abonnement, en die kunnen enkel verder versmallen.
+-- Van "since" af (dertig dagen terug, zie hieronder). Geen contactpersoon:
+-- dat zijn gegevens van een arts in de agenda van een derde partij, op
+-- telefoons en vergrendelschermen.
+create or replace function followup.feed_events(doc jsonb, scope text[], owner uuid,
+                                                mine boolean, products text[],
+                                                since text) returns jsonb
+language sql immutable set search_path = public as $$
+  select coalesce((
+    select jsonb_agg(jsonb_build_object(
+             'id',       p.e ->> 'id',
+             'date',     p.e ->> 'date',
+             'time',     coalesce(p.e ->> 'time', ''),
+             'type',     coalesce(p.e ->> 'type', ''),
+             -- Een moment draagt één "product", of een lijst "products"
+             -- (die scope_doc al heeft ingekort tot het bereik).
+             'products', case when p.e ? 'products' then p.e -> 'products'
+                              when coalesce(p.e ->> 'product', '') = '' then '[]'::jsonb
+                              else jsonb_build_array(p.e ->> 'product') end,
+             'hospital', coalesce(h.e ->> 'name', ''),
+             'address',  coalesce(h.e ->> 'address', ''),
+             'country',  coalesce(h.e ->> 'country', ''),
+             'note',     coalesce(p.e ->> 'note', ''),
+             'updated',  coalesce(nullif(p.e ->> 'updatedAt', ''), p.e ->> 'createdAt', ''))
+           order by p.e ->> 'date', coalesce(p.e ->> 'time', ''), h.e ->> 'name')
+      from jsonb_array_elements(followup.arr(
+             followup.scope_doc(followup.opvolging_aanvullen(doc), coalesce(scope, '{}')) -> 'hospitals')) h(e)
+      cross join lateral jsonb_array_elements(followup.arr(h.e -> 'planned')) p(e)
+     where coalesce(p.e ->> 'date', '') >= since
+       -- Voor wie: wie gekozen is, anders wie het invoerde (assigneeOf()).
+       and (not mine
+            or coalesce(nullif(p.e ->> 'assignee', ''), p.e ->> 'createdBy', '') = owner::text)
+       -- Een keuze van producten: het moment moet er een van dragen. Een
+       -- moment zonder product hoort bij geen enkele keuze, enkel bij "alles".
+       -- in_scope(e, '{}') is waar voor precies dat: een moment zonder product.
+       and (coalesce(products, '{}') = '{}'::text[]
+            or (followup.in_scope(p.e, products)
+                and not followup.in_scope(p.e, '{}'::text[])))
+  ), '[]'::jsonb);
+$$;
+
+-- Wat een agenda-app te zien krijgt. Zonder aanmelding uit te voeren: het
+-- geheim ís de aanmelding. Onbekend of ingetrokken geheim: null.
+--
+-- Het bereik is dat van de eigenaar zoals het nú in app_users staat, niet
+-- zoals het was toen het abonnement gemaakt werd: wie een product verliest,
+-- verliest het bij de volgende ophaalbeurt ook in zijn agenda. Van dertig
+-- dagen geleden af, zodat een moment dat te laat is zichtbaar blijft tot
+-- iemand het afvinkt. Enkel geplande momenten, geen logboek.
+create or replace function public.calendar_feed(p_secret text) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  v_feed  public.calendar_feeds;
+  v_scope text[];
+begin
+  if p_secret is null or p_secret !~ '^[0-9a-f]{64}$' then
+    return null;
+  end if;
+  select * into v_feed from public.calendar_feeds where secret_hash = followup.feed_hash(p_secret);
+  if not found then
+    return null;
+  end if;
+  update public.calendar_feeds set last_used = now() where id = v_feed.id;
+  select products into v_scope from public.app_users where id = v_feed.owner;
+
+  return jsonb_build_object(
+    'label',  v_feed.label,
+    'lang',   v_feed.lang,
+    'events', followup.feed_events(
+                (select s.data from public.app_state s where s.id = 'main'),
+                coalesce(v_scope, '{}'), v_feed.owner, v_feed.mine, v_feed.products,
+                to_char(current_date - 30, 'YYYY-MM-DD')));
+end $$;
+
+-- Vier deuren, en alleen deze. calendar_feed is de enige die anon mag: de
+-- agenda-app heeft geen aanmelding. Wat die deur doorlaat, beslist het geheim.
+revoke all on function public.feed_create(text, boolean, text[], text) from public, anon;
+revoke all on function public.feed_list(boolean) from public, anon;
+revoke all on function public.feed_remove(uuid) from public, anon;
+revoke all on function public.calendar_feed(text) from public;
+grant execute on function public.feed_create(text, boolean, text[], text) to authenticated;
+grant execute on function public.feed_list(boolean) to authenticated;
+grant execute on function public.feed_remove(uuid) to authenticated;
+grant execute on function public.calendar_feed(text) to anon, authenticated;
