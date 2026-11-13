@@ -16,6 +16,9 @@
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
   const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
+  // Agendabestanden: zie ics.js. Het abonnement maakt dezelfde afspraken aan de
+  // serverkant (supabase/functions/calendar).
+  const Ics = window.FollowUpIcs;
   // Welk product staat standaard in een nieuw contactmoment of een planning:
   // dat van het ziekenhuis als er maar één is, anders het jouwe als jij er maar
   // één mag.
@@ -1252,6 +1255,7 @@
             <div class="t-acts">
               <button class="icon-btn" data-act="done-planned" data-id="${esc(p.id)}" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
               <button class="icon-btn" data-act="edit-planned" data-id="${esc(p.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
+              <button class="icon-btn" data-act="ics-planned" data-id="${esc(p.id)}" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>
             </div>
           </li>`;
         }).join("")}</ul>` : `<p class="muted">${esc(t("empty.planned"))}</p>`}
@@ -1484,6 +1488,7 @@
       case "edit-activity": return activityDialog(h, h.activities.find((a) => a.id === id));
       case "add-planned": return plannedDialog(h, null);
       case "edit-planned": return plannedDialog(h, h.planned.find((p) => p.id === id));
+      case "ics-planned": return downloadIcs(h, h.planned.find((p) => p.id === id));
       // Afvinken: het geplande moment wordt een contactmoment. De dialoog staat
       // al ingevuld; het aantal kamers vragen we daar voor het eerst.
       case "done-planned": return activityDialog(h, null, h.planned.find((p) => p.id === id));
@@ -2255,6 +2260,25 @@
     return out.sort((a, b) => byWhen(a.p, b.p) || a.h.name.localeCompare(b.h.name));
   }
 
+  // ---------- agenda-abonnementen ----------
+  // Een gepland moment als afspraak. Dezelfde vorm als in het abonnement: de
+  // soort, het product en het ziekenhuis als titel, het ziekenhuis en zijn
+  // adres als plaats, en de nota. Geen contactpersoon — dat zijn gegevens van
+  // een arts in de agenda van een derde partij.
+  const icsEventOf = (h, p) => ({
+    id: p.id, date: p.date, time: p.time || "", country: h.country,
+    title: Ics.title(t("act." + p.type), p.product ? [p.product] : [], h.name),
+    location: Ics.place(h.name, h.address),
+    description: p.note,
+  });
+  // Eén moment als bestand: een kopie, die niet meeverandert als het plan
+  // verandert. Daarvoor is het abonnement.
+  function downloadIcs(h, p) {
+    if (!h || !p) return;
+    const name = `${p.date}-${h.name}`.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 60);
+    download(`${name || "followup"}.ics`, Ics.calendar([icsEventOf(h, p)], ""), "text/calendar;charset=utf-8");
+  }
+
   // Voor wie: dezelfde uitklapper als de filters in het logboek en de zijbalk,
   // met jezelf vooraan. "Gepland voor" en niet "Toegewezen aan": dat laatste
   // is wie een product bij een ziekenhuis opvolgt, en die filter staat op het
@@ -2284,6 +2308,7 @@
       <div class="ag-acts">
         <button class="icon-btn" data-ag="done" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
         <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
+        <button class="icon-btn" data-ag="ics" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>
         <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">${icon("arrow")}</button>
       </div>
     </li>`;
@@ -2736,6 +2761,7 @@
         if (!h || !p) return;
         if (b.dataset.ag === "done") return activityDialog(h, null, p);
         if (b.dataset.ag === "edit") return plannedDialog(h, p);
+        if (b.dataset.ag === "ics") return downloadIcs(h, p);
         if (b.dataset.ag === "open") { setView("map"); select(h.id, true); }
         return;
       }

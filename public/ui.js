@@ -70,6 +70,7 @@ window.FollowUpUI = (() => {
     arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
     prev: '<path d="m14.5 6-6 6 6 6"/>',
     next: '<path d="m9.5 6 6 6-6 6"/>',
+    calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M8.5 3v4M15.5 3v4"/>',
   };
   const icon = (name, cls) =>
     `<svg class="ic${cls ? " " + cls : ""}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;

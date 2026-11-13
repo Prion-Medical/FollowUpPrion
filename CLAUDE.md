@@ -105,6 +105,7 @@ Two things that cost an evening to find out:
 | `data/seed.json` | 40 starter hospitals (BE/NL/LU), no contacts, approximate coordinates |
 | `public/consent.html`, `consent.js` | The page where someone allows an assistant to act as them (see The assistant connector) |
 | `supabase/functions/agent/index.ts` | The connector an assistant such as Claude talks to: a Supabase Edge Function, one file, no imports |
+| `public/ics.js` | Writes iCalendar: one planned moment as a file to download |
 | `docs/agent-instructions.md` | What to paste into the assistant's project so it behaves like a colleague who keeps the log |
 
 ## Conventions
