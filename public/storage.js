@@ -268,6 +268,7 @@ window.FollowUpStore = (() => {
     // gewone opslag. De databank houdt die twee uit elkaar omdat een import
     // niets verwijdert en tóch alles terugdraait.
     //
+    // Geeft het nieuwe tijdstip terug; overnemen gebeurt met accept().
     // De nieuwe tijdstempel komt van de databank en niet meer uit deze browser:
     // bij klokverschil tussen twee toestellen kon de vergelijking slagen waar
     // ze had moeten falen.
@@ -281,7 +282,10 @@ window.FollowUpStore = (() => {
         if (error.hint === "conflict") throw new ConflictError();
         throw new Error(MELDINGEN[error.hint] ? t(MELDINGEN[error.hint]) : error.message);
       }
-      lastUpdated = data;
+      // Het nieuwe tijdstip, maar nog niet overgenomen: dat doet accept(),
+      // en de app laat het bewust na wanneer de databank bij deze opslag zelf
+      // iets besliste dat de app nog moet ophalen (save() in app.js).
+      return data;
     },
     async signOut() {
       await client.auth.signOut();

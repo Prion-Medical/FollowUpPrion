@@ -660,6 +660,25 @@ window.FollowUpDomain = (() => {
     }
   }
 
+  // Raakte een opslag een contactmoment op een manier waar de databank iets
+  // mee doet: erbij, weg, of een ander type, aantal of product? Alleen dan
+  // loont het ophalen van wat ze besliste (save() in app.js); een getypt
+  // veld in de fiche verandert er niets aan.
+  function momentsMoved(before, after) {
+    const sig = (a) => JSON.stringify([a.type, a.rooms, a.product, a.products]);
+    const acts = (db) => {
+      const m = new Map();
+      for (const h of (db && db.hospitals) || []) {
+        for (const a of h.activities || []) m.set(h.id + "/" + a.id, sig(a));
+      }
+      return m;
+    };
+    const b = acts(before), a = acts(after);
+    if (b.size !== a.size) return true;
+    for (const [k, v] of a) if (b.get(k) !== v) return true;
+    return false;
+  }
+
   // ---------- planning en tellen ----------
   // Ook hier omdat de koppeling (en voor de volgorde ook de databank) een
   // kopie houdt, en tests/ die kopieën naast deze legt.
@@ -691,7 +710,7 @@ window.FollowUpDomain = (() => {
 
   return {
     merge3, deepEqual, setMain, mainContact,
-    normalizeFacts, syncPipeline, zonderProduct, stageStatus, autoStatus, syncRooms,
+    normalizeFacts, syncPipeline, zonderProduct, stageStatus, autoStatus, syncRooms, momentsMoved,
     byWhen, assigneeOf, tickOffDate, rooms, signedRooms, units,
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
     ROOM_TYPES, SOLD_TYPES, typesFor, typesOffered, typesAmong, typesInAll, shared, productsOf, productOf, familiesFor, wantsFamily, factsFor, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
