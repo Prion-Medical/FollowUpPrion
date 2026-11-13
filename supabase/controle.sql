@@ -150,7 +150,45 @@ om as (select d, followup.opvolging_aanvullen(d) as m from oud),
 -- afgeschermde gebruiker ermee samenvoegen. Hij stuurt terug wat hij kreeg.
 omrond as (
   select m, followup.merge_doc(m, followup.scope_doc(m, '{Ainex}'::text[]), '{Ainex}'::text[], false) as n
-  from om)
+  from om),
+
+-- Agenda-abonnementen (feed_events). U1 en U2 zijn twee eigenaars; de uuid's
+-- zijn verzonnen, net als de rest. f1 is van EndoQ, f2 van Ainex en voor U2
+-- gepland, f3 heeft geen product, f4 is van EndoQ maar lang voorbij, f5 is
+-- van Ainex, ingevoerd door U1 maar voor U2.
+feed as (select $j${
+  "version": 1,
+  "hospitals": [
+    { "id": "g1", "name": "UZ Agenda", "address": "Herestraat 49, Leuven", "country": "BE",
+      "products": ["EndoQ", "Ainex"],
+      "nextAction": "", "nextActionDate": "", "unit": {}, "contacts": [], "activities": [],
+      "planned": [
+        { "id": "f1", "date": "2026-06-01", "time": "14:00", "type": "demo", "product": "EndoQ",
+          "note": "endoq", "createdBy": "00000000-0000-0000-0000-0000000000a1" },
+        { "id": "f2", "date": "2026-06-02", "type": "visit", "product": "Ainex",
+          "note": "ainex", "createdBy": "00000000-0000-0000-0000-0000000000a2" },
+        { "id": "f3", "date": "2026-06-03", "type": "call", "product": "",
+          "note": "zonder", "createdBy": "00000000-0000-0000-0000-0000000000a1" },
+        { "id": "f4", "date": "2025-01-01", "type": "call", "product": "EndoQ",
+          "note": "oud", "createdBy": "00000000-0000-0000-0000-0000000000a1" },
+        { "id": "f5", "date": "2026-06-04", "type": "call", "product": "Ainex", "note": "voor U2",
+          "createdBy": "00000000-0000-0000-0000-0000000000a1",
+          "assignee": "00000000-0000-0000-0000-0000000000a2" } ] }
+  ]}$j$::jsonb as d),
+feedids as (
+  select (select coalesce(jsonb_agg(e -> 'id'), '[]'::jsonb) from jsonb_array_elements(
+            followup.feed_events(d, sc::text[], ow::uuid, mi, pr::text[], '2026-01-01')) e) as ids,
+         k
+    from feed, (values
+      -- k: wat er gevraagd wordt; sc: bereik van de eigenaar; ow: eigenaar;
+      -- mi: enkel voor mij; pr: productkeuze van het abonnement.
+      ('alles',         '{}',      '00000000-0000-0000-0000-0000000000a1', false, '{}'),
+      ('ainex-muur',    '{Ainex}', '00000000-0000-0000-0000-0000000000a1', false, '{}'),
+      ('ainex-vraagt-endoq', '{Ainex}', '00000000-0000-0000-0000-0000000000a1', false, '{EndoQ}'),
+      ('keuze-endoq',   '{}',      '00000000-0000-0000-0000-0000000000a1', false, '{EndoQ}'),
+      ('mijn-u1',       '{}',      '00000000-0000-0000-0000-0000000000a1', true,  '{}'),
+      ('mijn-u2',       '{}',      '00000000-0000-0000-0000-0000000000a2', true,  '{}')
+    ) v(k, sc, ow, mi, pr))
 
 select nr, controle,
        case when verwacht is not distinct from gekregen then 'OK' else '>>> FOUT' end as uitslag,
@@ -346,6 +384,28 @@ from (
          n #> '{hospitals,0,pipeline,EndoQ}' from omrond
   union all select 51, 'omzetten: laden en opslaan verandert het omgezette document niet',
          to_jsonb(true), to_jsonb(n = m) from omrond
+
+  -- --- agenda-abonnementen ----------------------------------------------------
+  -- De vraag die telt: houdt een abonnement van een beperkt account niets van
+  -- het andere product, ook niet als het abonnement er zelf om vraagt?
+  union all select 60, 'abonnement: onbeperkt, alles vanaf de begindatum',
+         '["f1", "f2", "f3", "f5"]'::jsonb, ids from feedids where k = 'alles'
+  union all select 61, 'abonnement: een Ainex-account ziet niets van EndoQ',
+         '["f2", "f3", "f5"]'::jsonb, ids from feedids where k = 'ainex-muur'
+  union all select 62, 'abonnement: ook niet als het abonnement om EndoQ vraagt',
+         '[]'::jsonb, ids from feedids where k = 'ainex-vraagt-endoq'
+  union all select 63, 'abonnement: een productkeuze laat momenten zonder product weg',
+         '["f1"]'::jsonb, ids from feedids where k = 'keuze-endoq'
+  union all select 64, 'abonnement: "voor mij" is wie het invoerde, tenzij iemand anders gekozen is',
+         '["f1", "f3"]'::jsonb, ids from feedids where k = 'mijn-u1'
+  union all select 65, 'abonnement: "voor mij" volgt de keuze voor een collega',
+         '["f2", "f5"]'::jsonb, ids from feedids where k = 'mijn-u2'
+  union all select 66, 'abonnement: tijd, adres en nota gaan mee, een contactpersoon niet',
+         '{"id": "f1", "date": "2026-06-01", "time": "14:00", "type": "demo", "products": ["EndoQ"],
+           "hospital": "UZ Agenda", "address": "Herestraat 49, Leuven", "country": "BE",
+           "note": "endoq", "updated": ""}'::jsonb,
+         followup.feed_events(d, '{}', '00000000-0000-0000-0000-0000000000a1', false, '{}', '2026-01-01') -> 0
+         from feed
 ) q(nr, controle, verwacht, gekregen)
 order by nr;
 

@@ -2279,6 +2279,133 @@
     download(`${name || "followup"}.ics`, Ics.calendar([icsEventOf(h, p)], ""), "text/calendar;charset=utf-8");
   }
 
+  const feedDate = (ts) => (ts ? new Date(ts).toLocaleDateString(I18N.locale, { day: "numeric", month: "short", year: "numeric" }) : "");
+  const feedSummary = (f) => [
+    t(f.mine ? "feeds.mine" : "feeds.everyone"),
+    f.products && f.products.length ? f.products.join(", ") : t("feeds.allProducts"),
+    String(f.lang || "nl").toUpperCase(),
+  ].join(" · ");
+  // Eén abonnement in een lijst. button is de knop om het stop te zetten: in
+  // de dialoog een verzendknop, op het gebruikersscherm een gewone knop.
+  const feedRow = (f, owner, button) => `<li class="feed-row">
+      <div class="feed-what">
+        <b>${esc(f.label || t("feeds.unnamed"))}</b>${owner ? ` <span class="muted">· ${esc(owner)}</span>` : ""}
+        <span class="muted">${esc(feedSummary(f))}</span>
+        <span class="muted">${esc(t("feeds.created", { date: feedDate(f.created_at) }))} · ${
+          esc(f.last_used ? t("feeds.used", { date: feedDate(f.last_used) }) : t("feeds.neverUsed"))}</span>
+      </div>
+      ${button}
+    </li>`;
+
+  // Abonneren: een adres dat je agenda-app zelf ophaalt. De dialoog maakt er
+  // een aan, toont het één keer, en lijst de abonnementen die je al hebt.
+  function feedDialog() {
+    if (!store.feeds) return tell(t("feeds.localOnly"));
+    const products = myProducts();
+    // Een tweede klik terwijl de eerste nog onderweg is, maakt geen tweede adres.
+    let busy = false;
+    const form = openDialog(`
+      <h2>${esc(t("feeds.title"))}</h2>
+      <p class="muted">${esc(t("feeds.intro"))}</p>
+      <div class="feed-fresh" hidden></div>
+      <h3 class="feed-h">${esc(t("feeds.new"))}</h3>
+      <div class="grid">
+        <label class="field full">${esc(t("feeds.label"))}<input name="label" maxlength="80" placeholder="${esc(t("feeds.label.ph"))}"></label>
+        <label class="field">${esc(t("feeds.who"))}
+          <select name="mine">${opt("1", t("feeds.mine"), "1")}${opt("0", t("feeds.everyone"), "1")}</select>
+        </label>
+        <label class="field">${esc(t("feeds.lang"))}
+          <select name="lang">${opt("nl", "Nederlands", I18N.lang)}${opt("en", "English", I18N.lang)}</select>
+        </label>
+        ${products.length > 1 ? `<div class="field full">${esc(t("feeds.products"))}${pickBox([
+          { attrs: `data-feed-all="1"`, label: t("feeds.allProducts"), checked: true, cls: "pick-all" },
+          ...products.map((p) => ({ attrs: `data-feed-product="${esc(p)}"`, label: p, checked: false })),
+        ], t("feeds.allProducts"))}</div>` : ""}
+      </div>
+      <p class="muted">${esc(t("feeds.delay"))}</p>
+      <div class="actions">
+        <button class="btn" value="cancel" formnovalidate>${esc(t("btn.close"))}</button>
+        <button class="btn primary" value="create">${esc(t("feeds.create"))}</button>
+      </div>
+      <h3 class="feed-h">${esc(t("feeds.yours"))}</h3>
+      <div class="feed-list"><p class="muted">${esc(t("feeds.loading"))}</p></div>`, (data, action) => {
+      if (action === "create" && !busy) {
+        busy = true;
+        const chosen = [...form.querySelectorAll("[data-feed-product]:checked")].map((b) => b.dataset.feedProduct);
+        store.feedCreate({ label: data.label.trim(), mine: data.mine === "1", products: chosen, lang: data.lang })
+          .then((r) => { showFresh(store.feedUrl(r.secret)); form.elements.label.value = ""; return loadList(); })
+          .catch((e) => tell(t("feeds.failed", { msg: e.message })))
+          .finally(() => { busy = false; });
+      } else if (action.startsWith("remove:")) {
+        const id = action.slice(7);
+        ask(t("feeds.confirmRemove"), { ok: t("feeds.remove") }).then((yes) => yes && store.feedRemove(id)
+          .then(() => { toast(t("feeds.removed")); return loadList(); })
+          .catch((e) => tell(t("feeds.failed", { msg: e.message }))));
+      }
+      return KEEP_OPEN;
+    });
+    // "Alle producten" en de losse vakjes sluiten elkaar uit, zoals op het
+    // gebruikersscherm. Niets aangevinkt is weer alles.
+    form.onchange = (e) => {
+      const all = form.querySelector("[data-feed-all]");
+      if (!all) return;
+      const boxes = [...form.querySelectorAll("[data-feed-product]")];
+      if (e.target === all) boxes.forEach((b) => { b.checked = false; });
+      else if (e.target.dataset.feedProduct) all.checked = !boxes.some((b) => b.checked);
+      if (!all.checked && !boxes.some((b) => b.checked)) all.checked = true;
+      syncPick(all.closest("details.pick"));
+    };
+    // Het adres, één keer. De databank bewaart enkel een hash: wie het hier
+    // niet kopieert, maakt later een nieuw.
+    function showFresh(url) {
+      const box = $(".feed-fresh", form);
+      const webcal = url.replace(/^https:/, "webcal:");
+      const google = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}`;
+      box.innerHTML = `
+        <p><b>${esc(t("feeds.ready"))}</b></p>
+        <div class="feed-url">
+          <input readonly value="${esc(url)}" aria-label="${esc(t("feeds.address"))}">
+          <button type="button" class="btn small" data-feed-copy>${icon("copy")} ${esc(t("feeds.copy"))}</button>
+        </div>
+        <p class="feed-warn">${esc(t("feeds.secret"))}</p>
+        ${/* Per agenda hoe je het toevoegt, dichtgeklapt: wie Outlook gebruikt,
+             hoeft de stappen voor Apple niet te lezen. name maakt er één groep
+             van, zodat er telkens één openstaat. Gewone <details>, geen
+             .pick: de luisteraar in domain.js laat ze dus met rust. */""}
+        <div class="feed-how">
+          ${[
+            ["apple", `<a class="btn small" href="${esc(webcal)}">${icon("calendar")} ${esc(t("feeds.openApp"))}</a>`],
+            ["google", `<a class="btn small" href="${esc(google)}" target="_blank" rel="noopener noreferrer">${esc(t("feeds.openGoogle"))}</a>`],
+            ["outlook", ""],
+          ].map(([k, button]) => `<details name="feed-how">
+            <summary>${icon("next")}<span>${esc(t("feeds.how." + k))}</span></summary>
+            <div class="feed-how-body">
+              ${button ? `<p>${button}</p>` : ""}
+              <ol>${t("feeds.how." + k + ".steps").split("\n").map((step) => `<li>${esc(step)}</li>`).join("")}</ol>
+            </div>
+          </details>`).join("")}
+        </div>`;
+      box.hidden = false;
+      const input = $("input", box);
+      $("[data-feed-copy]", box).onclick = () => {
+        input.select();
+        (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject())
+          .then(() => toast(t("feeds.copied")), () => { document.execCommand("copy"); toast(t("feeds.copied")); });
+      };
+      input.focus();
+      input.select();
+    }
+    function loadList() {
+      const list = $(".feed-list", form);
+      return store.feedList().then((feeds) => {
+        list.innerHTML = feeds.length ? `<ul class="feed-rows">${feeds.map((f) => feedRow(f, "",
+          `<button class="btn small danger" value="remove:${esc(f.id)}" formnovalidate>${esc(t("feeds.remove"))}</button>`)).join("")}</ul>`
+          : `<p class="muted">${esc(t("feeds.none"))}</p>`;
+      }, (e) => { list.innerHTML = `<p class="login-error">${esc(t("feeds.failed", { msg: e.message }))}</p>`; });
+    }
+    loadList();
+  }
+
   // Voor wie: dezelfde uitklapper als de filters in het logboek en de zijbalk,
   // met jezelf vooraan. "Gepland voor" en niet "Toegewezen aan": dat laatste
   // is wie een product bij een ziekenhuis opvolgt, en die filter staat op het
@@ -2366,6 +2493,7 @@
           <button class="btn small" data-ag="next" title="${esc(t("btn.nextMonth"))}" aria-label="${esc(t("btn.nextMonth"))}">${icon("next")}</button>
         </div>
         ${agendaAssignee()}
+        ${store.feeds ? `<button class="btn small" data-ag="subscribe" title="${esc(t("feeds.button.title"))}">${icon("calendar")} ${esc(t("feeds.button"))}</button>` : ""}
         ${// De schakelaar als laatste, op beide tabbladen: zo staat hij op
           // dezelfde plaats en verspringt hij niet onder je muis.
           agendaTabs()}
@@ -2775,6 +2903,8 @@
         state.agenda = { ...a, y: d.getFullYear(), m: d.getMonth(), day: "" };
       } else if (b.dataset.ag === "clear") {
         state.agenda = { ...a, day: "" };
+      } else if (b.dataset.ag === "subscribe") {
+        return feedDialog();
       } else return;
       return renderAgenda();
     }
@@ -2993,8 +3123,39 @@
       </div>
       ${users.length
         ? `<div class="u-list">${users.map(row).join("")}</div>`
-        : `<p class="muted">${esc(t("users.none"))}</p>`}`;
+        : `<p class="muted">${esc(t("users.none"))}</p>`}
+      ${store.feeds ? `<div class="u-feeds">
+        <h3>${esc(t("feeds.allTitle"))}</h3>
+        <p class="muted">${esc(t("feeds.allIntro"))}</p>
+        <div class="feed-list-all"><p class="muted">${esc(t("feeds.loading"))}</p></div>
+      </div>` : ""}`;
+    loadAllFeeds();
   }
+
+  // Elk abonnement van iedereen, voor een beheerder: wie welk adres heeft en
+  // of een agenda het nog ophaalt. Stopzetten maakt het adres meteen
+  // ongeldig; het abonnement zelf zien of overnemen kan niet, het geheim
+  // staat nergens.
+  function loadAllFeeds() {
+    const box = usersView.querySelector(".feed-list-all");
+    if (!box) return;
+    store.feedList(true).then((feeds) => {
+      box.innerHTML = feeds.length ? `<ul class="feed-rows">${feeds.map((f) => feedRow(f, f.owner_name || "?",
+        `<button type="button" class="btn small danger" data-feed-remove="${esc(f.id)}">${esc(t("feeds.remove"))}</button>`)).join("")}</ul>`
+        : `<p class="muted">${esc(t("feeds.noneAll"))}</p>`;
+    }, (e) => { box.innerHTML = `<p class="login-error">${esc(t("feeds.failed", { msg: e.message }))}</p>`; });
+  }
+  usersView.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-feed-remove]");
+    if (!b || !(await ask(t("feeds.confirmRemoveOther"), { ok: t("feeds.remove") }))) return;
+    try {
+      await store.feedRemove(b.dataset.feedRemove);
+      toast(t("feeds.removed"));
+    } catch (err) {
+      tell(t("feeds.failed", { msg: err.message }));
+    }
+    loadAllFeeds();
+  });
 
   usersView.addEventListener("change", async (e) => {
     const el = e.target.closest("[data-uid]");

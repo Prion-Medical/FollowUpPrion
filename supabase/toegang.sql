@@ -80,6 +80,42 @@ from (
          exists (select 1 from public.app_users where role = 'admin')
   union all select 19, 'de trigger die een rij aanmaakt bestaat nog', true,
          exists (select 1 from pg_trigger where tgname = 'app_user_create' and not tgisinternal)
+
+  -- --- agenda-abonnementen --------------------------------------------------
+  -- De tabel is onbereikbaar, net als app_state: wie hem kan lezen, ziet van
+  -- wie elk abonnement is. calendar_feed is de enige deur die anon mag, en
+  -- die beslist met het geheim; de andere drie zijn voor wie aangemeld is.
+  union all select 22, 'calendar_feeds: authenticated mag niet lezen', false,
+         has_table_privilege('authenticated', 'public.calendar_feeds', 'select')
+  union all select 23, 'calendar_feeds: anon mag niet lezen', false,
+         has_table_privilege('anon', 'public.calendar_feeds', 'select')
+  union all select 24, 'calendar_feeds: niemand mag schrijven via de API', false,
+         has_table_privilege('authenticated', 'public.calendar_feeds', 'insert')
+      or has_table_privilege('authenticated', 'public.calendar_feeds', 'update')
+      or has_table_privilege('authenticated', 'public.calendar_feeds', 'delete')
+      or has_table_privilege('anon', 'public.calendar_feeds', 'insert')
+      or has_table_privilege('anon', 'public.calendar_feeds', 'update')
+      or has_table_privilege('anon', 'public.calendar_feeds', 'delete')
+  union all select 25, 'calendar_feeds: rij-beveiliging aan', true,
+         (select relrowsecurity from pg_class where oid = 'public.calendar_feeds'::regclass)
+  union all select 26, 'calendar_feeds: geen enkele policy', false,
+         exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'calendar_feeds')
+  union all select 27, 'calendar_feed: anon mag uitvoeren (de agenda-app)', true,
+         has_function_privilege('anon', 'public.calendar_feed(text)', 'execute')
+  union all select 28, 'feed_create, feed_list, feed_remove: anon mag niet', false,
+         has_function_privilege('anon', 'public.feed_create(text, boolean, text[], text)', 'execute')
+      or has_function_privilege('anon', 'public.feed_list(boolean)', 'execute')
+      or has_function_privilege('anon', 'public.feed_remove(uuid)', 'execute')
+  union all select 29, 'feed_create, feed_list, feed_remove: authenticated mag', true,
+         has_function_privilege('authenticated', 'public.feed_create(text, boolean, text[], text)', 'execute')
+     and has_function_privilege('authenticated', 'public.feed_list(boolean)', 'execute')
+     and has_function_privilege('authenticated', 'public.feed_remove(uuid)', 'execute')
+  -- Een abonnement verdwijnt met zijn account. Zonder cascade blijft het adres
+  -- werken voor iemand die er niet meer is, of blokkeert het verwijderen.
+  union all select 30, 'calendar_feeds: verdwijnt met het account (cascade)', true,
+         exists (select 1 from pg_constraint
+                  where conrelid = 'public.calendar_feeds'::regclass and contype = 'f'
+                    and confrelid = 'public.app_users'::regclass and confdeltype = 'c')
 ) q(nr, controle, verwacht, gekregen)
 order by nr;
 
@@ -110,6 +146,8 @@ select u.email,
 --      claude.ai en claude.com als redirect. De toestemmingspagina vertrouwt
 --      op de naam en het terugkeeradres die Supabase voor die aanvrager
 --      teruggeeft; een tweede aanvrager is een tweede deur.
---   5. Edge Functions: "Verify JWT" staat alleen UIT voor de functie agent.
---      Die kijkt de sleutel zelf na; elke andere functie hoort hem aan te
---      laten staan.
+--   5. Edge Functions: "Verify JWT" staat alleen UIT voor de functies agent
+--      en calendar. agent kijkt de sleutel zelf na; calendar heeft er geen
+--      nodig, want een agenda-app meldt zich niet aan en het geheim in het
+--      adres beslist (zie calendar_feed). Elke andere functie hoort hem aan
+--      te laten staan.

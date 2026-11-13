@@ -64,7 +64,15 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   -- sleutel gebruikers beheren en een back-up terugzetten.
   ('via_assistant',   'client_id',      'een sleutel van een assistent is te herkennen'),
   ('is_admin',        'via_assistant',  'gebruikers beheren kan niet met de sleutel van een assistent'),
-  ('write_state',     'via_assistant',  'een back-up terugzetten kan niet met de sleutel van een assistent')
+  ('write_state',     'via_assistant',  'een back-up terugzetten kan niet met de sleutel van een assistent'),
+  -- Agenda-abonnementen. Een feed_events zonder scope_doc toont een
+  -- beperkt account de geplande momenten van elk product.
+  ('feed_events',     'scope_doc',      'een abonnement gaat door dezelfde muur als de app'),
+  ('feed_events',     'assignee',       '"voor mij" volgt wie gekozen is, anders wie het invoerde'),
+  ('calendar_feed',   'feed_events',    'het abonnement leest via feed_events'),
+  ('feed_create',     'via_assistant',  'een abonnement maakt een mens, geen assistent'),
+  ('feed_remove',     'is_admin',       'een beheerder kan elk abonnement stopzetten'),
+  ('feed_hash',       'sha256',         'bestaat die functie überhaupt')
 )
 select v.functie,
        v.waarvoor,
