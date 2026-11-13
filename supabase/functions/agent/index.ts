@@ -377,8 +377,10 @@ function useProduct(h: Any, product: string) {
   settle(h);
 }
 // syncNextAction() uit app.js; de databank rekent dit zelf ook na.
+// Op datum, met wat geen datum heeft vooraan, zoals fix_planned() in de
+// databank en normalize() in de app.
 function sortPlanned(h: Any) {
-  h.planned.sort((a: Any, b: Any) => String(a.date).localeCompare(String(b.date)));
+  h.planned.sort((a: Any, b: Any) => String(a.date || "").localeCompare(String(b.date || "")));
   const p = h.planned[0];
   h.nextActionDate = p ? p.date : "";
   h.nextAction = p ? p.note : "";
@@ -463,8 +465,12 @@ async function addContactMoment(token: string, args: Any) {
 async function addPlannedMoment(token: string, args: Any, user: Any) {
   const type = oneOf(args.type, ACT_TYPES, "type");
   const product = String(args.product || "");
-  if (!isDate(args.date)) throw new ToolError("date is required, as YYYY-MM-DD.");
+  // Zonder datum mag: iets dat moet gebeuren maar nog geen dag heeft. Het
+  // staat dan bovenaan tot iemand het doet. Een uur zonder dag zegt niets.
+  const date = args.date ? String(args.date) : "";
+  if (date && !isDate(date)) throw new ToolError("date must be YYYY-MM-DD, or left out when there is no date yet.");
   const time = timeOf(args.time);
+  if (time && !date) throw new ToolError("A time needs a date. Leave both out when there is no date yet.");
   const to = has(args, "planned_for") ? findPerson(await people(token), args.planned_for, user.id) : null;
   if (to && !worksOn(to, product)) throw new ToolError(`${to.name} does not work on ${product} and would not see this moment.`);
   return await change(token, ({ doc, scope }) => {
@@ -472,7 +478,7 @@ async function addPlannedMoment(token: string, args: Any, user: Any) {
     const h = hospitalIn(doc, args.hospital_id);
     const contactId = String(args.contact_id || "");
     checkContact(h, contactId);
-    const rec: Any = { id: uid(), date: String(args.date), type, product, contactId, note: String(args.note || "").trim() };
+    const rec: Any = { id: uid(), date, type, product, contactId, note: String(args.note || "").trim() };
     // Alleen als het voor iemand anders is: voor jezelf volgt het al uit de
     // stempel die de databank zet.
     if (to && to.id !== user.id) rec.assignee = to.id;
@@ -480,7 +486,7 @@ async function addPlannedMoment(token: string, args: Any, user: Any) {
     if (time) rec.time = time;
     h.planned.push(rec);
     sortPlanned(h);
-    return { saved: true, hospital: h.name, planned: { id: rec.id, date: rec.date, time: time || "all day", type, product, note: rec.note, planned_for: to && to.id !== user.id ? to.name : "you" } };
+    return { saved: true, hospital: h.name, planned: { id: rec.id, date: rec.date || "no date yet", time: time || (date ? "all day" : ""), type, product, note: rec.note, planned_for: to && to.id !== user.id ? to.name : "you" } };
   });
 }
 
@@ -987,9 +993,12 @@ async function listMoments(token: string, args: Any, user: Any) {
       const late = kind === "planned" && !!d && d < now;
       if (late) overdue++;
       // Een moment zonder datum hoort in geen enkele periode, en dus alleen
-      // bij "alles".
+      // bij "alles". Een gepland moment zonder datum staat wel bovenaan tot
+      // iemand het doet, dus dat hoort bij "wat staat er gepland", net als
+      // wat te laat is.
       const inside = d ? d >= from && d <= to : from.startsWith("0000") && to.startsWith("9999");
-      if (!inside && !(late && window && args.include_overdue !== false)) continue;
+      const undated = kind === "planned" && !d && !!window;
+      if (!inside && !undated && !(late && window && args.include_overdue !== false)) continue;
       rows.push({
         hospital: h.name, hospital_id: h.id, id: r.id, date: d, type: r.type, product: r.product || "",
         contact: contact(r.contactId), note: r.note || "", entered_by: name(r.createdBy),
@@ -1017,7 +1026,10 @@ async function listMoments(token: string, args: Any, user: Any) {
 // afgetrokken met het verschil.
 async function updateMoment(token: string, args: Any, user: Any) {
   const kind = oneOf(args.kind, ["contact_moment", "planned_moment"], "kind");
-  if (has(args, "date") && !isDate(args.date)) throw new ToolError("date must be YYYY-MM-DD.");
+  // Een gepland moment mag zijn datum kwijt; een contactmoment gebeurde op een dag.
+  const noDate = kind === "planned_moment" && has(args, "date") && args.date === "";
+  if (has(args, "date") && !noDate && !isDate(args.date)) throw new ToolError(kind === "planned_moment"
+    ? "date must be YYYY-MM-DD, or empty text for no date." : "date must be YYYY-MM-DD.");
   const qty = has(args, "quantity") ? quantity(args) : undefined;
   if (has(args, "planned_for") && kind !== "planned_moment") throw new ToolError("Only a planned moment is planned for someone.");
   if (has(args, "time") && kind !== "planned_moment") throw new ToolError("Only a planned moment has a time. A contact moment has a date only.");
@@ -1039,6 +1051,10 @@ async function updateMoment(token: string, args: Any, user: Any) {
     if (has(args, "contact_id")) { const c = String(args.contact_id); checkContact(h, c); rec.contactId = c; changed.push("contact"); }
     if (has(args, "note")) { rec.note = String(args.note).trim(); changed.push("note"); }
     if (time !== undefined) { if (time) rec.time = time; else delete rec.time; changed.push("time"); }
+    if (kind === "planned_moment" && !rec.date && rec.time) {
+      if (has(args, "time")) throw new ToolError("A time needs a date. Give a date too, or leave the time out.");
+      delete rec.time;
+    }
     // Het product dat er al stond is niet nagekeken toen het werd opgeslagen.
     if (rec.product && !PRODUCTS.includes(rec.product)) throw new ToolError("This moment has a product this connector does not know. Correct it in the app.");
     if (kind === "planned_moment") {
@@ -1061,7 +1077,7 @@ async function updateMoment(token: string, args: Any, user: Any) {
       sortPlanned(h);
       return {
         saved: true, hospital: h.name, changed,
-        planned: { id: rec.id, date: rec.date, time: rec.time || "all day", type: rec.type, product: rec.product || "", note: rec.note || "" },
+        planned: { id: rec.id, date: rec.date || "no date yet", time: rec.time || (rec.date ? "all day" : ""), type: rec.type, product: rec.product || "", note: rec.note || "" },
         ...(to !== undefined ? { planned_for: to ? (to.id === user.id ? "you" : to.name) : "whoever entered it" } : {}),
       };
     }
@@ -1277,13 +1293,13 @@ const TOOLS = [
   {
     name: "add_planned_moment",
     title: "Plan a moment",
-    description: "Put something in the agenda that is STILL TO HAPPEN at a hospital: a visit, call, demo and so on, on a date and optionally at a time. A planned moment does not change the hospital's status or the statistics. It is planned for the signed-in user unless planned_for names a colleague, who must work on that product. Convert relative dates and times ('next Tuesday at two') to a real date and a 24-hour time yourself and say which you used. Without a time it is an all-day moment; with one it takes an hour in a subscribed calendar.",
+    description: "Put something in the agenda that is STILL TO HAPPEN at a hospital: a visit, call, demo and so on, on a date and optionally at a time, or without a date when there is none yet. A planned moment does not change the hospital's status or the statistics. It is planned for the signed-in user unless planned_for names a colleague, who must work on that product. Convert relative dates and times ('next Tuesday at two') to a real date and a 24-hour time yourself and say which you used. Without a time it is an all-day moment; with one it takes an hour in a subscribed calendar.",
     inputSchema: {
       type: "object",
       properties: {
         hospital_id: HOSPITAL_ID,
-        date: { type: "string", description: "When it is planned, YYYY-MM-DD." },
-        time: { type: "string", description: "Start time, HH:MM on a 24-hour clock, local time at the hospital. Leave out for an all-day moment." },
+        date: { type: "string", description: "When it is planned, YYYY-MM-DD. Leave out when it has to happen but has no date yet: it then stays at the top of the hospital's planned moments until it is done." },
+        time: { type: "string", description: "Start time, HH:MM on a 24-hour clock, local time at the hospital. Leave out for an all-day moment. Needs a date." },
         type: { type: "string", enum: ACT_TYPES },
         product: { type: "string", enum: PRODUCTS },
         contact_id: { type: "string", description: "Id of the person it is with, from get_hospital. Optional." },
@@ -1338,7 +1354,7 @@ const TOOLS = [
   {
     name: "list_moments",
     title: "Agenda and logbook",
-    description: "Search the agenda (kind 'planned') or the logbook of contact moments (kind 'logged'), across all hospitals or within one. Combine any of: a period, one hospital, a product, a type of moment, who it is planned for (planned) and who entered it. Examples: everything planned this week; all planned moments for one hospital; every demo last quarter; what a colleague logged this month. Set mine to true for the signed-in user's own: moments planned for them, or contact moments they entered. With no period and no hospital you get the coming seven days plus everything overdue (planned) or the past seven days (logged); with a hospital and no period you get everything for that hospital. Convert 'this week' or 'last month' to dates yourself and say which period you used. Returns at most 200 moments, each with the ids needed to tick off, correct or remove it.",
+    description: "Search the agenda (kind 'planned') or the logbook of contact moments (kind 'logged'), across all hospitals or within one. Combine any of: a period, one hospital, a product, a type of moment, who it is planned for (planned) and who entered it. Examples: everything planned this week; all planned moments for one hospital; every demo last quarter; what a colleague logged this month. Set mine to true for the signed-in user's own: moments planned for them, or contact moments they entered. With no period and no hospital you get the coming seven days plus everything overdue and everything without a date yet (planned) or the past seven days (logged); with a hospital and no period you get everything for that hospital. Convert 'this week' or 'last month' to dates yourself and say which period you used. Returns at most 200 moments, each with the ids needed to tick off, correct or remove it.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1367,7 +1383,7 @@ const TOOLS = [
         kind: { type: "string", enum: ["contact_moment", "planned_moment"] },
         hospital_id: HOSPITAL_ID,
         record_id: { type: "string", description: "Id of the moment." },
-        date: { type: "string", description: "YYYY-MM-DD." },
+        date: { type: "string", description: "YYYY-MM-DD. For a planned moment, empty text removes the date." },
         time: { type: "string", description: "Planned moments only: HH:MM on a 24-hour clock, or empty text to make it all day." },
         type: { type: "string", enum: ACT_TYPES },
         product: { type: "string", enum: PRODUCTS },

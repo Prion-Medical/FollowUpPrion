@@ -118,10 +118,14 @@
   // als de kleur: wie op Thyroid RFA filtert wil niet de achterstallige actie
   // van EndoQ zien. planned staat op datum, dus het eerste dat past is de
   // volgende actie — zonder filter is dat gewoon nextActionDate.
+  // Een moment zonder datum kan niet te laat zijn: het eerste mét datum telt.
   function isOverdue(h) {
-    const p = h.planned.find(inFilter);
+    const p = h.planned.find((x) => x.date && inFilter(x));
     return !!p && p.date < today();
   }
+  // Te laat: een datum, en die is voorbij. Een moment zonder datum staat
+  // klaar tot iemand het doet, en is dus nooit te laat.
+  const isLate = (p) => !!p.date && p.date < today();
   // Stil gevallen: er is contact geweest, er staat niets gepland en het laatste
   // contactmoment is lang geleden. Zo'n ziekenhuis glipt door alle andere
   // filters — niet rood (er was contact), niet groen (er staat niets), niet
@@ -139,9 +143,12 @@
   // "ergens die dag" is, komt na wat om negen uur begint. Enkel om te tonen:
   // h.planned zelf blijft op datum, zoals fix_planned() in de databank het
   // ook legt, anders verschuift elke opslag de volgorde.
+  // Een moment zonder datum heeft een lege datum en komt dus vanzelf vooraan.
   const byWhen = (a, b) => a.date.localeCompare(b.date) || (a.time || "99").localeCompare(b.time || "99");
   const ymd = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  // nextAction en nextActionDate volgen uit het eerste geplande moment. Zo
+  // nextAction en nextActionDate volgen uit het eerste geplande moment — ook
+  // als dat er een zonder datum is: dat staat bovenaan, dus dat is wat er nu
+  // te doen is. nextActionDate is dan leeg. Zo
   // blijven de lijst, de filter "actie te laat" en de CSV werken zoals
   // voorheen, zonder tweede plaats waar hetzelfde wordt bijgehouden.
   function syncNextAction(h) {
@@ -726,7 +733,9 @@
     }
     delete h.demoDate;
     // Zonder datum is het geen planning, en de agenda rekent op de sortering.
-    h.planned = h.planned.filter((p) => p.date).sort((a, b) => a.date.localeCompare(b.date));
+    // Op datum, en wat geen datum heeft vooraan: dat staat klaar tot iemand
+    // het doet. Dezelfde volgorde als fix_planned() in de databank.
+    h.planned.sort((a, b) => a.date.localeCompare(b.date));
     syncNextAction(h);
     h.createdAt = dateOrEmpty(h.createdAt) || today();
     // Een halve locatie is geen locatie: de kaart rekent op lat én lng.
@@ -1245,8 +1254,8 @@
           // Dezelfde regel als in de agenda, zodat ook hier staat voor wie
           // het moment is.
           const sub = momentLine(h, p, false);
-          return `<li class="${p.date < today() ? "late" : ""}">
-            <div class="t-date">${esc(fmtDate(p.date))}<span class="t-rel">${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
+          return `<li class="${isLate(p) ? "late" : ""}">
+            <div class="t-date">${esc(p.date ? fmtDate(p.date) : t("planned.noDate"))}<span class="t-rel">${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
             <div class="t-body">
               <div class="t-type"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(t("act." + p.type))}</div>
               ${sub ? `<div class="t-sub">${esc(sub)}</div>` : ""}
@@ -1255,7 +1264,7 @@
             <div class="t-acts">
               <button class="icon-btn" data-act="done-planned" data-id="${esc(p.id)}" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
               <button class="icon-btn" data-act="edit-planned" data-id="${esc(p.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
-              <button class="icon-btn" data-act="ics-planned" data-id="${esc(p.id)}" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>
+              ${p.date ? `<button class="icon-btn" data-act="ics-planned" data-id="${esc(p.id)}" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>` : ""}
             </div>
           </li>`;
         }).join("")}</ul>` : `<p class="muted">${esc(t("empty.planned"))}</p>`}
@@ -1779,7 +1788,9 @@
   }
 
   function activityDialog(h, a, plan) {
-    const v = a || (plan ? { ...plan, rooms: "" } : {
+    // Een plan zonder datum krijgt er hier een: wat gebeurd is, gebeurde op
+    // een dag. Vandaag, tot iemand iets anders kiest.
+    const v = a || (plan ? { ...plan, date: plan.date || today(), rooms: "" } : {
       date: today(),
       type: h.activities.length ? "email" : "prospecting",
       product: defaultProduct(h),
@@ -1875,7 +1886,8 @@
     const form = openDialog(`
       <h2>${esc(p ? t("dlg.plannedEdit") : t("dlg.plannedNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
-        <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
+        <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" value="${esc(v.date)}"
+          title="${esc(t("dlg.p.date.hint"))}"></label>
         <label class="field">${esc(t("dlg.p.time"))}<input type="time" name="time" value="${esc(v.time || "")}"
           title="${esc(t("dlg.p.time.hint"))}"></label>
         <label class="field">${esc(t("dlg.p.type"))}
@@ -1901,11 +1913,12 @@
       } else {
         const rec = p || { id: uid() };
         Object.assign(rec, {
-          date: data.date, type: data.type, product: data.product,
+          date: dateOrEmpty(data.date), type: data.type, product: data.product,
           contactId: data.contactId, note: data.note.trim(),
         });
-        // Zonder uur een hele dag in de agenda; met een uur een uur lang.
-        if (timeOrEmpty(data.time)) rec.time = timeOrEmpty(data.time); else delete rec.time;
+        // Zonder uur een hele dag in de agenda; met een uur een uur lang. Een
+        // uur zonder dag zegt niets, dus dat valt weg.
+        if (rec.date && timeOrEmpty(data.time)) rec.time = timeOrEmpty(data.time); else delete rec.time;
         // Het veld komt er alleen bij als het moment voor iemand anders is dan
         // wie het invoerde: voor die persoon volgt het al uit de stempel. Zo
         // krijgt een moment dat je voor jezelf plant geen naam mee, en blijft
@@ -2424,8 +2437,9 @@
 
   function agendaRow({ h, p }) {
     const sub = momentLine(h, p, true);
-    const when = new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" });
-    return `<li class="ag-row ${p.date < today() ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
+    const when = p.date ? new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" })
+      : t("planned.noDate");
+    return `<li class="ag-row ${isLate(p) ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
       <div class="ag-date"><b>${esc(when)}</b><span>${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
       <div class="ag-body">
         <div class="ag-name">${esc(h.name)}</div>
@@ -2435,7 +2449,7 @@
       <div class="ag-acts">
         <button class="icon-btn" data-ag="done" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
         <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
-        <button class="icon-btn" data-ag="ics" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>
+        ${p.date ? `<button class="icon-btn" data-ag="ics" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>` : ""}
         <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">${icon("arrow")}</button>
       </div>
     </li>`;
@@ -2450,7 +2464,9 @@
     const items = plannedAll();
     const td = today();
     const month = `${y}-${String(m + 1).padStart(2, "0")}`;
-    const overdue = items.filter((x) => x.p.date < td);
+    const overdue = items.filter((x) => isLate(x.p));
+    // Zonder datum: niet in het rooster, wel bovenaan de lijst, tot het gedaan is.
+    const undated = items.filter((x) => !x.p.date);
     const inMonth = items.filter((x) => x.p.date.startsWith(month));
     const byDay = new Map();
     for (const x of inMonth) {
@@ -2506,6 +2522,10 @@
         </div>
       </div>
       ${items.length ? "" : `<p class="muted">${esc(t(state.agenda.assignees.length ? "agenda.noneFor" : "agenda.none"))}</p>`}
+      ${undated.length && !day ? `<div class="ag-block">
+        <h3 class="ag-h">${esc(t("agenda.undated"))} <span class="badge neutral">${undated.length}</span></h3>
+        <ul class="ag-list">${undated.map(agendaRow).join("")}</ul>
+      </div>` : ""}
       ${overdue.length && !day && !past ? `<div class="ag-block">
         <h3 class="ag-h">${esc(t("agenda.overdue"))} <span class="badge">${overdue.length}</span></h3>
         <ul class="ag-list">${overdue.map(agendaRow).join("")}</ul>

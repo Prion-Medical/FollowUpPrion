@@ -303,6 +303,19 @@ into `planned[]` the same way: `normalize()` turns it into a planned moment of t
 `demo` and drops the field, and the "demo's gepland" KPI and the CSV column both read
 `planned[]` now. There is one place to plan a demo, and it clears itself when ticked off.
 
+A planned moment may have **no date**: something that has to happen but has no day
+yet. It sorts first (an empty date sorts before any other, in `normalize()`,
+`byWhen()`, `sortPlanned()` in the connector and `fix_planned()` in the database),
+stays at the top of the hospital's planned moments and in its own block above the
+agenda, is never overdue (`isLate()`, and `isOverdue()` looks at the first moment
+*with* a date), and is the next action with an empty `nextActionDate`. Ticking it off
+asks for a date, today by default. It is not in a calendar feed and has no download.
+Until November 2026 such a moment was thrown away in three places — `normalize()`,
+`fix_planned()` and `doc_keys()` — and an older app or schema still does that, so
+**this schema and this app go live together**: an old app would drop every undated
+moment on its next save. `doc_keys()` now counts them, so removing one is a deletion
+like any other and a `contributor` cannot.
+
 A planned moment can carry a `time` (`"14:00"`), and only when someone gave one —
 like `assignee`, writing an empty one onto every older moment would make the first
 saver the last editor of the agenda. It belongs to the plan: ticking off builds a
@@ -673,7 +686,7 @@ file (`public/ics.js`), which is a copy that does not follow changes.
   and of the type labels in both languages; the language is chosen per
   subscription.
 - **From thirty days back onwards**, so an overdue moment stays until ticked off.
-  The logbook is not in the feed.
+  The logbook is not in the feed, and neither is a planned moment without a date.
 - **It is not instant**: Apple lets you choose, Outlook takes hours, Google up to
   a day. The dialog says so.
 

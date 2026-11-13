@@ -155,7 +155,8 @@ omrond as (
 -- Agenda-abonnementen (feed_events). U1 en U2 zijn twee eigenaars; de uuid's
 -- zijn verzonnen, net als de rest. f1 is van EndoQ, f2 van Ainex en voor U2
 -- gepland, f3 heeft geen product, f4 is van EndoQ maar lang voorbij, f5 is
--- van Ainex, ingevoerd door U1 maar voor U2.
+-- van Ainex, ingevoerd door U1 maar voor U2. f6 heeft geen datum: iets dat
+-- moet gebeuren maar nog geen dag heeft.
 feed as (select $j${
   "version": 1,
   "hospitals": [
@@ -173,7 +174,9 @@ feed as (select $j${
           "note": "oud", "createdBy": "00000000-0000-0000-0000-0000000000a1" },
         { "id": "f5", "date": "2026-06-04", "type": "call", "product": "Ainex", "note": "voor U2",
           "createdBy": "00000000-0000-0000-0000-0000000000a1",
-          "assignee": "00000000-0000-0000-0000-0000000000a2" } ] }
+          "assignee": "00000000-0000-0000-0000-0000000000a2" },
+        { "id": "f6", "type": "quote", "product": "Ainex", "note": "ooit offerte",
+          "createdBy": "00000000-0000-0000-0000-0000000000a1" } ] }
   ]}$j$::jsonb as d),
 feedids as (
   select (select coalesce(jsonb_agg(e -> 'id'), '[]'::jsonb) from jsonb_array_elements(
@@ -406,6 +409,23 @@ from (
            "note": "endoq", "updated": ""}'::jsonb,
          followup.feed_events(d, '{}', '00000000-0000-0000-0000-0000000000a1', false, '{}', '2026-01-01') -> 0
          from feed
+
+  -- --- geplande momenten zonder datum ------------------------------------------
+  -- Tot november 2026 gooide fix_planned ze weg en telde doc_keys ze niet.
+  union all select 67, 'zonder datum: blijft staan, en vooraan',
+         '["f6", "f4", "f1", "f2", "f3", "f5"]'::jsonb,
+         (select jsonb_agg(e -> 'id') from jsonb_array_elements(
+            followup.fix_planned(d #> '{hospitals,0}') -> 'planned') e) from feed
+  union all select 68, 'zonder datum: het is de volgende actie, zonder datum',
+         '["", "ooit offerte"]'::jsonb,
+         (select jsonb_build_array(x ->> 'nextActionDate', x ->> 'nextAction')
+            from (select followup.fix_planned(d #> '{hospitals,0}') as x) q) from feed
+  union all select 69, 'zonder datum: telt mee in de inventaris (weghalen is verwijderen)',
+         to_jsonb(true), to_jsonb('p:g1:f6' = any(followup.doc_keys(d))) from feed
+  union all select 70, 'zonder datum: niet in een abonnement (een agenda wil een dag)',
+         to_jsonb(false),
+         to_jsonb(followup.feed_events(d, '{}', '00000000-0000-0000-0000-0000000000a1', false, '{}', '0000-01-01')
+                  @> '[{"id": "f6"}]'::jsonb) from feed
 ) q(nr, controle, verwacht, gekregen)
 order by nr;
 

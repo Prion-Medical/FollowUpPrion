@@ -403,8 +403,15 @@ $$;
 -- nextAction en nextActionDate volgen uit planned[0]. Zou een beperkte
 -- gebruiker ze zelf schrijven, dan stond zijn volgende actie in een veld dat
 -- ook de collega van het andere product en de CSV-export lezen. Zelfde regel
--- als syncNextAction() in de app: sorteren op datum, momenten zonder datum
--- vallen weg, dan het eerste.
+-- als syncNextAction() in de app: sorteren op datum, met de momenten zonder
+-- datum vooraan, dan het eerste.
+--
+-- Een moment zonder datum is iets dat moet gebeuren maar nog geen dag heeft.
+-- Het blijft bovenaan staan tot iemand het afvinkt; nextActionDate is dan
+-- leeg en nextAction is zijn nota. Tot november 2026 vielen zulke momenten
+-- hier weg, en de app gooide ze bij het laden ook weg. Een oudere app tegen
+-- deze databank gooit ze dus nog steeds weg: zet de app en dit schema samen
+-- online.
 --
 -- Draait ook bij het afschermen, en daar is het meer dan opruimen:
 -- nextAction is de nota van het eerste geplande moment, en dat kan er een
@@ -414,9 +421,8 @@ create or replace function followup.fix_planned(h jsonb) returns jsonb
 language sql immutable set search_path = public as $$
   with p as (
     select coalesce((
-      select jsonb_agg(t.e order by (t.e ->> 'date'), t.i)
+      select jsonb_agg(t.e order by coalesce(t.e ->> 'date', ''), t.i)
         from jsonb_array_elements(followup.arr(h -> 'planned')) with ordinality t(e, i)
-       where coalesce(t.e ->> 'date', '') <> ''
     ), '[]'::jsonb) as lijst
   )
   select h || jsonb_build_object(
@@ -524,13 +530,13 @@ $$;
 -- wát er verdwenen is in plaats van enkel dát er iets weg is — het verschil
 -- tussen een bruikbare melding en "opslaan mislukt".
 --
--- Twee dingen tellen bewust niet mee:
---  * een record zonder id. Dat is niet te volgen, en normalize() in de app
---    geeft het bij het laden een nieuw id — dan leek elke eerste opslag na zo'n
---    document op een verwijdering.
---  * een gepland moment zonder datum. Dat is geen planning; normalize() gooit
---    het bij het laden weg, dus wij rekenen het ook niet mee. Zonder deze
---    uitzondering kon een contributor zo'n document nooit meer opslaan.
+-- Een record zonder id telt bewust niet mee. Dat is niet te volgen, en
+-- normalize() in de app geeft het bij het laden een nieuw id — dan leek elke
+-- eerste opslag na zo'n document op een verwijdering.
+--
+-- Een gepland moment zonder datum telt wél mee, sinds dat een gewoon moment
+-- is dat bovenaan blijft staan. Telde het niet, dan kon een contributor het
+-- ongezien weghalen.
 create or replace function followup.doc_keys(doc jsonb) returns text[]
 language sql immutable set search_path = public as $$
   select coalesce(array_agg(k), '{}'::text[]) from (
@@ -544,7 +550,7 @@ language sql immutable set search_path = public as $$
       cross join lateral jsonb_array_elements(followup.arr(t.e -> a.arr)) c(e)
      where coalesce(t.e ->> 'id', '') <> ''
        and coalesce(c.e ->> 'id', '') <> ''
-       and (a.tag <> 'p' or coalesce(c.e ->> 'date', '') <> '')
+       -- ook een gepland moment zonder datum: zie hierboven
   ) q;
 $$;
 

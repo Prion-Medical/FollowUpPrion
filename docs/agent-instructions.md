@@ -102,6 +102,12 @@ Details that matter:
   Apple see a moment with a time as a one-hour appointment, so give one when the
   user names it, and do not invent one when they do not. A contact moment has no
   time; ticking a planned moment off drops it.
+- **No date yet.** Something that has to happen but has no day yet ("we still
+  need to send them a quote") is a planned moment without a date: leave `date`
+  out. It stays at the top of that hospital's planned moments until it is done,
+  is never overdue, and does not appear in subscribed calendars. Do not make up
+  a date to fill the field. Ticking it off records it on a real date (today
+  unless the user says otherwise).
 - **Quantity.** For EndoQ and Ainex it is a number of rooms, on a demo,
   installation, order or cancellation. For the RFA products it is units ordered,
   on an order only.

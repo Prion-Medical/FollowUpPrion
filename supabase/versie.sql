@@ -72,7 +72,11 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('calendar_feed',   'feed_events',    'het abonnement leest via feed_events'),
   ('feed_create',     'via_assistant',  'een abonnement maakt een mens, geen assistent'),
   ('feed_remove',     'is_admin',       'een beheerder kan elk abonnement stopzetten'),
-  ('feed_hash',       'sha256',         'bestaat die functie überhaupt')
+  ('feed_hash',       'sha256',         'bestaat die functie überhaupt'),
+  -- Momenten zonder datum. Een oude fix_planned gooit ze bij elke opslag weg;
+  -- een oude doc_keys laat een contributor ze ongezien verwijderen.
+  ('fix_planned',     'order by coalesce(t.e ->> ''date''', 'een gepland moment zonder datum blijft staan'),
+  ('doc_keys',        'ook een gepland moment zonder datum', 'een moment zonder datum verwijderen is verwijderen')
 )
 select v.functie,
        v.waarvoor,
