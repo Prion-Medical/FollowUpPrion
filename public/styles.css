@@ -243,6 +243,8 @@ p.muted { margin: 0 0 8px; }
 }
 .icon-btn:hover { background: var(--hover); color: var(--ink); }
 .icon-btn:active { background: var(--press); transform: scale(0.94); }
+/* De lege plaats van een knop die er bij deze regel niet is: zie ICON_SLOT. */
+.icon-btn.icon-slot { visibility: hidden; }
 .icon-btn[aria-pressed="true"] { color: var(--accent); }
 
 /* ---------- topbalk ---------- */
@@ -529,9 +531,24 @@ body[data-rights~="no-write"] .pipe-name .muted { display: inline; }
    de volle tekstkleur, zodat je ziet waar een nieuw stuk begint. */
 .section h3, .s-card h3 {
   margin: 0 0 10px; min-height: var(--ctl-sm); font-size: var(--t-md); font-weight: 600; letter-spacing: -0.005em; color: var(--ink);
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
 }
 .section h3 .btn { margin-left: auto; letter-spacing: 0; }
+/* Het kopje is de knop waarmee je de sectie open- en dichtklapt. Het pijltje
+   wijst naar rechts als ze dicht is en draait naar beneden als ze openstaat. */
+.sec-toggle {
+  display: inline-flex; align-items: center; gap: 6px; min-height: var(--ctl-sm);
+  margin: 0 0 0 -4px; padding: 0 6px 0 2px; border: 0; border-radius: var(--radius);
+  background: none; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer;
+  transition: background var(--fast) var(--ease);
+}
+.sec-toggle .ic { color: var(--muted); transform: rotate(90deg); transition: transform var(--fast) var(--ease); }
+.sec-toggle:hover { background: var(--hover); }
+.sec-toggle:hover .ic { color: var(--ink); }
+.section.closed .sec-toggle .ic { transform: none; }
+.section.closed h3 { margin-bottom: 0; }
+/* Alleen op het scherm: een afdruk toont altijd alles. */
+@media screen { .section.closed > :not(h3) { display: none; } }
 /* De knop waarmee je iets toevoegt aan een sectie: wit zoals de andere, maar
    met een blauw woord. Geen bleke vulling: die betekent hier "gekozen". */
 .section h3 .btn { color: var(--accent-ink); }
@@ -596,7 +613,7 @@ label.field.check input[type="checkbox"] { width: 16px; flex: none; }
    afdruk ze allemaal kan tonen (zie @media print). */
 .timeline.capped li.extra { display: none; }
 .more-acts { margin-top: 10px; margin-right: 4px; }
-.timeline .t-date { font-size: var(--t-sm); color: var(--muted); width: 76px; white-space: nowrap; flex: none; padding-top: 1px; font-variant-numeric: tabular-nums; }
+.timeline .t-date { font-size: var(--t-sm); color: var(--muted); width: 80px; white-space: nowrap; flex: none; padding-top: 1px; font-variant-numeric: tabular-nums; }
 .timeline .t-body { flex: 1; min-width: 0; }
 .timeline .t-type { font-weight: 500; }
 .timeline .t-note { font-size: var(--t-base); margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
@@ -725,6 +742,9 @@ button.cal-day:focus-visible { outline-offset: -2px; }
 .ag-block { margin-bottom: 24px; }
 .ag-h { margin: 0 0 8px; font-size: var(--t-base); font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 8px; }
 .ag-h .badge { margin-left: 0; }
+/* Wat nog geen datum heeft, staat onder "Te laat" en stiller: het is een
+   lijst om naar te kijken, niet wat het eerst moet. */
+.ag-block.undated .ag-h { color: var(--muted); font-weight: 500; }
 .ag-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); overflow: hidden; }
 .ag-row { display: flex; gap: 12px; padding: 10px 14px; align-items: flex-start; transition: background var(--fast) var(--ease); }
 .ag-row:hover { background: var(--panel-2); }
@@ -732,11 +752,17 @@ button.cal-day:focus-visible { outline-offset: -2px; }
 .ag-row.late .ag-date b, .ag-row.late .ag-date span { color: var(--red-ink); }
 .ag-date { width: 96px; flex: none; }
 .ag-date b { display: block; font-size: var(--t-base); font-weight: 500; text-transform: capitalize; font-variant-numeric: tabular-nums; }
+/* "Zonder datum" is een zin en geen datum: niet elk woord met een hoofdletter. */
+.ag-date b.nodate { text-transform: none; }
 .ag-date span { font-size: var(--t-sm); color: var(--muted); }
 .ag-body { flex: 1; min-width: 0; }
 .ag-name { font-weight: 500; overflow-wrap: anywhere; }
 .ag-sub { font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
 .ag-note { font-size: var(--t-base); margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); max-width: 75ch; }
+/* In de agenda een lange nota op drie regels: de lijst moet te overlopen
+   blijven. Volledig staat ze in de fiche, waar ook wie niet mag bewerken ze
+   leest. */
+.ag-note { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 .ag-acts { display: flex; gap: 2px; flex: none; }
 
 /* Gepland in de fiche: de relatieve dag onder de datum, te laat in het rood. */
@@ -880,29 +906,38 @@ button.cal-day:focus-visible { outline-offset: -2px; }
    rijen hebben zelf geen achtergrond, dus de hoeken blijven zonder clip even
    netjes. */
 .u-list { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
-/* Agenda-abonnementen: de dialoog en de lijst voor de beheerder. */
-.feed-h { margin: 18px 0 8px; font-size: var(--t-base); }
-.feed-fresh { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--accent-line); border-radius: var(--radius-lg); background: var(--accent-soft); }
-.feed-fresh p { margin: 0 0 8px; }
+/* Agenda-abonnementen: de dialoog en de lijst voor de beheerder. De rijen
+   zijn gewone .u-list/.u-row; enkel wat erin staat is eigen. */
+.feed-h { margin: 20px 0 8px; font-size: var(--t-base); }
+.feed-list .u-row { padding: 10px 12px; }
+/* Per product een aantal, bij een nieuw contactmoment over meer producten. */
+.per-product { display: grid; gap: 8px; }
+.pp-row { display: grid; grid-template-columns: minmax(90px, 0.6fr) 1fr 1fr; gap: 8px 12px; align-items: end; }
+.pp-name { font-weight: 600; padding-bottom: 8px; overflow-wrap: anywhere; }
+.per-product > .muted { margin: 0; }
+.feed-row > .btn { flex: none; }
+.feed-what { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.feed-error { color: var(--red-ink); font-size: var(--t-sm); }
+/* Het adres: een gewoon veld in de lettersoort van de app. Het is lang en
+   wordt gekopieerd, niet gelezen. */
 .feed-url { display: flex; gap: 8px; }
-.feed-url input { flex: 1 1 auto; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--t-sm); }
+.feed-url input { flex: 1 1 auto; min-width: 0; font-size: var(--t-sm); }
+/* Het adres is een sleutel: dat staat in de kleur van een waarschuwing, zoals
+   de oranje balk, en niet in die van een mededeling. */
+.feed-warn { margin: 12px 0 0; padding: 8px 12px; border-radius: var(--radius); background: var(--orange-soft); color: var(--orange-ink); font-size: var(--t-sm); font-weight: 500; }
 /* Per agenda de stappen, dichtgeklapt. Het pijltje wijst naar rechts en
    draait naar beneden als het openstaat, zoals de koppen van de fiche. */
-.feed-how { margin-top: 10px; border-top: 1px solid var(--accent-line); }
-.feed-how details { border-bottom: 1px solid var(--accent-line); }
-.feed-how summary { display: flex; align-items: center; gap: 6px; padding: 8px 0; cursor: pointer; list-style: none; font-weight: 600; font-size: var(--t-sm); }
+.feed-how { margin-top: 12px; border-top: 1px solid var(--line); }
+.feed-how details { border-bottom: 1px solid var(--line); }
+.feed-how summary { display: flex; align-items: center; gap: 6px; padding: 8px 0; cursor: pointer; list-style: none; font-weight: 600; font-size: var(--t-sm); border-radius: var(--radius); }
 .feed-how summary::-webkit-details-marker { display: none; }
-.feed-how summary .ic { transition: transform 0.15s var(--ease); }
+.feed-how summary .ic { color: var(--muted); transition: transform var(--fast) var(--ease), color var(--fast) var(--ease); }
+.feed-how summary:hover .ic { color: var(--ink); }
 .feed-how details[open] summary .ic { transform: rotate(90deg); }
-.feed-how-body { padding: 0 0 10px 22px; font-size: var(--t-sm); }
-.feed-fresh .feed-how-body p { margin: 0 0 8px; }
-.feed-how-body ol { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
-.feed-fresh .feed-warn { color: var(--ink-2); font-size: var(--t-sm); margin-bottom: 0; }
-.feed-rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
-.feed-row { display: flex; gap: 12px; align-items: center; padding: 10px 14px; }
-.feed-row + .feed-row { border-top: 1px solid var(--line); }
-.feed-what { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
-.u-feeds { margin-top: 28px; }
+.feed-how-body { padding: 0 0 12px 22px; font-size: var(--t-sm); }
+.feed-how-body p { margin: 0 0 8px; }
+.feed-how-body ol { margin: 0; padding-left: 16px; display: grid; gap: 4px; }
+.u-feeds { margin-top: 24px; }
 .u-feeds h3 { margin: 0 0 4px; font-size: var(--t-md); }
 .u-feeds > .muted { margin: 0 0 12px; max-width: 75ch; }
 
@@ -1214,6 +1249,17 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
   .ag-date b { display: inline; }
   .ag-body { flex: 1 1 100%; }
   .ag-acts { flex: 1 1 100%; justify-content: flex-end; margin: 0 -8px -6px 0; }
+  /* Hetzelfde voor de geplande momenten in de fiche: drie knoppen van 44px
+     naast datum en tekst laten op een smal scherm niets over voor de tekst. */
+  .timeline li:has(.t-acts) { flex-wrap: wrap; }
+  .timeline li:has(.t-acts) .t-body { flex: 1 1 0; }
+  .timeline .t-acts { flex: 1 1 100%; justify-content: flex-end; margin: -6px -8px -6px 0; }
+  /* 16px, zoals elk veld op gsm: anders zoomt iOS in zodra het adres
+     geselecteerd wordt. */
+  .feed-url input { font-size: var(--t-md); }
+  /* Het product boven zijn velden: drie kolommen passen niet naast elkaar. */
+  .pp-row { grid-template-columns: 1fr 1fr; }
+  .pp-name { grid-column: 1 / -1; padding-bottom: 0; }
   .u-row { gap: 8px; }
   .u-who, .u-role, .u-scope { flex: 1 1 100%; }
   .s-filters { width: 100%; }
@@ -1269,6 +1315,8 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
   .topbar, .tabbar, .banner, .toast, .login, .map-wrap, dialog,
   .fiche-foot, .search, .filters, .btn, .icon-btn, .c-actions, .t-acts,
   .status-pick button:not(.active) { display: none !important; }
+  .sec-toggle .ic { display: none; }
+  .sec-toggle { margin: 0; padding: 0; }
 
   /* Het dossier is op het scherm een kolom met een eigen schuifbalk; op
      papier mag het gewoon doorlopen. */

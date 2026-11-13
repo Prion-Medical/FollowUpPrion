@@ -241,7 +241,7 @@ $$;
 -- bijgewerkt is.
 create or replace function followup.producten() returns text[]
 language sql immutable set search_path = public as $$
-  select array['EndoQ', 'Ainex', 'Thyroid RFA', 'Fibroid RFA'];
+  select array['EndoQ', 'Ainex', 'Thyroid RFA', 'Fibroid RFA', 'Stents'];
 $$;
 
 -- De vaste volgorde uit domain.js. Die houden we aan zodat laden-en-opslaan
@@ -270,18 +270,28 @@ $$;
 -- meeste contactmomenten van vóór deze afscherming hebben geen product, en een
 -- geschiedenis met gaten erin is erger dan een regel te veel zien.
 --
--- Twee vormen. Een contactmoment en een gepland moment dragen één product in
--- "product"; een contactpersoon draagt er meerdere in "products", want dezelfde
--- arts is vaak het aanspreekpunt voor allebei. Bij een lijst volstaat één
--- overlapping: wie Ainex mag, ziet de arts die EndoQ én Ainex doet.
-create or replace function followup.in_scope(e jsonb, allowed text[]) returns boolean
+-- Twee vormen. Een contactmoment en een gepland moment dragen meestal één
+-- product in "product"; een contactpersoon draagt er meerdere in "products",
+-- want dezelfde arts is vaak het aanspreekpunt voor allebei. Sinds een gesprek
+-- over twee producten tegelijk kan gaan, mag ook een moment die lijst dragen.
+-- Bij een lijst volstaat één overlapping: wie Ainex mag, ziet de arts die
+-- EndoQ én Ainex doet, en het gesprek dat over allebei ging.
+-- De producten van een record, welke vorm het ook heeft: de lijst "products",
+-- of het ene "product". De tegenhanger van productsOf() in domain.js, zodat
+-- de rest van dit bestand niet telkens op de vorm hoeft te vertakken.
+create or replace function followup.products_of(e jsonb) returns text[]
 language sql immutable set search_path = public as $$
   select case
-    when e ? 'products'
-      then followup.texts(e -> 'products') = '{}'::text[]
-        or followup.both_in(followup.texts(e -> 'products'), allowed) <> '{}'::text[]
-    else coalesce(e ->> 'product', '') = '' or coalesce(e ->> 'product', '') = any(allowed)
+    when e ? 'products' then followup.texts(e -> 'products')
+    when coalesce(e ->> 'product', '') = '' then '{}'::text[]
+    else array[e ->> 'product']
   end;
+$$;
+
+create or replace function followup.in_scope(e jsonb, allowed text[]) returns boolean
+language sql immutable set search_path = public as $$
+  select followup.products_of(e) = '{}'::text[]
+      or followup.both_in(followup.products_of(e), allowed) <> '{}'::text[];
 $$;
 
 -- (opgeslagen \ bereik) ∪ (payload ∩ bereik). Zo kan een beperkte opslag nooit
@@ -292,8 +302,8 @@ create or replace function followup.merge_products(stored jsonb, incoming jsonb,
                                                    allowed text[]) returns jsonb
 language sql immutable set search_path = public as $$
   select to_jsonb(followup.product_sort(
-           followup.only_in(followup.texts(stored   -> 'products'), allowed)
-        || followup.both_in(followup.texts(incoming -> 'products'), allowed)));
+           followup.only_in(followup.products_of(stored),   allowed)
+        || followup.both_in(followup.products_of(incoming), allowed)));
 $$;
 
 -- Zit er in dit ziekenhuis iets van een product dat jij niet mag? Sinds elk
@@ -421,7 +431,9 @@ create or replace function followup.fix_planned(h jsonb) returns jsonb
 language sql immutable set search_path = public as $$
   with p as (
     select coalesce((
-      select jsonb_agg(t.e order by coalesce(t.e ->> 'date', ''), t.i)
+      -- Op datum, op dezelfde dag op uur (wat geen uur heeft na wat er een
+      -- heeft), wat geen datum heeft vooraan: zoals byWhen() in de app.
+      select jsonb_agg(t.e order by coalesce(t.e ->> 'date', ''), coalesce(t.e ->> 'time', '99'), t.i)
         from jsonb_array_elements(followup.arr(h -> 'planned')) with ordinality t(e, i)
     ), '[]'::jsonb) as lijst
   )
@@ -437,25 +449,19 @@ $$;
 -- 4. Afschermen bij het lezen
 -- ---------------------------------------------------------------------------
 
+-- Contactpersonen, contactmomenten en geplande momenten: één functie, want we
+-- kijken naar de vorm van het record en niet naar welke lijst het is. Draagt
+-- een record een productlijst (een arts voor twee producten, een gesprek over
+-- twee producten tegelijk), dan gaat die gesnoeid mee: het record blijft
+-- zichtbaar zodra er één product overlapt, maar het product van de collega
+-- staat er niet bij. Een Ainex-gebruiker die het EndoQ-vinkje van een arts
+-- ziet, leest daaruit af dat de collega met die arts bezig is, en kon het
+-- uitzetten. De velden zelf zijn gedeeld.
+--
+-- Een record in de oude vorm, met één "product", gaat ongemoeid mee. Niet uit
+-- beleefdheid: zou het hier omgezet worden, dan gaf laden-en-opslaan een
+-- ander document terug dan er stond, en dat is wat controle 8 bewaakt.
 create or replace function followup.scope_entries(entries jsonb, allowed text[]) returns jsonb
-language sql immutable set search_path = public as $$
-  select coalesce((
-    select jsonb_agg(t.e order by t.i)
-      from jsonb_array_elements(followup.arr(entries)) with ordinality t(e, i)
-     where followup.in_scope(t.e, allowed)
-  ), '[]'::jsonb);
-$$;
-
--- Contactpersonen, met hun productlijst mee afgeschermd. Dezelfde reden als bij
--- het ziekenhuis: een Ainex-gebruiker die het EndoQ-vinkje van een arts ziet
--- staan, leest daaruit af dat de collega met die arts bezig is, en hij zou het
--- kunnen uitzetten ook. Zichtbaar blijft de arts wel — één overlapping volstaat.
--- Een contactpersoon die het oude "product" nog draagt, gaat ongemoeid mee.
--- Niet uit beleefdheid: zou hij hier omgezet worden, dan gaf laden-en-opslaan
--- een ander document terug dan er stond, en dat is precies wat controle 8
--- bewaakt. De omzetting hoort in normalize() in de app, zoals demoDate destijds.
--- Hij wordt wel correct afgeschermd — in_scope() leest beide vormen.
-create or replace function followup.scope_contacts(entries jsonb, allowed text[]) returns jsonb
 language sql immutable set search_path = public as $$
   select coalesce((
     select jsonb_agg(case when t.e ? 'products'
@@ -468,6 +474,7 @@ language sql immutable set search_path = public as $$
   ), '[]'::jsonb);
 $$;
 
+
 -- h.products wordt mee afgeschermd: anders ziet een Ainex-gebruiker een
 -- EndoQ-vinkje staan dat hij niet mag aan- of uitzetten. En fix_planned()
 -- erover, zodat nextAction de nota van zijn eigen eerste geplande moment is
@@ -476,7 +483,7 @@ create or replace function followup.scope_hospital(h jsonb, allowed text[]) retu
 language sql immutable set search_path = public as $$
   select followup.fix_overall(followup.fix_planned(h || jsonb_build_object(
     'products',   to_jsonb(followup.product_sort(followup.both_in(followup.texts(h -> 'products'), allowed))),
-    'contacts',   followup.scope_contacts(h -> 'contacts', allowed),
+    'contacts',   followup.scope_entries(h -> 'contacts', allowed),
     'activities', followup.scope_entries(h -> 'activities', allowed),
     'planned',    followup.scope_entries(h -> 'planned', allowed))
     -- De opvolging van de andere producten gaat niet mee, en de kleur van het
@@ -486,6 +493,10 @@ language sql immutable set search_path = public as $$
             else '{}'::jsonb end),
     followup.heeft_opvolging(h));
 $$;
+
+-- scope_contacts was een letterlijke kopie van scope_entries; die doet nu alle
+-- drie de lijsten.
+drop function if exists followup.scope_contacts(jsonb, text[]);
 
 create or replace function followup.scope_targets(targets jsonb, allowed text[]) returns jsonb
 language sql immutable set search_path = public as $$
@@ -594,6 +605,17 @@ begin
    where t.e ? a.arr and jsonb_typeof(t.e -> a.arr) <> 'array';
   if v_n > 0 then
     raise exception 'followup:invalid_payload contacts, activities en planned moeten lijsten zijn'
+      using errcode = 'PT422', hint = 'invalid_payload';
+  end if;
+
+  -- Een id met een stuurteken (een regeleinde, een tab) maakt de app nooit:
+  -- uid() geeft hextekens. Wie er toch een stuurt, schrijft niet langs de
+  -- app, en een id komt op plaatsen terecht die het niet ontsnappen, zoals de
+  -- UID in een agenda-abonnement.
+  select k into v_bad from unnest(followup.doc_keys(payload)) k
+   where k ~ '[[:cntrl:]]' limit 1;
+  if v_bad is not null then
+    raise exception 'followup:invalid_payload een id bevat een stuurteken'
       using errcode = 'PT422', hint = 'invalid_payload';
   end if;
 
@@ -759,8 +781,35 @@ $$;
 -- enkel de stukken die hij kón zien. Nooit andersom: een document dat van de
 -- payload vertrekt, mist alles wat hij niet mocht zien.
 
+-- Een moment in de lijstvorm draagt geen aantal en geen soort stent: die
+-- horen bij één product. Een beperkte gebruiker ziet van een gesprek over
+-- twee producten enkel het zijne en kon er zo een bestelling met een aantal
+-- van maken; na het samenvoegen stond dat aantal op een moment over twee
+-- producten. De app en de koppeling bieden het niet meer aan; dit is het
+-- vangnet. Enkel wat er staat wordt weggehaald, zodat een moment zonder
+-- aantal ongewijzigd blijft (controle 8).
+create or replace function followup.zonder_aantal(e jsonb) returns jsonb
+language sql immutable set search_path = public as $$
+  select case
+    when not (e ? 'products') then e
+    else (e - 'family')
+      || case when coalesce(jsonb_typeof(e -> 'rooms'), 'null') <> 'null'
+              then '{"rooms": null}'::jsonb else '{}'::jsonb end
+  end;
+$$;
+
+-- Tot november 2026 had deze functie vier argumenten. Bleef die versie staan,
+-- dan waren er twee met dezelfde naam en was elke oproep met vier argumenten
+-- dubbelzinnig.
+drop function if exists followup.merge_entries(jsonb, jsonb, text[], text);
+
+-- afgevinkt: geplande momenten die in deze opslag afgevinkt worden (zie
+-- followup.afgevinkt()). Een nieuw contactmoment met hetzelfde id neemt
+-- daaruit het product van de collega over; zijn plaats in de lijst blijft die
+-- uit de payload, zoals bij elk nieuw record.
 create or replace function followup.merge_entries(stored jsonb, incoming jsonb,
-                                                  allowed text[], wat text) returns jsonb
+                                                  allowed text[], wat text,
+                                                  afgevinkt jsonb default '[]'::jsonb) returns jsonb
 language plpgsql immutable set search_path = public as $$
 declare v_bad text;
 begin
@@ -796,8 +845,8 @@ begin
   -- plaats. Nieuw: achteraan, zoals de app zelf ook toevoegt. Binnen het zicht
   -- en niet meegestuurd: verwijderd — write_state beslist of dat mocht.
   --
-  -- Draagt het record een productlijst — vandaag enkel een contactpersoon —
-  -- dan gaat die door dezelfde formule als bij het ziekenhuis in plaats van
+  -- Draagt het record een productlijst — een contactpersoon, of een moment
+  -- over meer dan één product — dan gaat die door dezelfde formule als bij het ziekenhuis in plaats van
   -- rechtstreeks uit de payload te komen. We kijken naar de vorm van het
   -- record en niet naar welke lijst het is: zo klopt het ook als er later nog
   -- een soort bijkomt.
@@ -808,19 +857,36 @@ begin
       select s.e, 0 as groep, s.i from s where not followup.in_scope(s.e, allowed)
       union all
       select case when s.e ? 'products' or p.e ? 'products'
-                  then p.e || jsonb_build_object('products', followup.merge_products(s.e, p.e, allowed))
+                  then followup.zonder_aantal((p.e - 'product')
+                         || jsonb_build_object('products', followup.merge_products(s.e, p.e, allowed)))
                   else p.e end, 0, s.i
         from s join p on p.e ->> 'id' = s.e ->> 'id'
        where followup.in_scope(s.e, allowed)
       union all
-      select case when p.e ? 'products'
-                  then p.e || jsonb_build_object('products', followup.merge_products('{}'::jsonb, p.e, allowed))
+      select case when p.e ? 'products' or coalesce(x.e ? 'products', false)
+                  then followup.zonder_aantal((p.e - 'product')
+                         || jsonb_build_object('products', followup.merge_products(coalesce(x.e, '{}'::jsonb), p.e, allowed)))
                   else p.e end, 1, p.i
         from p
+        left join lateral (select t.e from jsonb_array_elements(followup.arr(afgevinkt)) t(e)
+                            where t.e ->> 'id' = p.e ->> 'id' limit 1) x on true
        where not exists (select 1 from s where s.e ->> 'id' = p.e ->> 'id')
     ) q
   ), '[]'::jsonb);
 end $$;
+
+-- De geplande momenten die in deze opslag afgevinkt worden: binnen het zicht,
+-- en hun id duikt op als nieuw contactmoment.
+create or replace function followup.afgevinkt(stored jsonb, incoming jsonb, allowed text[]) returns jsonb
+language sql immutable set search_path = public as $$
+  select coalesce(jsonb_agg(t.e), '[]'::jsonb)
+    from jsonb_array_elements(followup.arr(stored -> 'planned')) t(e)
+   where followup.in_scope(t.e, allowed)
+     and exists (select 1 from jsonb_array_elements(followup.arr(incoming -> 'activities')) a(e)
+                  where a.e ->> 'id' = t.e ->> 'id')
+     and not exists (select 1 from jsonb_array_elements(followup.arr(stored -> 'activities')) a(e)
+                      where a.e ->> 'id' = t.e ->> 'id');
+$$;
 
 -- Eén ziekenhuis. De gewone velden en unit komen uit de payload: dat is een
 -- bewuste keuze. Een Ainex-gebruiker die het adres of het aantal kamers
@@ -838,7 +904,12 @@ language sql immutable set search_path = public as $$
     incoming || jsonb_build_object(
       'products', followup.merge_products(stored, incoming, allowed),
       'contacts',   followup.merge_entries(stored -> 'contacts',   incoming -> 'contacts',   allowed, 'contactpersoon'),
-      'activities', followup.merge_entries(stored -> 'activities', incoming -> 'activities', allowed, 'contactmoment'),
+      -- Afvinken: het contactmoment krijgt het id van het geplande moment. Was
+      -- dat een gesprek over twee producten, dan zag een beperkte gebruiker
+      -- enkel het zijne; het geplande moment is dan wat er opgeslagen stond,
+      -- zodat het product van de collega op het contactmoment blijft staan.
+      'activities', followup.merge_entries(stored -> 'activities', incoming -> 'activities', allowed,
+                      'contactmoment', followup.afgevinkt(stored, incoming, allowed)),
       'planned',    followup.merge_entries(stored -> 'planned',    incoming -> 'planned',    allowed, 'gepland moment'))
     -- De opvolging per product: de rij van de collega blijft zoals ze
     -- opgeslagen stond. Daarna de kleur van het ziekenhuis opnieuw, nu op het
@@ -1342,6 +1413,9 @@ begin
     raise exception 'followup:feed_denied een abonnement maak je in de app'
       using errcode = 'PT403', hint = 'feed_denied';
   end if;
+  -- Eén aanmaak per account tegelijk, anders lopen twee gelijktijdige
+  -- oproepen allebei langs de telling en komen er elf.
+  perform pg_advisory_xact_lock(hashtext('calendar_feeds:' || auth.uid()::text));
   if (select count(*) from public.calendar_feeds where owner = auth.uid()) >= c_max then
     raise exception 'followup:feed_limit al % abonnementen', c_max
       using errcode = 'PT422', hint = 'feed_limit';
@@ -1373,6 +1447,12 @@ end $$;
 create or replace function public.feed_list(everyone boolean default false) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 begin
+  -- Abonnementen beheert een mens, in de app: ook bekijken en stopzetten, niet
+  -- enkel aanmaken (zie feed_create).
+  if followup.via_assistant() then
+    raise exception 'followup:feed_denied abonnementen beheer je in de app'
+      using errcode = 'PT403', hint = 'feed_denied';
+  end if;
   if everyone and not public.is_admin() then
     raise exception 'followup:feed_denied enkel een beheerder ziet alle abonnementen'
       using errcode = 'PT403', hint = 'feed_denied';
@@ -1397,6 +1477,10 @@ language plpgsql volatile security definer set search_path = public as $$
 declare
   v_n int;
 begin
+  if followup.via_assistant() then
+    raise exception 'followup:feed_denied abonnementen beheer je in de app'
+      using errcode = 'PT403', hint = 'feed_denied';
+  end if;
   delete from public.calendar_feeds
    where id = p_id
      and (owner = auth.uid() or public.is_admin());
@@ -1423,11 +1507,8 @@ language sql immutable set search_path = public as $$
              'date',     p.e ->> 'date',
              'time',     coalesce(p.e ->> 'time', ''),
              'type',     coalesce(p.e ->> 'type', ''),
-             -- Een moment draagt één "product", of een lijst "products"
-             -- (die scope_doc al heeft ingekort tot het bereik).
-             'products', case when p.e ? 'products' then p.e -> 'products'
-                              when coalesce(p.e ->> 'product', '') = '' then '[]'::jsonb
-                              else jsonb_build_array(p.e ->> 'product') end,
+             -- Al ingekort tot het bereik door scope_doc.
+             'products', to_jsonb(followup.products_of(p.e)),
              'hospital', coalesce(h.e ->> 'name', ''),
              'address',  coalesce(h.e ->> 'address', ''),
              'country',  coalesce(h.e ->> 'country', ''),
@@ -1443,10 +1524,8 @@ language sql immutable set search_path = public as $$
             or coalesce(nullif(p.e ->> 'assignee', ''), p.e ->> 'createdBy', '') = owner::text)
        -- Een keuze van producten: het moment moet er een van dragen. Een
        -- moment zonder product hoort bij geen enkele keuze, enkel bij "alles".
-       -- in_scope(e, '{}') is waar voor precies dat: een moment zonder product.
        and (coalesce(products, '{}') = '{}'::text[]
-            or (followup.in_scope(p.e, products)
-                and not followup.in_scope(p.e, '{}'::text[])))
+            or followup.both_in(followup.products_of(p.e), products) <> '{}'::text[])
   ), '[]'::jsonb);
 $$;
 

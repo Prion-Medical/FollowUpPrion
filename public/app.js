@@ -12,13 +12,21 @@
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
+    typesAmong, productsOf, productOf, familiesFor, wantsFamily, factsFor,
     esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual, setMain, mainContact,
+    normalizeFacts, syncPipeline, zonderProduct, syncRooms, shared, byWhen, assigneeOf, tickOffDate, typesInAll,
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
   const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
   // Agendabestanden: zie ics.js. Het abonnement maakt dezelfde afspraken aan de
   // serverkant (supabase/functions/calendar).
   const Ics = window.FollowUpIcs;
+
+  // De regels voor kleur en fase staan in domain.js. Ze geven terug welke
+  // kleur erbij kwam; hier komt de melding erbij.
+  const kleurMelding = (kleur) => { if (kleur) toast(t(kleur === "green" ? "status.toGreen" : "status.toOrange")); };
+  const stageStatus = (x, contacted) => kleurMelding(window.FollowUpDomain.stageStatus(x, contacted));
+  const autoStatus = (h, act) => kleurMelding(window.FollowUpDomain.autoStatus(h, act));
   // Welk product staat standaard in een nieuw contactmoment of een planning:
   // dat van het ziekenhuis als er maar één is, anders het jouwe als jij er maar
   // één mag.
@@ -33,6 +41,29 @@
   // staan, anders stond wie alleen de Benelux volgt na één klik weer tussen
   // de ziekenhuizen van de rest van de wereld.
   const REGION_KEY = "followup-regions";
+  // Welke secties van het dossier dichtgeklapt staan, onthouden per browser:
+  // wie veel producten heeft klapt dicht wat hij zelden nodig heeft, en dat
+  // geldt dan voor elk ziekenhuis. Per sectie een sleutel; voor een product
+  // is dat "product:" met zijn naam erachter.
+  const SECTIONS_KEY = "followup-sections";
+  const closedSections = (() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(SECTIONS_KEY) || "[]");
+      return new Set(Array.isArray(v) ? v.filter((k) => typeof k === "string") : []);
+    } catch (e) { return new Set(); }
+  })();
+  function toggleSection(key) {
+    if (closedSections.has(key)) closedSections.delete(key); else closedSections.add(key);
+    try { localStorage.setItem(SECTIONS_KEY, JSON.stringify([...closedSections])); } catch (e) { /* privévenster */ }
+    return closedSections.has(key);
+  }
+  // Het begin van een sectie en haar kopje. Het kopje is zelf de knop: het
+  // pijltje wijst naar rechts als de sectie dicht is en naar beneden als ze
+  // openstaat. Wat er na de titel in het kopje komt (een teller, de knop om
+  // iets toe te voegen) blijft ook bij een dichte sectie staan.
+  const secOpen = (key) => `<div class="section${closedSections.has(key) ? " closed" : ""}" data-sec="${esc(key)}">`;
+  const secHead = (key, title, rest = "") =>
+    `<h3><button type="button" class="sec-toggle" data-sec-toggle="${esc(key)}" aria-expanded="${closedSections.has(key) ? "false" : "true"}">${icon("next")}<span>${esc(title)}</span></button>${rest}</h3>`;
   function savedRegions() {
     try {
       const v = JSON.parse(localStorage.getItem(REGION_KEY) || "[]");
@@ -113,7 +144,7 @@
   // Hoort dit contactmoment of geplande moment bij de producten waarop
   // gefilterd is? Zonder filter alles; een record zonder product hoort overal
   // bij, zoals het ook voor iedereen zichtbaar is.
-  const inFilter = (r) => !state.filter.products.length || !r.product || state.filter.products.includes(r.product);
+  const inFilter = (r) => !state.filter.products.length || !productsOf(r).length || productsOf(r).some((p) => state.filter.products.includes(p));
   // "Te laat", "stil gevallen" en "demo gepland" volgen de productfilter, net
   // als de kleur: wie op Thyroid RFA filtert wil niet de achterstallige actie
   // van EndoQ zien. planned staat op datum, dus het eerste dat past is de
@@ -126,6 +157,10 @@
   // Te laat: een datum, en die is voorbij. Een moment zonder datum staat
   // klaar tot iemand het doet, en is dus nooit te laat.
   const isLate = (p) => !!p.date && p.date < today();
+  // De plaats van een knop die er bij dit moment niet is (de download bij een
+  // moment zonder datum). Leeg maar even breed, zodat afvinken en bewerken op
+  // elke regel op dezelfde plek staan.
+  const ICON_SLOT = '<span class="icon-btn icon-slot" aria-hidden="true"></span>';
   // Stil gevallen: er is contact geweest, er staat niets gepland en het laatste
   // contactmoment is lang geleden. Zo'n ziekenhuis glipt door alle andere
   // filters — niet rood (er was contact), niet groen (er staat niets), niet
@@ -139,12 +174,6 @@
   }
   // Een datum als YYYY-MM-DD uit de losse delen. Niet via toISOString(): die
   // rekent in UTC en schuift bij ons 's avonds een dag op.
-  // Op datum, en op dezelfde dag eerst wat een uur heeft, in volgorde: wat
-  // "ergens die dag" is, komt na wat om negen uur begint. Enkel om te tonen:
-  // h.planned zelf blijft op datum, zoals fix_planned() in de databank het
-  // ook legt, anders verschuift elke opslag de volgorde.
-  // Een moment zonder datum heeft een lege datum en komt dus vanzelf vooraan.
-  const byWhen = (a, b) => a.date.localeCompare(b.date) || (a.time || "99").localeCompare(b.time || "99");
   const ymd = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   // nextAction en nextActionDate volgen uit het eerste geplande moment — ook
   // als dat er een zonder datum is: dat staat bovenaan, dus dat is wat er nu
@@ -160,7 +189,9 @@
   // staat het gewoon in de agenda, zodat de teller en de agenda hetzelfde zien.
   function hasDemoPlanned(h) {
     const d = today();
-    return h.planned.some((p) => p.type === "demo" && p.date >= d && inFilter(p));
+    // Ook een demo die nog geen datum heeft: die moet geregeld worden, en is
+    // dus gepland.
+    return h.planned.some((p) => p.type === "demo" && (!p.date || p.date >= d) && inFilter(p));
   }
   function relDays(d) {
     if (!d) return "";
@@ -502,14 +533,35 @@
     c.primary = !!c.primary;
     return c;
   }
+  // Eén product in "product", of meer in "products": zie productsOf() in
+  // domain.js. Wat er staat blijft in zijn vorm; hier wordt niets omgezet,
+  // anders gaf laden en opslaan een ander document terug.
+  function productShape(r) {
+    if (Array.isArray(r.products)) {
+      r.products = [...new Set(r.products.filter((p) => typeof p === "string" && p))];
+      delete r.product;
+    } else r.product = str(r.product);
+  }
+  // Een aantal hoort bij één product: gaat het moment over meer, dan is er
+  // geen aantal.
+  const wantsNumber = (type, r) => !shared(r) && wantsQuantity(type, productOf(r));
+  // De soort binnen het product (bij stents). Het veld staat er alleen als
+  // er een gekozen is: een lege waarde bij elk ouder moment zou wie als
+  // eerste opslaat de laatste bewerker van het hele logboek maken.
+  function familyShape(r) {
+    const p = shared(r) ? "" : productOf(r);
+    if (wantsFamily(r.type, p) && familiesFor(p).includes(r.family)) r.family = str(r.family);
+    else delete r.family;
+  }
   function normalizeActivity(a) {
     a.id = str(a.id) || uid();
     a.type = ACT_TYPE_KEYS.includes(a.type) ? a.type : "other";
     a.date = dateOrEmpty(a.date);
-    a.product = str(a.product);
+    productShape(a);
     a.contactId = str(a.contactId);
     a.note = str(a.note);
-    a.rooms = wantsQuantity(a.type, a.product) ? numOrNull(a.rooms) : null;
+    a.rooms = wantsNumber(a.type, a) ? numOrNull(a.rooms) : null;
+    familyShape(a);
     stampFields(a);
     return a;
   }
@@ -520,9 +572,10 @@
     p.id = str(p.id) || uid();
     p.type = ACT_TYPE_KEYS.includes(p.type) ? p.type : "other";
     p.date = dateOrEmpty(p.date);
-    p.product = str(p.product);
+    productShape(p);
     p.contactId = str(p.contactId);
     p.note = str(p.note);
+    familyShape(p);
     // Aan wie het moment is toegewezen. Het veld staat er alleen als iemand
     // gekozen is: schreven we bij elk ouder moment een lege waarde, dan zou
     // wie als eerste opslaat de laatste bewerker van de hele agenda worden.
@@ -532,77 +585,6 @@
     if (timeOrEmpty(p.time)) p.time = timeOrEmpty(p.time); else delete p.time;
     stampFields(p);
     return p;
-  }
-  // Voor wie een gepland moment is. Zonder toewijzing is dat wie het invoerde:
-  // wie iets plant, volgt het bijna altijd ook op, en zo werkt de filter in de
-  // agenda meteen voor alles wat er al stond.
-  const assigneeOf = (p) => p.assignee || p.createdBy || "";
-  // De gegevens van een product per ingreep. Ze staan in de rij van dat
-  // product in h.pipeline en niet in een blok op het ziekenhuis zoals unit:
-  // Thyroid RFA en Fibroid RFA hebben elk hun eigen goedkeuring, prioriteit en
-  // concurrent in hetzelfde ziekenhuis, en zo vallen ze vanzelf binnen de
-  // productmuur — de databank schermt die rijen al af per product.
-  function normalizeFacts(e) {
-    e.cmm = CMM_STATES.includes(e.cmm) ? e.cmm : "";
-    e.prio = [1, 2, 3].includes(Number(e.prio)) ? Number(e.prio) : null;
-    e.doesAlready = YES_NO.includes(e.doesAlready) ? e.doesAlready : "";
-    e.currentSystem = str(e.currentSystem);
-    e.notes = str(e.notes);
-    return e;
-  }
-  // De opvolging per product. Elk product dat bij het ziekenhuis aangevinkt
-  // staat krijgt een eigen fase, kleur en verantwoordelijke; wat op het
-  // ziekenhuis zelf staat volgt daaruit (zie pipelineView in domain.js).
-  //
-  // Vroeger was er één fase per ziekenhuis. Die wordt hier de fase van elk
-  // product dat er toen aangevinkt stond — de app wist niet beter, en twee
-  // keer dezelfde fase is juister dan één van de twee op prospect zetten. Een
-  // product dat er láter bijkomt begint vooraan: prospect, of eerste contact
-  // als er al een contactmoment voor bestaat.
-  //
-  // Een rij verdwijnt hier nooit, ook niet als het vinkje weggaat. Wie
-  // afgeschermd is krijgt h.products gesnoeid op zijn eigen bereik, en zou
-  // anders de opvolging van een collega wissen bij de eerste opslag.
-  function syncPipeline(h) {
-    if (!h.pipeline || typeof h.pipeline !== "object" || Array.isArray(h.pipeline)) h.pipeline = {};
-    for (const [p, e] of Object.entries(h.pipeline)) {
-      if (!e || typeof e !== "object") { delete h.pipeline[p]; continue; }
-      e.stage = STAGES.includes(e.stage) ? e.stage : "prospect";
-      e.status = STATUSES.includes(e.status) ? e.status : "red";
-      e.owner = str(e.owner);
-      if (productKind(p) === "procedure") normalizeFacts(e);
-    }
-    const eerste = !Object.keys(h.pipeline).length;
-    for (const p of h.products) {
-      if (h.pipeline[p]) continue;
-      const contacted = h.activities.some((a) => a.product === p);
-      const e = eerste ? { stage: h.stage, status: h.status, owner: "" }
-        : { stage: contacted ? "first_contact" : "prospect", status: contacted ? "orange" : "red", owner: "" };
-      // Een fase die dit product niet kent, schuift naar de dichtste die het
-      // wel kent: allebei liggen ze net voor of net na de evaluatie.
-      if (!stagesFor(p).includes(e.stage)) e.stage = "evaluation";
-      if (productKind(p) === "procedure") normalizeFacts(e);
-      h.pipeline[p] = e;
-    }
-    if (h.products.length) {
-      const f = furthest(h.products.map((p) => h.pipeline[p]));
-      h.status = f.status;
-      h.stage = f.stage;
-    } else if (!stagesFor("").includes(h.stage)) {
-      // Zonder product geldt de keuzelijst van het ziekenhuis zelf, en die
-      // kent niet elke fase.
-      h.stage = "evaluation";
-    }
-  }
-  // Het laatste product is afgevinkt. De kleur en de fase op het ziekenhuis
-  // waren die van dat product; ze laten staan zou zeggen dat een ziekenhuis
-  // zonder product klant is. Terug naar wat de contactmomenten zeggen. Wat er
-  // per product stond blijft bewaard en komt terug als het vinkje terugkomt.
-  function zonderProduct(h) {
-    if (h.products.length) return;
-    const contacted = h.activities.length > 0;
-    h.status = contacted ? "orange" : "red";
-    h.stage = contacted ? "first_contact" : "prospect";
   }
   // Wat de kaart, de lijst en de tellers van een ziekenhuis tonen: het volgt
   // de productfilter in de zijbalk.
@@ -621,18 +603,21 @@
     // Een account dat niet meer bestaat is "?", niet niets: anders lijkt het
     // moment van wie het invoerde.
     const to = r.assignee && r.assignee !== store.me().id && r.assignee !== r.createdBy && (personName(r.assignee) || "?");
-    return [withType && t("act." + r.type), r.product, c && c.name,
-      r.rooms ? `${r.rooms} ${t(productKind(r.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
+    return [withType && t("act." + r.type), productsOf(r).join(" + "), r.family && t("family." + r.family), c && c.name,
+      r.rooms ? `${r.rooms} ${t(productKind(productOf(r)) !== "procedure" ? (r.rooms === 1 ? "act.room" : "act.rooms") : r.type === "procedure" ? "act.used" : "act.units")}` : "",
       to && t("for", { name: to }),
       by && t("by", { name: by })].filter(Boolean).join(" · ");
   }
   // De contactmomenten als CSV, recentste eerst: voor de export van alles en
   // voor "CSV van deze keuze" in het logboek.
   function activitiesCsv(items) {
+    // De kolom met de soort staat er alleen voor wie een product heeft dat
+    // soorten kent.
+    const withFamily = myProducts().some((p) => familiesFor(p).length);
     return csv([
-      [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.quantity"), t("col.note"), t("col.addedBy")],
+      [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), ...(withFamily ? [t("col.family")] : []), t("col.contact"), t("col.quantity"), t("col.note"), t("col.addedBy")],
       ...[...items].sort((x, y) => y.a.date.localeCompare(x.a.date))
-        .map(({ h, a }) => [a.date, h.name, t("act." + a.type), a.product,
+        .map(({ h, a }) => [a.date, h.name, t("act." + a.type), productsOf(a).join(", "), ...(withFamily ? [a.family ? t("family." + a.family) : ""] : []),
           (h.contacts.find((c) => c.id === a.contactId) || {}).name, a.rooms ?? "", a.note, personName(a.createdBy)]),
     ]);
   }
@@ -673,10 +658,12 @@
   // Aan wie je een gepland moment kunt toewijzen: wie het product van dat
   // moment mag zien. Zonder product is dat iedereen. Een keuze, geen muur: de
   // databank verbergt het moment sowieso voor wie het product niet heeft.
-  function assigneeOptions(product, current) {
+  // products: de producten van het moment. Wie er minstens één van heeft,
+  // ziet het moment en kan het dus opvolgen.
+  function assigneeOptions(products, current) {
     const list = owners().filter(([id]) => {
       const scope = id === store.me().id ? (store.can.products || []) : (peopleScope.get(id) || []);
-      return !product || !scope.length || scope.includes(product);
+      return !products.length || !scope.length || products.some((p) => scope.includes(p));
     });
     if (current && !list.some(([id]) => id === current)) list.push([current, personName(current) || "?"]);
     // "—" alleen als er niemand bekend is (een moment van vóór de stempel):
@@ -735,7 +722,7 @@
     // Zonder datum is het geen planning, en de agenda rekent op de sortering.
     // Op datum, en wat geen datum heeft vooraan: dat staat klaar tot iemand
     // het doet. Dezelfde volgorde als fix_planned() in de databank.
-    h.planned.sort((a, b) => a.date.localeCompare(b.date));
+    h.planned.sort(byWhen);
     syncNextAction(h);
     h.createdAt = dateOrEmpty(h.createdAt) || today();
     // Een halve locatie is geen locatie: de kaart rekent op lat én lng.
@@ -1146,18 +1133,6 @@
 
   // ---------- fiche ----------
   const opt = (value, label, current) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
-  // Eén product kiezen, in dezelfde uitklapper als overal elders. Radio's en
-  // geen vinkjes: een contactmoment hoort bij één product. Omdat ze allemaal
-  // name="product" dragen, komt de keuze via FormData binnen, en de
-  // samenvatting houdt de uitklapper zelf bij — de dialoog hoeft er dus
-  // helemaal niets voor te doen. Het streepje is een rij als alle andere, en
-  // daarmee ook meteen de tekst die er staat als er niets gekozen is.
-  const productOne = (chosen) => pickBox([
-    { attrs: `name="product" value=""`, label: "—", checked: !chosen, type: "radio" },
-    ...myProducts().map((p) => ({
-      attrs: `name="product" value="${esc(p)}"`, label: p, checked: chosen === p, type: "radio",
-    })),
-  ], "—");
   // Twee afvinklijsten met dezelfde merken: de scopes en de videoprocessors.
   // Welke lijst
   // een vakje bijwerkt staat in data-brand-list.
@@ -1221,8 +1196,8 @@
         </div>
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.followup"))}</h3>
+      ${secOpen("followup")}
+        ${secHead("followup", t("section.followup"))}
         ${pipe.length ? pipe.map((p) => {
           const e = h.pipeline[p];
           return `<div class="pipe">
@@ -1248,14 +1223,14 @@
         </div>`}
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
+      ${secOpen("planned")}
+        ${secHead("planned", t("section.planned"), `${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned">${esc(t("btn.addPlanned"))}</button>`)}
         ${h.planned.length ? `<ul class="timeline">${[...h.planned].sort(byWhen).map((p) => {
           // Dezelfde regel als in de agenda, zodat ook hier staat voor wie
           // het moment is.
           const sub = momentLine(h, p, false);
           return `<li class="${isLate(p) ? "late" : ""}">
-            <div class="t-date">${esc(p.date ? fmtDate(p.date) : t("planned.noDate"))}<span class="t-rel">${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
+            <div class="t-date">${esc(p.date ? fmtDate(p.date) : t("planned.noDate"))}${p.time ? `<span class="t-rel">${esc(p.time)}</span>` : ""}<span class="t-rel">${esc(relDays(p.date))}</span></div>
             <div class="t-body">
               <div class="t-type"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(t("act." + p.type))}</div>
               ${sub ? `<div class="t-sub">${esc(sub)}</div>` : ""}
@@ -1264,14 +1239,14 @@
             <div class="t-acts">
               <button class="icon-btn" data-act="done-planned" data-id="${esc(p.id)}" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
               <button class="icon-btn" data-act="edit-planned" data-id="${esc(p.id)}" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
-              ${p.date ? `<button class="icon-btn" data-act="ics-planned" data-id="${esc(p.id)}" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>` : ""}
+              ${p.date ? `<button class="icon-btn" data-act="ics-planned" data-id="${esc(p.id)}" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>` : ICON_SLOT}
             </div>
           </li>`;
         }).join("")}</ul>` : `<p class="muted">${esc(t("empty.planned"))}</p>`}
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.activities"))} <button class="btn small" data-act="add-activity">${esc(t("btn.addActivity"))}</button></h3>
+      ${secOpen("activities")}
+        ${secHead("activities", t("section.activities"), ` <button class="btn small" data-act="add-activity">${esc(t("btn.addActivity"))}</button>`)}
         ${acts.length ? `<ul class="timeline ${state.actsOpen === h.id ? "" : "capped"}">${acts.map((a, i) => {
           const sub = momentLine(h, a, false);
           return `<li${i >= ACT_CAP ? ' class="extra"' : ""}>
@@ -1291,8 +1266,8 @@
           : `<p class="muted">${esc(t("empty.activities"))}</p>`}
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.contacts"))} <button class="btn small" data-act="add-contact">${esc(t("btn.addContact"))}</button></h3>
+      ${secOpen("contacts")}
+        ${secHead("contacts", t("section.contacts"), ` <button class="btn small" data-act="add-contact">${esc(t("btn.addContact"))}</button>`)}
         ${contacts.length ? contacts.map((c) => `
           <div class="contact ${c.primary ? "primary" : ""}">
             <div class="c-actions">
@@ -1308,8 +1283,8 @@
           </div>`).join("") : `<p class="muted">${esc(t("empty.contacts"))}</p>`}
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.data"))}</h3>
+      ${secOpen("data")}
+        ${secHead("data", t("section.data"))}
         <div class="grid">
           <label class="field">${esc(t("field.country"))}
             <select data-field="country">${[opt("", "—", h.country), ...COUNTRIES.map((c) => opt(c, t("country." + c), h.country))].join("")}</select>
@@ -1351,31 +1326,32 @@
         // dit ziekenhuis aangevinkt is en binnen je bereik valt.
         const e = h.pipeline[p];
         const fact = (k) => `data-fact="${k}" data-fact-product="${esc(p)}"`;
-        return `<div class="section">
-        <h3>${esc(p)}</h3>
+        const facts = factsFor(p);
+        return `${secOpen("product:" + p)}
+        ${secHead("product:" + p, p)}
         <p class="muted">${esc(t("unit.unknownOk"))}</p>
         <div class="grid">
-          <label class="field">${esc(t("rfa.cmm"))}
+          ${!facts.includes("cmm") ? "" : `<label class="field">${esc(t("rfa.cmm"))}
             <select ${fact("cmm")}>${[opt("", "—", e.cmm), ...CMM_STATES.map((k) => opt(k, t("rfa.cmm." + k), e.cmm))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("rfa.prio"))}
+          </label>`}
+          ${!facts.includes("prio") ? "" : `<label class="field">${esc(t("rfa.prio"))}
             <select ${fact("prio")}>${[opt("", "—", String(e.prio ?? "")), ...[1, 2, 3].map((n) => opt(String(n), String(n), String(e.prio ?? "")))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("rfa.doesAlready"))}
+          </label>`}
+          ${!facts.includes("doesAlready") ? "" : `<label class="field">${esc(t("rfa.doesAlready"))}
             <select ${fact("doesAlready")}>${[opt("", "—", e.doesAlready), ...YES_NO.map((k) => opt(k, t("yn." + k), e.doesAlready))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("rfa.currentSystem"))}
+          </label>`}
+          ${!facts.includes("currentSystem") ? "" : `<label class="field">${esc(t("rfa.currentSystem"))}
             <input ${fact("currentSystem")} value="${esc(e.currentSystem)}" placeholder="${esc(t("rfa.currentSystem.ph"))}">
-          </label>
-          <label class="field full">${esc(t("rfa.notes"))}
+          </label>`}
+          ${!facts.includes("notes") ? "" : `<label class="field full">${esc(t("rfa.notes"))}
             <textarea ${fact("notes")} rows="3">${esc(e.notes)}</textarea>
-          </label>
+          </label>`}
         </div>
       </div>`;
       }).join("")}
 
-      ${!endoFor(h) ? "" : `<div class="section">
-        <h3>${esc(t("section.unit"))}</h3>
+      ${!endoFor(h) ? "" : `${secOpen("unit")}
+        ${secHead("unit", t("section.unit"))}
         <p class="muted">${esc(t("unit.unknownOk"))}</p>
         <div class="grid">
           <div class="field full"><span class="field-label">${esc(t("unit.scopeBrands"))}</span>
@@ -1430,14 +1406,14 @@
       if (d.field === "stage") stageStatus(h, h.activities.length > 0);
     } else if (d.pstage && h.pipeline[d.pstage]) {
       h.pipeline[d.pstage].stage = el.value;
-      stageStatus(h.pipeline[d.pstage], h.activities.some((a) => a.product === d.pstage));
+      stageStatus(h.pipeline[d.pstage], h.activities.some((a) => productsOf(a).includes(d.pstage)));
       syncPipeline(h);
     } else if (d.powner && h.pipeline[d.powner]) {
       h.pipeline[d.powner].owner = el.value;
     } else if (d.fact && h.pipeline[d.factProduct]) {
       // normalizeFacts houdt de vaste sleutels en het getal in de hand.
       h.pipeline[d.factProduct][d.fact] = el.value;
-      normalizeFacts(h.pipeline[d.factProduct]);
+      normalizeFacts(h.pipeline[d.factProduct], d.factProduct);
     } else if (d.unit) {
       h.unit[d.unit] = el.type === "number" ? num(el.value) : el.value;
     } else if (d.unitBool) {
@@ -1471,6 +1447,15 @@
     if (e.target.closest("[data-acts-toggle]")) {
       state.actsOpen = state.actsOpen === h.id ? null : h.id;
       renderFiche();
+      return;
+    }
+    // Een sectie open- of dichtklappen. Zonder hertekenen: alleen de klasse
+    // wisselt, zodat wat je in een veld aan het typen was blijft staan.
+    const sec = e.target.closest("[data-sec-toggle]");
+    if (sec) {
+      const dicht = toggleSection(sec.dataset.secToggle);
+      sec.closest(".section").classList.toggle("closed", dicht);
+      sec.setAttribute("aria-expanded", dicht ? "false" : "true");
       return;
     }
     const b = e.target.closest("[data-act]");
@@ -1660,23 +1645,34 @@
   // De formulierdialoog sluit zacht (softClose in ui.js), langs elke weg: een
   // knop of Escape. Dit staat op de dialoog en loopt dus na de afhandeling op
   // het formulier zelf; hield die het sluiten al tegen, dan blijft hij open.
+  // beforeClose hoort bij de dialoog die nu open is (openDialog() zet hem):
+  // een vraag die eerst beantwoord wordt, voor een dialoog die iets toont dat
+  // na het sluiten weg is, of die nog op de databank wacht.
+  function closeDialog(dlg, value) {
+    const guard = $("#dialogForm").beforeClose;
+    if (!guard) return softClose(dlg, value);
+    guard().then((yes) => { if (yes) softClose(dlg, value); });
+  }
   $("#dialog").addEventListener("submit", (e) => {
     if (e.defaultPrevented) return;
     e.preventDefault();
-    softClose(e.currentTarget, e.submitter ? e.submitter.value : "");
+    closeDialog(e.currentTarget, e.submitter ? e.submitter.value : "");
   });
-  $("#dialog").addEventListener("cancel", (e) => { e.preventDefault(); softClose(e.currentTarget); });
+  $("#dialog").addEventListener("cancel", (e) => { e.preventDefault(); closeDialog(e.currentTarget); });
   // askDelete is de vraag die de knop "Verwijder" eerst stelt; een dialoog
   // zonder zo'n knop laat hem weg.
-  function openDialog(html, onSubmit, askDelete) {
+  // opts.beforeClose: zie closeDialog(). Een dialoog die al openstaat (de
+  // tweede stap van het abonnement) krijgt enkel nieuwe inhoud.
+  function openDialog(html, onSubmit, askDelete, opts = {}) {
     const dlg = $("#dialog");
     const form = $("#dialogForm");
+    form.beforeClose = opts.beforeClose || null;
     form.innerHTML = html;
     // #dialogForm wordt door elke dialoog hergebruikt. onchange is een
     // eigenschap en geen luisteraar, zodat die van de vorige dialoog hier
     // vervalt in plaats van zich op te stapelen.
     form.onchange = null;
-    dlg.showModal();
+    if (!dlg.open) dlg.showModal();
     const first = form.querySelector("input, select, textarea");
     if (first) first.focus();
     form.onsubmit = (e) => {
@@ -1716,7 +1712,7 @@
       const e = h.pipeline[p];
       const followed = !!e && (!!e.owner || e.status !== "red" || e.stage !== "prospect"
         || !!(e.cmm || e.prio || e.doesAlready || e.currentSystem || e.notes));
-      const used = followed || h.contacts.some((c) => c.products.includes(p)) || h.activities.some((a) => a.product === p);
+      const used = followed || h.contacts.some((c) => c.products.includes(p)) || h.activities.some((a) => productsOf(a).includes(p));
       if (!used) h.products = h.products.filter((x) => x !== p);
     }
     // Enkel als hier het laatste product wegviel — een ziekenhuis dat er al
@@ -1787,29 +1783,114 @@
     }, c && t("confirm.deleteContact", { name: c.name }));
   }
 
+  // De keuzelijst van soorten voor een product; zonder product die van de
+  // producten waar dit account mee werkt. Een moment dat al een soort heeft
+  // die hier niet (meer) wordt aangeboden, houdt haar: de lijst versmalt de
+  // keuze, ze herschrijft niets.
+  // keys: de soorten die de dialoog aanbiedt (zie soortenVan in de dialogen).
+  function typeOptions(keys, current) {
+    return (current && !keys.includes(current) ? [current, ...keys] : keys).map((k) => opt(k, t("act." + k), current)).join("");
+  }
+  // De producten van een moment: vinkjes in dezelfde uitklapper als overal.
+  // Meestal één, soms meer (een gesprek over twee producten tegelijk).
+  const productMany = (chosen) => pickBox(myProducts().map((p) => ({
+    attrs: `data-mproduct="${esc(p)}"`, label: p, checked: chosen.includes(p),
+  })), "—");
+  const pickedProducts = (form) => [...form.querySelectorAll("[data-mproduct]:checked")].map((x) => x.dataset.mproduct);
+  // De keuze in het record zetten, in de vorm die erbij hoort: een lijst
+  // zodra het er meer dan één zijn of het record al een lijst droeg, anders
+  // gewoon de ene naam.
+  function setProducts(rec, list) {
+    if (list.length > 1 || Array.isArray(rec.products)) { rec.products = list; delete rec.product; }
+    else rec.product = list[0] || "";
+  }
+  // Een ander product gekozen in de dialoog: de lijst volgt. Bestaat de
+  // gekozen soort daar niet, dan valt de keuze terug op de eerste.
+  // Geeft de soort terug die moest wijken, of niets. De dialoog zegt dat
+  // dan: anders staat er bij het opslaan stil een andere soort dan gekozen.
+  function retype(select, keys) {
+    const was = select.value;
+    select.innerHTML = keys.map((k) => opt(k, t("act." + k), keys.includes(was) ? was : keys[0])).join("");
+    return was && !keys.includes(was) ? was : "";
+  }
+  // De regel onder de keuzes die zegt welke soort moest wijken. Kiest
+  // iemand daarna zelf een soort, dan is de melding achterhaald.
+  function typeNote(form, e, weg) {
+    const note = $("#typeNote", form);
+    if (weg) {
+      note.textContent = t("dlg.typeChanged", { was: t("act." + weg), now: t("act." + form.elements.type.value) });
+      note.hidden = false;
+    } else if (e && (e.target.name === "type" || e.target.dataset.mproduct)) note.hidden = true;
+  }
+
+  // Wat beide momentdialogen samen hebben: de producten bepalen de soorten,
+  // de soort en het product bepalen of er een soort stent bij hoort, en een
+  // moment over meer producten (of een in de lijstvorm, zie shared() in
+  // domain.js) draagt geen aantal en geen soort. Geeft een functie terug die
+  // de dialoog bij elke wijziging aanroept, met wat de dialoog daarna nog
+  // zelf nodig heeft.
+  // soortenVan(keuze) geeft de soorten die bij een keuze van producten passen.
+  function momentFields(form, v, soortenVan) {
+    const lijst = shared(v);
+    let familyFor = null;
+    return (e) => {
+      const keuze = pickedProducts(form);
+      const gedeeld = lijst || keuze.length > 1;
+      const product = gedeeld ? "" : keuze[0] || "";
+      const veranderd = !!(e && e.target.dataset.mproduct);
+      typeNote(form, e, veranderd ? retype(form.elements.type, soortenVan(keuze)) : "");
+      const type = form.elements.type.value;
+      const fam = form.elements.family;
+      if (familyFor !== product) {
+        const was = familyFor === null ? v.family || "" : fam.value;
+        fam.innerHTML = [opt("", "—", was), ...familiesFor(product).map((k) => opt(k, t("family." + k), was))].join("");
+        familyFor = product;
+      }
+      $("#familyField", form).hidden = !wantsFamily(type, product);
+      return { keuze, gedeeld, product, type, veranderd };
+    };
+  }
+
   function activityDialog(h, a, plan) {
-    // Een plan zonder datum krijgt er hier een: wat gebeurd is, gebeurde op
-    // een dag. Vandaag, tot iemand iets anders kiest.
-    const v = a || (plan ? { ...plan, date: plan.date || today(), rooms: "" } : {
+    // Wat afgevinkt wordt, gebeurde ten laatste vandaag: een plan zonder datum
+    // of voor volgende week staat dan op vandaag, tot iemand iets anders
+    // kiest. Dezelfde regel als complete_planned_moment in de koppeling.
+    const v = a || (plan ? { ...plan, date: tickOffDate(plan, today()), rooms: "" } : {
       date: today(),
-      type: h.activities.length ? "email" : "prospecting",
+      type: "email",
       product: defaultProduct(h),
       contactId: (mainContact(h, defaultProduct(h)) || {}).id || "",
       rooms: "", note: "",
     });
+    const had = productsOf(v);
+    // Een nieuw contactmoment (ook een afgevinkt plan) over meer producten
+    // mag een soort met een aantal hebben: bij het bewaren wordt het één
+    // contactmoment per product, elk met zijn eigen aantal. Niet bij een
+    // bestaand moment, en niet bij een gedeeld plan voor wie maar een deel van
+    // de producten mag: daar kan een product van een collega in zitten dat
+    // deze gebruiker niet ziet, en de databank houdt dat op één moment.
+    const beperkt = myProducts().length < PRODUCTS.length;
+    const splitsen = !a && !(plan && shared(plan) && beperkt);
+    const soortenVan = (keuze) => (splitsen ? typesInAll(keuze, myProducts()) : typesAmong(keuze, myProducts(), shared(v)));
     const form = openDialog(`
       <h2>${esc(a ? t("dlg.actEdit") : t("dlg.actNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
         <label class="field">${esc(t("dlg.a.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
         <label class="field">${esc(t("dlg.a.type"))}
-          <select name="type">${Object.keys(ACT_TYPES).map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
+          <select name="type">${typeOptions(soortenVan(had), v.type)}</select>
         </label>
-        <div class="field">${esc(t("dlg.a.product"))}${productOne(v.product)}</div>
+        <div class="field full">${esc(t("dlg.a.product"))}${productMany(had)}</div>
         <label class="field">${esc(t("dlg.a.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
-        <label class="field full" id="roomsField"><span id="roomsLabel">${esc(t("dlg.a.rooms"))}</span><input type="number" min="0" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
+        <p class="muted full" id="typeNote" hidden></p>
+        <p class="muted full" id="manyHint" hidden>${esc(t("dlg.a.many.hint"))}</p>
+        <div class="full per-product" id="perProduct" hidden></div>
+        <label class="field" id="roomsField"><span id="roomsLabel">${esc(t("dlg.a.rooms"))}</span><input type="number" min="0" max="100000" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
+        <label class="field" id="familyField">${esc(t("dlg.a.family"))}<select name="family"></select></label>
+        <p class="muted full" id="roomsHint">${esc(t("dlg.a.used.hint"))}</p>
         <label class="field full">${esc(t("dlg.a.note"))}<textarea name="note" rows="4" placeholder="${esc(t("dlg.a.note.ph"))}">${esc(v.note)}</textarea></label>
+        <p class="muted full" id="noteHint">${esc(t("dlg.a.procedure.hint"))}</p>
       </div>
       ${stampLine(a)}
       <div class="actions">
@@ -1825,25 +1906,52 @@
         // plan. De databank ziet dan dat p:<id> verdwijnt en a:<id> opduikt, en
         // weet dat dit afvinken is en geen verwijderen. Niets verwijst naar een
         // id van een gepland moment, dus hergebruiken kan veilig.
-        const rec = a || { id: plan ? plan.id : uid() };
-        const wantsRooms = wantsQuantity(data.type, data.product);
-        // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
-        const before = a ? { type: rec.type, rooms: rec.rooms, product: rec.product } : null;
-        Object.assign(rec, {
-          date: data.date, type: data.type, product: data.product, contactId: data.contactId,
-          rooms: wantsRooms ? num(data.rooms) : null, note: data.note.trim(),
-        });
-        stamp(rec, !a);
-        if (!a) h.activities.push(rec);
-        // Een contactmoment voor een product zet dat product bij het
-        // ziekenhuis: anders is er geen opvolging om bij te werken.
-        if (rec.product && !h.products.includes(rec.product)) h.products.push(rec.product);
-        syncPipeline(h);
-        // Ook bij een wijziging: een contactmoment dat nú een installatie of
-        // een bestelling is, zet de kleur en de fase mee goed.
-        if (!a || before.type !== rec.type) autoStatus(h, rec);
-        // Een installatie of demo met aantal kamers werkt de afdelingsgegevens bij.
-        syncRooms(h, before, rec);
+        // Was het plan een gesprek over meer producten, dan blijft het
+        // contactmoment in de lijstvorm: wie maar één product mag, ziet er
+        // maar één, en de databank zet dat van de collega er weer bij.
+        const keuze = pickedProducts(form);
+        if (splitsen && keuze.length > 1 && keuze.some((p) => wantsQuantity(data.type, p))) {
+          // Eén contactmoment per product, elk met zijn eigen aantal (en soort
+          // stent). Het eerste erft het id van het plan, zodat de databank ziet
+          // dat dit afvinken is.
+          keuze.forEach((p, i) => {
+            const rec = {
+              id: i === 0 && plan ? plan.id : uid(), date: data.date, type: data.type, product: p,
+              contactId: data.contactId, note: data.note.trim(),
+              rooms: wantsQuantity(data.type, p) ? num(data["q:" + p]) : null,
+            };
+            if (wantsFamily(data.type, p) && data["f:" + p]) rec.family = data["f:" + p];
+            stamp(rec, true);
+            h.activities.push(rec);
+            if (!h.products.includes(p)) h.products.push(p);
+            syncPipeline(h);
+            autoStatus(h, rec);
+            syncRooms(h, null, rec);
+          });
+        } else {
+          const rec = a || { id: plan ? plan.id : uid(), ...(plan && shared(plan) ? { products: [] } : {}) };
+          // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
+          const before = a ? { type: rec.type, rooms: rec.rooms, product: productOf(rec) } : null;
+          setProducts(rec, keuze);
+          const product = shared(rec) ? "" : productOf(rec);
+          Object.assign(rec, {
+            date: data.date, type: data.type, contactId: data.contactId,
+            rooms: wantsNumber(data.type, rec) ? num(data.rooms) : null, note: data.note.trim(),
+          });
+          if (wantsFamily(data.type, product) && data.family) rec.family = data.family;
+          else delete rec.family;
+          stamp(rec, !a);
+          if (!a) h.activities.push(rec);
+          // Een contactmoment voor een product zet dat product bij het
+          // ziekenhuis: anders is er geen opvolging om bij te werken.
+          for (const p of productsOf(rec)) if (!h.products.includes(p)) h.products.push(p);
+          syncPipeline(h);
+          // Ook bij een wijziging: een contactmoment dat nú een installatie of
+          // een bestelling is, zet de kleur en de fase mee goed.
+          if (!a || before.type !== rec.type) autoStatus(h, rec);
+          // Een installatie of demo met aantal kamers werkt de afdelingsgegevens bij.
+          syncRooms(h, before, rec);
+        }
         // Kwam dit uit de agenda, dan is het nu gebeurd en hoeft het niet meer
         // gepland te staan.
         if (plan) {
@@ -1858,10 +1966,39 @@
     // Het aantal hangt af van soort én product: kamers bij een abonnement,
     // bestelde stuks bij een product per ingreep. Het veld is hetzelfde, het
     // opschrift volgt het product.
-    const sync = () => {
-      const product = form.elements.product.value;
-      $("#roomsField", form).hidden = !wantsQuantity(form.elements.type.value, product);
-      $("#roomsLabel", form).textContent = t(productKind(product) === "procedure" ? "dlg.a.quantity" : "dlg.a.rooms");
+    // De soorten volgen het product, en de soort binnen het product (bij
+    // stents) staat er alleen waar ook het aantal staat.
+    const velden = momentFields(form, v, soortenVan);
+    // Per product een aantal (en een soort stent), voor een nieuw moment over
+    // meer producten met een soort die een aantal draagt. Enkel opnieuw
+    // getekend als de producten of de soort veranderen: anders verdween bij
+    // elk ingevuld veld de cursor uit het volgende.
+    let perProductVan = "";
+    const aantalLabel = (p, type) => t(productKind(p) !== "procedure" ? "dlg.a.rooms" : type === "procedure" ? "dlg.a.used" : "dlg.a.quantity");
+    const perProduct = (keuze, type) => {
+      const box = $("#perProduct", form);
+      const sleutel = `${type}|${keuze.join("|")}`;
+      if (sleutel === perProductVan) return;
+      perProductVan = sleutel;
+      const was = Object.fromEntries([...box.querySelectorAll("[name]")].map((x) => [x.name, x.value]));
+      box.innerHTML = keuze.map((p) => `<div class="pp-row">
+          <span class="pp-name">${esc(p)}</span>
+          ${wantsQuantity(type, p) ? `<label class="field">${esc(aantalLabel(p, type))}<input type="number" min="0" max="100000" name="q:${esc(p)}" value="${esc(was["q:" + p] ?? "")}" placeholder="1"></label>` : ""}
+          ${wantsFamily(type, p) ? `<label class="field">${esc(t("dlg.a.family"))}<select name="f:${esc(p)}">${[opt("", "—", was["f:" + p] || ""), ...familiesFor(p).map((k) => opt(k, t("family." + k), was["f:" + p] || ""))].join("")}</select></label>` : ""}
+        </div>`).join("") + `<p class="muted">${esc(t("dlg.a.split.hint"))}</p>`;
+    };
+    const sync = (e) => {
+      const { keuze, gedeeld, product, type } = velden(e);
+      const perStuk = splitsen && keuze.length > 1 && keuze.some((p) => wantsQuantity(type, p));
+      $("#manyHint", form).hidden = !gedeeld || perStuk;
+      $("#perProduct", form).hidden = !perStuk;
+      if (perStuk) perProduct(keuze, type);
+      const perPiece = productKind(product) === "procedure";
+      const number = !gedeeld && wantsQuantity(type, product);
+      $("#roomsField", form).hidden = !number;
+      $("#roomsLabel", form).textContent = aantalLabel(product, type);
+      $("#roomsHint", form).hidden = !((perPiece && number) || (perStuk && keuze.some((p) => productKind(p) === "procedure")));
+      $("#noteHint", form).hidden = type !== "procedure";
     };
     form.onchange = sync;
     sync();
@@ -1881,25 +2018,27 @@
     // Een nieuw moment is voor jezelf tot je iemand anders kiest; een bestaand
     // toont wie het nu opvolgt.
     const assignee = p ? assigneeOf(p) : store.me().id;
+    const had = productsOf(v);
     // Lokaal zonder naam is er niemand om aan toe te wijzen: dan geen veld.
     const canAssign = owners().length > 0 || !!assignee;
     const form = openDialog(`
       <h2>${esc(p ? t("dlg.plannedEdit") : t("dlg.plannedNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
-        <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" value="${esc(v.date)}"
-          title="${esc(t("dlg.p.date.hint"))}"></label>
-        <label class="field">${esc(t("dlg.p.time"))}<input type="time" name="time" value="${esc(v.time || "")}"
-          title="${esc(t("dlg.p.time.hint"))}"></label>
+        <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" value="${esc(v.date)}"></label>
+        <label class="field">${esc(t("dlg.p.time"))}<input type="time" name="time" value="${esc(v.time || "")}"></label>
+        <p class="muted full">${esc(t("dlg.p.when.hint"))}</p>
+        <div class="field full">${esc(t("dlg.p.product"))}${productMany(had)}</div>
         <label class="field">${esc(t("dlg.p.type"))}
-          <select name="type">${ACT_TYPE_KEYS.map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
+          <select name="type">${typeOptions(typesInAll(had, myProducts()), v.type)}</select>
         </label>
-        <div class="field">${esc(t("dlg.p.product"))}${productOne(v.product)}</div>
         <label class="field">${esc(t("dlg.p.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
         ${canAssign ? `<label class="field full">${esc(t("dlg.p.assignee"))}
-          <select name="assignee">${assigneeOptions(v.product, assignee)}</select>
+          <select name="assignee">${assigneeOptions(had, assignee)}</select>
         </label>` : ""}
+        <p class="muted full" id="typeNote" hidden></p>
+        <label class="field full" id="familyField">${esc(t("dlg.a.family"))}<select name="family"></select></label>
         <label class="field full">${esc(t("dlg.p.note"))}<textarea name="note" rows="3" placeholder="${esc(t("dlg.p.note.ph"))}">${esc(v.note)}</textarea></label>
       </div>
       ${stampLine(p)}
@@ -1913,12 +2052,17 @@
       } else {
         const rec = p || { id: uid() };
         Object.assign(rec, {
-          date: dateOrEmpty(data.date), type: data.type, product: data.product,
+          date: dateOrEmpty(data.date), type: data.type,
           contactId: data.contactId, note: data.note.trim(),
         });
         // Zonder uur een hele dag in de agenda; met een uur een uur lang. Een
         // uur zonder dag zegt niets, dus dat valt weg.
         if (rec.date && timeOrEmpty(data.time)) rec.time = timeOrEmpty(data.time); else delete rec.time;
+        setProducts(rec, pickedProducts(form));
+        // De soort stent kan al bij het plannen: bij het afvinken gaat ze mee.
+        const product = shared(rec) ? "" : productOf(rec);
+        if (wantsFamily(data.type, product) && data.family) rec.family = data.family;
+        else delete rec.family;
         // Het veld komt er alleen bij als het moment voor iemand anders is dan
         // wie het invoerde: voor die persoon volgt het al uit de stempel. Zo
         // krijgt een moment dat je voor jezelf plant geen naam mee, en blijft
@@ -1928,7 +2072,7 @@
         else delete rec.assignee;
         stamp(rec, !p);
         if (!p) h.planned.push(rec);
-        h.planned.sort((a, b) => a.date.localeCompare(b.date));
+        h.planned.sort(byWhen);
       }
       syncNextAction(h);
       scheduleSave();
@@ -1938,90 +2082,31 @@
     // gekozen was blijft staan als hij dat product ook heeft.
     // onchange en geen luisteraar: #dialogForm wordt hergebruikt, en een
     // luisteraar per geopende dialoog zou zich opstapelen (zie openDialog).
+    // Een plan draagt geen aantal: elke soort die bij alle gekozen producten
+    // bestaat, mag. Het aantal komt bij het afvinken, per product.
+    const velden = momentFields(form, v, (keuze) => typesInAll(keuze, myProducts()));
+    velden();
+    // Een uur zonder dag zegt niets: zonder datum staat het uur uit, en dat
+    // ziet wie het invult, in plaats van dat het bij het opslaan stil wegvalt.
+    const when = () => { form.elements.time.disabled = !form.elements.date.value; };
+    when();
     form.onchange = (e) => {
+      if (e.target.name === "date") when();
+      const { veranderd: changed, keuze } = velden(e);
       const pick = form.elements.assignee;
-      if (!pick || e.target.name !== "product") return;
+      if (!pick || !changed) return;
       const was = pick.value;
       // Een collega die het nieuwe product niet heeft valt weg. Iemand die we
       // niet (meer) kennen blijft staan: over hem valt niets te zeggen, en een
       // ander product kiezen mag het moment niet stil aan jou toewijzen.
       const unknown = !!was && !owners().some(([id]) => id === was);
-      pick.innerHTML = assigneeOptions(e.target.value, unknown ? was : "");
+      pick.innerHTML = assigneeOptions(keuze, unknown ? was : "");
       const has = (id) => [...pick.options].some((o) => o.value === id);
       const next = has(was) ? was : has(store.me().id) ? store.me().id : "";
       const blank = pick.querySelector('option[value=""]');
       if (next && blank) blank.remove();
       pick.value = next;
     };
-  }
-
-  // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
-  // x is waar de fase en de kleur staan: de opvolging van één product, of het
-  // ziekenhuis zelf zolang er geen product aan hangt.
-  function stageStatus(x, contacted) {
-    const before = x.status;
-    if (x.stage === "customer") x.status = "green";
-    else if (x.stage === "prospect") x.status = contacted ? x.status : "red";
-    else if (x.stage !== "not_interested" && x.status !== "green") x.status = "orange";
-    if (x.status !== before) toast(x.status === "green" ? t("status.toGreen") : t("status.toOrange"));
-  }
-
-  // Kleur automatisch mee laten evolueren; manueel aanpassen blijft altijd mogelijk.
-  // Een contactmoment hoort bij één product, dus het is de opvolging van dát
-  // product die meebeweegt — een bestelling voor het ene maakt het andere niet
-  // groen.
-  function autoStatus(h, act) {
-    // Zonder product op het contactmoment: hangt er precies één product aan
-    // het ziekenhuis, dan is het dat. Hangen er meer aan, dan valt niet te
-    // raden welk — en dan blijft alles staan, liever dan het verkeerde product
-    // groen te maken. Hangt er geen aan, dan is het het ziekenhuis zelf.
-    const rows = myProducts().filter((p) => h.products.includes(p) && h.pipeline[p]);
-    const x = (act.product && h.pipeline[act.product])
-      || (rows.length === 1 ? h.pipeline[rows[0]] : rows.length ? null : h);
-    if (!x) return;
-    if ((act.type === "installation" || act.type === "order") && x.status !== "green") {
-      x.status = "green";
-      if (PRE_SALE.includes(x.stage)) x.stage = "customer";
-      toast(t("status.toGreen"));
-    } else if (x.status === "red") {
-      x.status = "orange";
-      if (x.stage === "prospect") x.stage = "first_contact";
-      toast(t("status.toOrange"));
-    }
-    // Na een demo: geïnstalleerd bij een product per abonnement, in evaluatie
-    // bij een product per ingreep, waar niets geïnstalleerd wordt.
-    if (act.type === "demo" && ["prospect", "first_contact", "meeting", "demo_planned"].includes(x.stage)) {
-      x.stage = productKind(act.product) === "procedure" ? "evaluation" : "demo_installed";
-    }
-    syncPipeline(h);
-  }
-
-  // Kamers van de afdeling bijwerken na een demo, installatie of stopzetting.
-  //
-  // Installaties tellen op: na een installatie van 2 en later nog een van 3
-  // staan er 5 kamers live. Een stopgezet abonnement telt er weer af. We passen
-  // het verschil toe en niet de som van alle contactmomenten, zodat een aantal
-  // dat hier al handmatig stond blijft staan.
-  // Een demo overschrijft wél: dat is de huidige toestand, geen optelsom — we
-  // nemen het aantal van de laatste demo waarvoor een aantal is ingevuld.
-  function syncRooms(h, before, after) {
-    // Alleen voor een product per abonnement: het aantal bij een RFA-bestelling
-    // zijn stuks, geen kamers, en hoort dus niet bij de afdeling opgeteld.
-    const perKamer = (a) => !!a && productKind(a.product) === "subscription";
-    const installed = (a) => {
-      if (!perKamer(a) || !a.rooms) return 0;
-      if (a.type === "installation") return a.rooms;
-      if (a.type === "cancellation") return -a.rooms;
-      return 0;
-    };
-    const delta = installed(after) - installed(before);
-    if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
-      h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);
-    }
-    if ((perKamer(before) && before.type === "demo") || (perKamer(after) && after.type === "demo")) {
-      const demos = h.activities.filter((a) => a.type === "demo" && a.rooms && perKamer(a));
-      if (demos.length) h.unit.roomsDemo = demos.sort((a, b) => b.date.localeCompare(a.date))[0].rooms;
-    }
   }
 
   // ---------- nieuw ziekenhuis ----------
@@ -2166,7 +2251,7 @@
             t("col.address"), t("col.createdAt"), t("col.notes"),
             t("field.network"), t("field.sites"),
             ...myProducts().flatMap((p) => [`${t("col.stage")} ${p}`, `${t("col.owner")} ${p}`,
-              ...(productKind(p) === "procedure" ? ["rfa.cmm", "rfa.prio", "rfa.doesAlready", "rfa.currentSystem", "rfa.notes"].map((k) => `${t(k)} ${p}`) : [])])],
+              ...factsFor(p).map((k) => `${t("rfa." + k)} ${p}`)])],
           ...hs.map((h) => [h.name, h.country && t("country." + h.country), h.sector && t("sector." + h.sector),
             t("status." + h.status), t("stage." + h.stage), h.products.join(", "), lastContact(h),
             countType(h, "demo"), ...(endoAccount() ? [countType(h, "installation"), h.unit.roomsInstalled ?? ""] : []),
@@ -2175,10 +2260,10 @@
             h.network, h.sites,
             ...myProducts().flatMap((p) => {
               const e = h.products.includes(p) && h.pipeline[p];
-              const rfa = productKind(p) === "procedure";
-              if (!e) return rfa ? ["", "", "", "", "", "", ""] : ["", ""];
-              return [t("stage." + e.stage), personName(e.owner),
-                ...(rfa ? [e.cmm && t("rfa.cmm." + e.cmm), e.prio ?? "", e.doesAlready && t("yn." + e.doesAlready), e.currentSystem, e.notes] : [])];
+              const facts = factsFor(p);
+              if (!e) return ["", "", ...facts.map(() => "")];
+              const shown = { cmm: e.cmm && t("rfa.cmm." + e.cmm), prio: e.prio ?? "", doesAlready: e.doesAlready && t("yn." + e.doesAlready), currentSystem: e.currentSystem, notes: e.notes };
+              return [t("stage." + e.stage), personName(e.owner), ...facts.map((k) => shown[k])];
             })]),
         ]), "text/csv");
       } else if (kind === "contacts") {
@@ -2196,7 +2281,7 @@
           [t("col.date"), t("col.time"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("dlg.p.assignee"), t("col.addedBy")],
           ...hs.flatMap((h) => h.planned.filter((p) => inPeriod(p.date)).map((p) => ({ h, p })))
             .sort((x, y) => byWhen(x.p, y.p) || x.h.name.localeCompare(y.h.name))
-            .map(({ h, p }) => [p.date, p.time || "", h.name, t("act." + p.type), p.product,
+            .map(({ h, p }) => [p.date, p.time || "", h.name, t("act." + p.type), productsOf(p).join(", "),
               (h.contacts.find((c) => c.id === p.contactId) || {}).name, p.note, personName(assigneeOf(p)) || (p.assignee ? "?" : ""), personName(p.createdBy)]),
         ]), "text/csv");
       } else if (kind === "units") {
@@ -2280,7 +2365,7 @@
   // een arts in de agenda van een derde partij.
   const icsEventOf = (h, p) => ({
     id: p.id, date: p.date, time: p.time || "", country: h.country,
-    title: Ics.title(t("act." + p.type), p.product ? [p.product] : [], h.name),
+    title: Ics.title(t("act." + p.type), productsOf(p), h.name),
     location: Ics.place(h.name, h.address),
     description: p.note,
   });
@@ -2300,27 +2385,37 @@
   ].join(" · ");
   // Eén abonnement in een lijst. button is de knop om het stop te zetten: in
   // de dialoog een verzendknop, op het gebruikersscherm een gewone knop.
-  const feedRow = (f, owner, button) => `<li class="feed-row">
+  const feedRow = (f, owner, button) => `<div class="u-row feed-row">
       <div class="feed-what">
-        <b>${esc(f.label || t("feeds.unnamed"))}</b>${owner ? ` <span class="muted">· ${esc(owner)}</span>` : ""}
+        <span><b>${esc(f.label || t("feeds.unnamed"))}</b>${owner ? ` <span class="muted">· ${esc(owner)}</span>` : ""}</span>
         <span class="muted">${esc(feedSummary(f))}</span>
         <span class="muted">${esc(t("feeds.created", { date: feedDate(f.created_at) }))} · ${
           esc(f.last_used ? t("feeds.used", { date: feedDate(f.last_used) }) : t("feeds.neverUsed"))}</span>
       </div>
       ${button}
-    </li>`;
+    </div>`;
 
-  // Abonneren: een adres dat je agenda-app zelf ophaalt. De dialoog maakt er
-  // een aan, toont het één keer, en lijst de abonnementen die je al hebt.
+  // Abonneren: een adres dat je agenda-app zelf ophaalt. Twee toestanden in
+  // dezelfde dialoog. Eerst de abonnementen die je al hebt en het formulier
+  // voor een nieuw. Na het aanmaken maakt dat plaats voor het adres zelf, met
+  // "Klaar" als enige knop: het adres is een sleutel die je maar één keer te
+  // zien krijgt, dus er mag dan niets anders meer om aandacht vragen. Wie
+  // sluit zonder te kopiëren, krijgt eerst de vraag of dat de bedoeling is.
+  // Het maximum aantal abonnementen per account. De databank beslist het
+  // (c_max in feed_create(), schema.sql); dit is enkel om het formulier op
+  // tijd weg te laten. Verander je het daar, verander het dan ook hier.
+  const FEED_MAX = 10;
   function feedDialog() {
     if (!store.feeds) return tell(t("feeds.localOnly"));
     const products = myProducts();
     // Een tweede klik terwijl de eerste nog onderweg is, maakt geen tweede adres.
     let busy = false;
-    const form = openDialog(`
+    const keuzeHtml = () => `
       <h2>${esc(t("feeds.title"))}</h2>
       <p class="muted">${esc(t("feeds.intro"))}</p>
-      <div class="feed-fresh" hidden></div>
+      <h3 class="feed-h">${esc(t("feeds.yours"))}</h3>
+      <div class="feed-list"><p class="muted">${esc(t("feeds.loading"))}</p></div>
+      <div class="feed-new">
       <h3 class="feed-h">${esc(t("feeds.new"))}</h3>
       <div class="grid">
         <label class="field full">${esc(t("feeds.label"))}<input name="label" maxlength="80" placeholder="${esc(t("feeds.label.ph"))}"></label>
@@ -2336,17 +2431,56 @@
         ], t("feeds.allProducts"))}</div>` : ""}
       </div>
       <p class="muted">${esc(t("feeds.delay"))}</p>
+      </div>
+      <p class="muted feed-full" hidden>${esc(t("feeds.limit"))}</p>
       <div class="actions">
         <button class="btn" value="cancel" formnovalidate>${esc(t("btn.close"))}</button>
         <button class="btn primary" value="create">${esc(t("feeds.create"))}</button>
+      </div>`;
+    const adresHtml = (url) => {
+      const webcal = url.replace(/^https:/, "webcal:");
+      const google = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}`;
+      // Per agenda hoe je het toevoegt, dichtgeklapt: wie Outlook gebruikt,
+      // hoeft de stappen voor Apple niet te lezen. name maakt er één groep
+      // van, zodat er telkens één openstaat. Gewone <details>, geen .pick:
+      // de luisteraar in domain.js laat ze dus met rust.
+      return `
+      <h2>${esc(t("feeds.readyTitle"))}</h2>
+      <p class="muted">${esc(t("feeds.ready"))}</p>
+      <div class="feed-url">
+        <input readonly value="${esc(url)}" aria-label="${esc(t("feeds.address"))}">
+        <button type="button" class="btn" data-feed-copy>${icon("copy")} ${esc(t("feeds.copy"))}</button>
       </div>
-      <h3 class="feed-h">${esc(t("feeds.yours"))}</h3>
-      <div class="feed-list"><p class="muted">${esc(t("feeds.loading"))}</p></div>`, (data, action) => {
+      <p class="feed-warn">${esc(t("feeds.secret"))}</p>
+      <div class="feed-how">
+        ${[
+          ["apple", `<a class="btn small" href="${esc(webcal)}">${icon("calendar")} ${esc(t("feeds.openApp"))}</a>`],
+          ["google", `<a class="btn small" href="${esc(google)}" target="_blank" rel="noopener noreferrer">${esc(t("feeds.openGoogle"))}</a>`],
+          ["outlook", ""],
+        ].map(([k, button]) => `<details name="feed-how">
+          <summary>${icon("next")}<span>${esc(t("feeds.how." + k))}</span></summary>
+          <div class="feed-how-body">
+            ${button ? `<p>${button}</p>` : ""}
+            <ol>${t("feeds.how." + k + ".steps").split("\n").map((step) => `<li>${esc(step)}</li>`).join("")}</ol>
+          </div>
+        </details>`).join("")}
+      </div>
+      <div class="actions">
+        <button class="btn primary" value="done">${esc(t("feeds.done"))}</button>
+      </div>`;
+    };
+    // Zolang de databank het adres nog maakt, gaat de dialoog niet dicht: het
+    // antwoord hoort in deze dialoog en nergens anders.
+    const nietTerwijlBezig = () => {
+      if (busy) toast(t("feeds.busy"));
+      return Promise.resolve(!busy);
+    };
+    const form = openDialog(keuzeHtml(), (data, action) => {
       if (action === "create" && !busy) {
         busy = true;
         const chosen = [...form.querySelectorAll("[data-feed-product]:checked")].map((b) => b.dataset.feedProduct);
         store.feedCreate({ label: data.label.trim(), mine: data.mine === "1", products: chosen, lang: data.lang })
-          .then((r) => { showFresh(store.feedUrl(r.secret)); form.elements.label.value = ""; return loadList(); })
+          .then((r) => toonAdres(store.feedUrl(r.secret)))
           .catch((e) => tell(t("feeds.failed", { msg: e.message })))
           .finally(() => { busy = false; });
       } else if (action.startsWith("remove:")) {
@@ -2356,7 +2490,14 @@
           .catch((e) => tell(t("feeds.failed", { msg: e.message }))));
       }
       return KEEP_OPEN;
-    });
+    }, null, { beforeClose: nietTerwijlBezig });
+    // Enter in het naamveld maakt het adres. Anders nam de browser de eerste
+    // knop van het formulier, en dat is "Stopzetten" bij het eerste abonnement.
+    form.elements.label.onkeydown = (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      $('[value="create"]', form).click();
+    };
     // "Alle producten" en de losse vakjes sluiten elkaar uit, zoals op het
     // gebruikersscherm. Niets aangevinkt is weer alles.
     form.onchange = (e) => {
@@ -2368,53 +2509,40 @@
       if (!all.checked && !boxes.some((b) => b.checked)) all.checked = true;
       syncPick(all.closest("details.pick"));
     };
-    // Het adres, één keer. De databank bewaart enkel een hash: wie het hier
-    // niet kopieert, maakt later een nieuw.
-    function showFresh(url) {
-      const box = $(".feed-fresh", form);
-      const webcal = url.replace(/^https:/, "webcal:");
-      const google = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}`;
-      box.innerHTML = `
-        <p><b>${esc(t("feeds.ready"))}</b></p>
-        <div class="feed-url">
-          <input readonly value="${esc(url)}" aria-label="${esc(t("feeds.address"))}">
-          <button type="button" class="btn small" data-feed-copy>${icon("copy")} ${esc(t("feeds.copy"))}</button>
-        </div>
-        <p class="feed-warn">${esc(t("feeds.secret"))}</p>
-        ${/* Per agenda hoe je het toevoegt, dichtgeklapt: wie Outlook gebruikt,
-             hoeft de stappen voor Apple niet te lezen. name maakt er één groep
-             van, zodat er telkens één openstaat. Gewone <details>, geen
-             .pick: de luisteraar in domain.js laat ze dus met rust. */""}
-        <div class="feed-how">
-          ${[
-            ["apple", `<a class="btn small" href="${esc(webcal)}">${icon("calendar")} ${esc(t("feeds.openApp"))}</a>`],
-            ["google", `<a class="btn small" href="${esc(google)}" target="_blank" rel="noopener noreferrer">${esc(t("feeds.openGoogle"))}</a>`],
-            ["outlook", ""],
-          ].map(([k, button]) => `<details name="feed-how">
-            <summary>${icon("next")}<span>${esc(t("feeds.how." + k))}</span></summary>
-            <div class="feed-how-body">
-              ${button ? `<p>${button}</p>` : ""}
-              <ol>${t("feeds.how." + k + ".steps").split("\n").map((step) => `<li>${esc(step)}</li>`).join("")}</ol>
-            </div>
-          </details>`).join("")}
-        </div>`;
-      box.hidden = false;
-      const input = $("input", box);
-      $("[data-feed-copy]", box).onclick = () => {
+    // De tweede toestand. De databank bewaart enkel een hash: wie het adres
+    // hier niet kopieert, maakt later een nieuw.
+    function toonAdres(url) {
+      let copied = false;
+      // Een eigen dialoog, in dezelfde doos: "Klaar" sluit hem, en wie sluit
+      // zonder te kopiëren krijgt eerst de vraag.
+      openDialog(adresHtml(url), () => undefined, null, {
+        beforeClose: () => (copied ? Promise.resolve(true) : ask(t("feeds.notCopied"), { ok: t("feeds.closeAnyway") })),
+      });
+      const input = $(".feed-url input", form);
+      $("[data-feed-copy]", form).onclick = () => {
         input.select();
-        (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject())
-          .then(() => toast(t("feeds.copied")), () => { document.execCommand("copy"); toast(t("feeds.copied")); });
+        const gelukt = () => { copied = true; toast(t("feeds.copied")); };
+        const mislukt = () => toast(t("feeds.copyFailed"));
+        if (navigator.clipboard) navigator.clipboard.writeText(url).then(gelukt, () => (document.execCommand("copy") ? gelukt() : mislukt()));
+        else if (document.execCommand("copy")) gelukt(); else mislukt();
       };
       input.focus();
       input.select();
     }
     function loadList() {
       const list = $(".feed-list", form);
+      if (!list) return Promise.resolve();
       return store.feedList().then((feeds) => {
-        list.innerHTML = feeds.length ? `<ul class="feed-rows">${feeds.map((f) => feedRow(f, "",
-          `<button class="btn small danger" value="remove:${esc(f.id)}" formnovalidate>${esc(t("feeds.remove"))}</button>`)).join("")}</ul>`
+        // Bij het maximum geen formulier dat pas na een klik zegt dat het niet
+        // kan: dan staat er meteen dat je er eerst een moet stopzetten.
+        const vol = feeds.length >= FEED_MAX;
+        $(".feed-new", form).hidden = vol;
+        $(".feed-full", form).hidden = !vol;
+        $('[value="create"]', form).hidden = vol;
+        list.innerHTML = feeds.length ? `<div class="u-list">${feeds.map((f) => feedRow(f, "",
+          `<button class="btn small danger" value="remove:${esc(f.id)}" formnovalidate>${esc(t("feeds.remove"))}</button>`)).join("")}</div>`
           : `<p class="muted">${esc(t("feeds.none"))}</p>`;
-      }, (e) => { list.innerHTML = `<p class="login-error">${esc(t("feeds.failed", { msg: e.message }))}</p>`; });
+      }, (e) => { list.innerHTML = `<p class="feed-error">${esc(t("feeds.failed", { msg: e.message }))}</p>`; });
     }
     loadList();
   }
@@ -2440,7 +2568,7 @@
     const when = p.date ? new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" })
       : t("planned.noDate");
     return `<li class="ag-row ${isLate(p) ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
-      <div class="ag-date"><b>${esc(when)}</b><span>${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
+      <div class="ag-date"><b${p.date ? "" : ' class="nodate"'}>${esc(when)}</b><span>${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
       <div class="ag-body">
         <div class="ag-name">${esc(h.name)}</div>
         <div class="ag-sub"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(sub)}</div>
@@ -2449,7 +2577,7 @@
       <div class="ag-acts">
         <button class="icon-btn" data-ag="done" title="${esc(t("btn.done.title"))}" aria-label="${esc(t("btn.done.title"))}">${icon("check")}</button>
         <button class="icon-btn" data-ag="edit" title="${esc(t("btn.edit"))}" aria-label="${esc(t("btn.edit"))}">${icon("edit")}</button>
-        ${p.date ? `<button class="icon-btn" data-ag="ics" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>` : ""}
+        ${p.date ? `<button class="icon-btn" data-ag="ics" title="${esc(t("btn.ics"))}" aria-label="${esc(t("btn.ics"))}">${icon("calendar")}</button>` : ICON_SLOT}
         <button class="icon-btn" data-ag="open" title="${esc(t("agenda.open"))}" aria-label="${esc(t("agenda.open"))}">${icon("arrow")}</button>
       </div>
     </li>`;
@@ -2522,13 +2650,13 @@
         </div>
       </div>
       ${items.length ? "" : `<p class="muted">${esc(t(state.agenda.assignees.length ? "agenda.noneFor" : "agenda.none"))}</p>`}
-      ${undated.length && !day ? `<div class="ag-block">
-        <h3 class="ag-h">${esc(t("agenda.undated"))} <span class="badge neutral">${undated.length}</span></h3>
-        <ul class="ag-list">${undated.map(agendaRow).join("")}</ul>
-      </div>` : ""}
       ${overdue.length && !day && !past ? `<div class="ag-block">
         <h3 class="ag-h">${esc(t("agenda.overdue"))} <span class="badge">${overdue.length}</span></h3>
         <ul class="ag-list">${overdue.map(agendaRow).join("")}</ul>
+      </div>` : ""}
+      ${undated.length && !day ? `<div class="ag-block undated">
+        <h3 class="ag-h">${esc(t("agenda.undated"))} <span class="badge neutral">${undated.length}</span></h3>
+        <ul class="ag-list">${undated.map(agendaRow).join("")}</ul>
       </div>` : ""}
       ${items.length ? `<div class="ag-block">
         <h3 class="ag-h">${esc(day ? fmtDate(day) : monthLabel)}${day ? ` · <button class="link" data-ag="clear">${esc(t("btn.wholeMonth"))}</button>` : ""}</h3>
@@ -2599,7 +2727,7 @@
         if (L.authors.length && !L.authors.includes(a.createdBy)) continue;
         if (words.length) {
           const c = h.contacts.find((x) => x.id === a.contactId);
-          const hay = [place, c && c.name, t("act." + a.type), a.product, a.note].join(" ").toLowerCase();
+          const hay = [place, c && c.name, t("act." + a.type), productsOf(a).join(" "), a.note].join(" ").toLowerCase();
           if (!words.every((w) => hay.includes(w))) continue;
         }
         out.push({ h, a });
@@ -2672,13 +2800,22 @@
         <button class="btn small" data-log-more>${esc(t("log.more"))}</button></p>` : ""}`;
     settle();
   }
+  // De soorten in de filter: die van de producten waarop gefilterd is, of van
+  // je eigen producten. Wat al aangevinkt staat blijft erbij, anders valt een
+  // vinkje weg dat nog wel filtert.
+  function logTypes() {
+    const offered = typesOffered(state.filter.products.length ? state.filter.products : myProducts());
+    return ACT_TYPE_KEYS.filter((k) => offered.includes(k) || state.log.types.includes(k));
+  }
+  const logPick = (key, items, label, leeg, voor) => pickBox(items.map((k) => ({
+    attrs: `data-log-pick="${esc(key)}" data-value="${esc(k)}"`, label: label(k), checked: state.log[key].includes(k),
+  })), leeg, false, voor);
+  const logTypesPick = () => logPick("types", logTypes(), (k) => t("act." + k), t("log.allTypes"));
   function renderLog() {
     const L = state.log;
     const only = L.hospitalId && byId(L.hospitalId);
     if (L.hospitalId && !only) clearLogHospital();
-    const pick = (key, items, label, leeg, voor) => pickBox(items.map((k) => ({
-      attrs: `data-log-pick="${esc(key)}" data-value="${esc(k)}"`, label: label(k), checked: L[key].includes(k),
-    })), leeg, false, voor);
+    const pick = logPick;
     agendaView.innerHTML = `
       <div class="s-head">
         <h2>${esc(t("agenda.title"))}</h2>
@@ -2693,7 +2830,7 @@
         ${only ? "" : FILTERS.filter((f) => f.key !== "statuses" && f.items().length).map((f) => `<label>${pickBox(f.items().map((k) => ({
           attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`, label: f.label(k), checked: chosen(f.key).includes(k),
         })), f.leeg(), false, f.voor && f.voor())}</label>`).join("")}
-        <label>${pick("types", ACT_TYPE_KEYS, (k) => t("act." + k), t("log.allTypes"))}</label>
+        <label data-log-types>${logTypesPick()}</label>
         ${owners().length ? `<label>${pick("authors", owners().map(([id]) => id), personLabel, t("log.anyAuthor"), t("log.author"))}</label>` : ""}
         ${only ? "" : `<input type="search" data-log-search value="${esc(state.filter.query)}" placeholder="${esc(t("log.search"))}" aria-label="${esc(t("log.search"))}">`}
       </div>
@@ -2948,6 +3085,10 @@
       renderList();
       renderMarkers();
       renderKpis();
+      // Andere producten, andere soorten: alleen dat ene veld, de rest van de
+      // filterrij blijft staan zodat de open uitklapper niet dichtklapt.
+      const types = d.filter === "products" && $("[data-log-types]", agendaView);
+      if (types) types.innerHTML = logTypesPick();
     } else if (d.logPick) {
       state.log[d.logPick] = toggle(state.log[d.logPick], d.value);
     } else if ("logPeriod" in d) {
@@ -3160,10 +3301,10 @@
     const box = usersView.querySelector(".feed-list-all");
     if (!box) return;
     store.feedList(true).then((feeds) => {
-      box.innerHTML = feeds.length ? `<ul class="feed-rows">${feeds.map((f) => feedRow(f, f.owner_name || "?",
-        `<button type="button" class="btn small danger" data-feed-remove="${esc(f.id)}">${esc(t("feeds.remove"))}</button>`)).join("")}</ul>`
+      box.innerHTML = feeds.length ? `<div class="u-list">${feeds.map((f) => feedRow(f, f.owner_name || "?",
+        `<button type="button" class="btn small danger" data-feed-remove="${esc(f.id)}">${esc(t("feeds.remove"))}</button>`)).join("")}</div>`
         : `<p class="muted">${esc(t("feeds.noneAll"))}</p>`;
-    }, (e) => { box.innerHTML = `<p class="login-error">${esc(t("feeds.failed", { msg: e.message }))}</p>`; });
+    }, (e) => { box.innerHTML = `<p class="feed-error">${esc(t("feeds.failed", { msg: e.message }))}</p>`; });
   }
   usersView.addEventListener("click", async (e) => {
     const b = e.target.closest("[data-feed-remove]");

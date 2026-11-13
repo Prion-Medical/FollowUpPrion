@@ -30,6 +30,7 @@ window.FollowUpDomain = (() => {
     visit: "#16a3a3",
     congress: "#8a5cf6",
     demo: "#f29a1f",
+    procedure: "#d9467a",
     installation: "#22a45d",
     training: "#0ea5a5",
     quote: "#b45309",
@@ -41,32 +42,94 @@ window.FollowUpDomain = (() => {
   // er ook bij: EndoQ en Ainex gaan per abonnement, en een stopgezet abonnement
   // haalt kamers weg — zie syncRooms() in app.js.
   const ROOM_TYPES = ["demo", "installation", "order", "cancellation"];
+  // Contactmomenten waarbij stuks verkocht zijn, bij een product per ingreep:
+  // wat besteld is, en wat verbruikt is tijdens een procedure waar een van ons
+  // bij stond. Dat laatste wordt evengoed betaald en telt dus mee.
+  const SOLD_TYPES = ["order", "procedure"];
   // De producten die Prion verdeelt. Dit is de énige lijst: de filters, de
   // dialogen, het beheerscherm en de statistieken lezen hem allemaal hier, en
   // alles wat per product bestaat (kleur, doelcijfer) wordt eruit afgeleid.
   // Komt er een derde bij, dan volstaat deze regel — plus followup.producten()
   // in supabase/schema.sql, want de databank kan dit bestand niet lezen.
-  const PRODUCTS = ["EndoQ", "Ainex", "Thyroid RFA", "Fibroid RFA"];
+  const PRODUCTS = ["EndoQ", "Ainex", "Thyroid RFA", "Fibroid RFA", "Stents"];
   // Niet elk product wordt op dezelfde manier verkocht. EndoQ en Ainex gaan
   // per abonnement, per kamer: daar tel je kamers en actieve abonnementen. De
   // RFA-producten worden per ingreep verbruikt — er is geen installatie en
-  // geen abonnement, er worden elektroden besteld. Wat hier niet in staat is
+  // geen abonnement, er worden elektroden besteld. Stents idem: één
+  // product voor alle stents samen, niet één per model. Wat hier niet in staat is
   // een abonnement: zo gedraagt een product dat de app nog niet kent zich
   // zoals alles zich tot nu toe gedroeg.
   // De lijst hierboven blijft een lijst van namen, en dat is met opzet: die
   // naam is wat er in de databank staat, bij elk contactmoment en in elk
   // bereik. Wat een product ís, hangt er hier naast.
-  const PRODUCT_KINDS = { "Thyroid RFA": "procedure", "Fibroid RFA": "procedure" };
+  const PRODUCT_KINDS = { "Thyroid RFA": "procedure", "Fibroid RFA": "procedure", Stents: "procedure" };
   const productKind = (p) => PRODUCT_KINDS[p] || "subscription";
   // Bij welk contactmoment hoort een aantal? Een contactmoment draagt één
   // getal, en wat het telt hangt af van het product: kamers bij een product
   // per abonnement (demo, installatie, bestelling, stopzetting), bestelde
-  // stuks bij een product per ingreep — en dan alleen bij een bestelling,
-  // want een demo of een installatie in kamers bestaat daar niet. Dat blijft
-  // een verkoopcijfer per ziekenhuis: wat er besteld is, nooit wie er
-  // behandeld is.
+  // stuks bij een product per ingreep — en dan alleen bij een bestelling of
+  // een procedure (verbruikte stuks), want een demo of een installatie in
+  // kamers bestaat daar niet. Dat blijft een verkoopcijfer per ziekenhuis:
+  // wat er besteld of verbruikt is, nooit wie er behandeld is.
   const wantsQuantity = (type, product) =>
-    (productKind(product) === "procedure" ? type === "order" : ROOM_TYPES.includes(type));
+    (productKind(product) === "procedure" ? SOLD_TYPES.includes(type) : ROOM_TYPES.includes(type));
+  // Welke soorten contactmoment je bij een product kunt kiezen. De lijst
+  // versmalt alleen de keuze: een bewaard moment met een soort die hier niet
+  // meer in staat, blijft bestaan en blijft leesbaar. "prospecting" is zo'n
+  // soort: het zei dat het een eerste benadering was maar niet hoe, en mail,
+  // telefoon en bezoek hebben elk hun eigen soort. Een product per ingreep
+  // wordt niet geïnstalleerd en niet stopgezet; bij een abonnement is een
+  // demo wat daar een procedure is.
+  const RETIRED_TYPES = ["prospecting"];
+  const typesFor = (p) => Object.keys(ACT_TYPES).filter((k) => !RETIRED_TYPES.includes(k)
+    && !(productKind(p) === "procedure" ? ["installation", "cancellation"] : ["procedure"]).includes(k));
+  // Voor meerdere producten samen (het bereik van een account, de filter van
+  // het logboek): alles wat bij minstens één ervan hoort, in de vaste volgorde.
+  const typesOffered = (products) => Object.keys(ACT_TYPES).filter((k) => products.some((p) => typesFor(p).includes(k)));
+  // Soorten binnen één product, waar die bestaan. Bij stents verschilt te veel
+  // per soort om ze op één hoop te tellen; een bestelling of een procedure
+  // kan er daarom één meekrijgen, en de statistieken tellen per soort.
+  // Sleutels, zoals overal: de tekst komt uit i18n.js ("family.x").
+  const FAMILIES = { Stents: ["oesophageal", "biliary", "colonic", "other"] };
+  const familiesFor = (p) => (Object.prototype.hasOwnProperty.call(FAMILIES, p) ? FAMILIES[p] : []);
+  // Bij een moment met een aantal hoort ook de soort, als het product er kent:
+  // een bestelling of een procedure dus. Ook een gepland moment van die soort
+  // kan haar al dragen; bij het afvinken gaat ze mee.
+  const wantsFamily = (type, product) => familiesFor(product).length > 0 && wantsQuantity(type, product);
+  // Een moment gaat meestal over één product, soms over meer: een gesprek
+  // over Thyroid RFA en Fibroid RFA tegelijk. Twee vormen dus, zoals de
+  // databank ze ook leest (in_scope): "product" met één naam, of "products"
+  // met een lijst. Bestaande momenten houden de eerste vorm; de lijst komt er
+  // pas als iemand er meer dan één kiest, en blijft dan de vorm van dat
+  // record, ook als er later maar één overblijft. Terugzetten kan niet
+  // veilig: wie afgeschermd is ziet maar een deel van de lijst, en de
+  // databank voegt de rest er alleen bij zolang het een lijst is.
+  const productsOf = (r) => (!r ? [] : Array.isArray(r.products) ? r.products : r.product ? [r.product] : []);
+  // Hét product van een moment: de naam als het er precies één is, anders
+  // leeg. Alles wat een aantal telt (kamers, stuks) hoort bij één product.
+  const productOf = (r) => { const l = productsOf(r); return l.length === 1 ? l[0] : ""; };
+  // De soorten die bij een keuze van producten passen. Geen product: alles
+  // wat het account kan kiezen. Eén: de soorten van dat product. Meer: wat
+  // bij elk ervan bestaat en bij geen ervan een aantal draagt, want een
+  // aantal is niet over twee producten te verdelen.
+  //
+  // gedeeld: het moment staat in de lijstvorm (shared() hieronder). Wie
+  // maar één product mag, ziet van een gesprek over twee producten enkel het
+  // zijne; het is toch een moment over meer, en draagt dus geen aantal.
+  const typesAmong = (list, mine, gedeeld = false) => (!list.length ? typesOffered(mine)
+    : list.length === 1 && !gedeeld ? typesFor(list[0])
+    : Object.keys(ACT_TYPES).filter((k) => list.every((p) => typesFor(p).includes(k) && !wantsQuantity(k, p))));
+  // Staat een moment in de lijstvorm, dan gaat het over meer dan één product,
+  // ook als wie het bekijkt er maar één van ziet (de databank snoeit de
+  // lijst). Zo'n moment draagt nooit een aantal of een soort stent; de
+  // databank haalt ze er ook zelf af (zonder_aantal() in schema.sql).
+  const shared = (r) => !!r && Array.isArray(r.products);
+  // De soorten die elk van de gekozen producten kent, ook die met een aantal.
+  // Voor een plan (dat draagt nooit een aantal) en voor een nieuw contactmoment
+  // over meer producten met een aantal: dat wordt bij het bewaren één
+  // contactmoment per product, elk met zijn eigen aantal.
+  const typesInAll = (list, mine) => (!list.length ? typesOffered(mine)
+    : Object.keys(ACT_TYPES).filter((k) => list.every((p) => typesFor(p).includes(k))));
   // Welke producten deze gebruiker mag gebruiken. Een leeg bereik betekent
   // onbeperkt, dus dan zijn het ze allemaal. De databank schermt het document
   // al af; dit is er zodat de app geen keuze aanbiedt die toch geweigerd wordt.
@@ -118,6 +181,14 @@ window.FollowUpDomain = (() => {
   // mag het ziekenhuis niet bestellen. Sleutels, zoals overal: de tekst komt
   // uit i18n.js.
   const CMM_STATES = ["not_ok", "requested", "ok"];
+  // Niet elk product per ingreep wil dezelfde gegevens. Bij stents verschilt
+  // de CMM-goedkeuring per soort stent, zodat één veld per ziekenhuis niets
+  // zou zeggen, en "doet al" en de huidige leverancier worden daar niet
+  // bijgehouden, een prioriteit evenmin: alleen een notitie blijft over.
+  const FACTS = ["cmm", "prio", "doesAlready", "currentSystem", "notes"];
+  const PRODUCT_FACTS = { Stents: ["notes"] };
+  const factsFor = (p) => (productKind(p) !== "procedure" ? []
+    : Object.prototype.hasOwnProperty.call(PRODUCT_FACTS, p) ? PRODUCT_FACTS[p] : FACTS);
   const YES_NO = ["yes", "no", "unknown"];
   const SCOPE_BRANDS = ["Olympus", "Pentax", "Fujifilm", "other"];
   // De toren staat los van de scopes — daar hangt EndoQ of
@@ -178,11 +249,11 @@ window.FollowUpDomain = (() => {
   // tekst — dus elke oproeper zet er zelf esc() rond, net als bij elke andere
   // sjabloon in dit project. Alleen vaste namen en al ontsmette waarden dus.
   //
-  // type "radio" maakt er een keuze van één. Die vorm gebruiken de dialogen
-  // van een contactmoment en een gepland moment: zo'n moment hoort bij één
-  // product. Dat is geen vergetelheid — de kamers van een installatie tellen
-  // mee voor het doelcijfer van dat product, en "drie kamers voor allebei" is
-  // geen getal dat ergens eerlijk op te tellen valt.
+  // type "radio" maakt er een keuze van één. Die vorm gebruikten de dialogen
+  // van een contactmoment en een gepland moment, tot een gesprek over twee
+  // producten tegelijk moest kunnen. Wat een aantal draagt hoort nog altijd
+  // bij één product (typesAmong): "drie kamers voor allebei" is geen getal
+  // dat ergens eerlijk op te tellen valt.
   const pickRow = (r) =>
     `<label class="${esc(r.cls || "")}"><input type="${esc(r.type || "checkbox")}" ${r.attrs} ${r.checked ? "checked" : ""}>${esc(r.label)}</label>`;
   // leeg is de tekst voor "niets aangevinkt". Zit er een rij "alle" in de
@@ -323,7 +394,7 @@ window.FollowUpDomain = (() => {
   // syncRooms() in app.js, hier nodig om te zien of een gewijzigd aantal
   // geïnstalleerde kamers uit contactmomenten volgt of met de hand is getypt.
   const roomsFrom = (h) => ((h && h.activities) || []).reduce((n, a) => {
-    if (!a || !a.rooms || productKind(a.product) !== "subscription") return n;
+    if (!a || !a.rooms || productKind(productOf(a)) !== "subscription") return n;
     return n + (a.type === "installation" ? a.rooms : a.type === "cancellation" ? -a.rooms : 0);
   }, 0);
   // Wat alleen op het niveau van één ziekenhuis te beslissen valt.
@@ -430,10 +501,200 @@ window.FollowUpDomain = (() => {
     return mine;
   }
 
+  // ---------- wat een contactmoment met de opvolging doet ----------
+  // Hier en niet in app.js: de koppeling voor een assistent houdt er een kopie
+  // van, en tests/regels.mjs legt de twee naast elkaar. Geen meldingen: wat
+  // een kleur veranderde geven stageStatus() en autoStatus() terug, en de app
+  // toont dat.
+  const str = (v) => (v == null ? "" : String(v));
+  // De gegevens van een product per ingreep. Ze staan in de rij van dat
+  // product in h.pipeline en niet in een blok op het ziekenhuis zoals unit:
+  // Thyroid RFA en Fibroid RFA hebben elk hun eigen goedkeuring, prioriteit en
+  // concurrent in hetzelfde ziekenhuis, en zo vallen ze vanzelf binnen de
+  // productmuur — de databank schermt die rijen al af per product.
+  // Welke er bij een product horen zegt factsFor() in domain.js: bij stents
+  // alleen de notitie. Wat er niet bij hoort krijgt ook geen
+  // lege sleutel.
+  function normalizeFacts(e, p) {
+    const has = (k) => factsFor(p).includes(k);
+    if (has("cmm")) e.cmm = CMM_STATES.includes(e.cmm) ? e.cmm : "";
+    if (has("prio")) e.prio = [1, 2, 3].includes(Number(e.prio)) ? Number(e.prio) : null;
+    if (has("doesAlready")) e.doesAlready = YES_NO.includes(e.doesAlready) ? e.doesAlready : "";
+    if (has("currentSystem")) e.currentSystem = str(e.currentSystem);
+    if (has("notes")) e.notes = str(e.notes);
+    return e;
+  }
+
+  // De opvolging per product. Elk product dat bij het ziekenhuis aangevinkt
+  // staat krijgt een eigen fase, kleur en verantwoordelijke; wat op het
+  // ziekenhuis zelf staat volgt daaruit (zie pipelineView in domain.js).
+  //
+  // Vroeger was er één fase per ziekenhuis. Die wordt hier de fase van elk
+  // product dat er toen aangevinkt stond — de app wist niet beter, en twee
+  // keer dezelfde fase is juister dan één van de twee op prospect zetten. Een
+  // product dat er láter bijkomt begint vooraan: prospect, of eerste contact
+  // als er al een contactmoment voor bestaat.
+  //
+  // Een rij verdwijnt hier nooit, ook niet als het vinkje weggaat. Wie
+  // afgeschermd is krijgt h.products gesnoeid op zijn eigen bereik, en zou
+  // anders de opvolging van een collega wissen bij de eerste opslag.
+  function syncPipeline(h) {
+    if (!h.pipeline || typeof h.pipeline !== "object" || Array.isArray(h.pipeline)) h.pipeline = {};
+    for (const [p, e] of Object.entries(h.pipeline)) {
+      if (!e || typeof e !== "object") { delete h.pipeline[p]; continue; }
+      e.stage = STAGES.includes(e.stage) ? e.stage : "prospect";
+      e.status = STATUSES.includes(e.status) ? e.status : "red";
+      e.owner = str(e.owner);
+      if (productKind(p) === "procedure") normalizeFacts(e, p);
+    }
+    const eerste = !Object.keys(h.pipeline).length;
+    for (const p of h.products) {
+      if (h.pipeline[p]) continue;
+      const contacted = h.activities.some((a) => productsOf(a).includes(p));
+      const e = eerste ? { stage: h.stage, status: h.status, owner: "" }
+        : { stage: contacted ? "first_contact" : "prospect", status: contacted ? "orange" : "red", owner: "" };
+      // Een fase die dit product niet kent, schuift naar de dichtste die het
+      // wel kent: allebei liggen ze net voor of net na de evaluatie.
+      if (!stagesFor(p).includes(e.stage)) e.stage = "evaluation";
+      if (productKind(p) === "procedure") normalizeFacts(e, p);
+      h.pipeline[p] = e;
+    }
+    if (h.products.length) {
+      const f = furthest(h.products.map((p) => h.pipeline[p]));
+      h.status = f.status;
+      h.stage = f.stage;
+    } else if (!stagesFor("").includes(h.stage)) {
+      // Zonder product geldt de keuzelijst van het ziekenhuis zelf, en die
+      // kent niet elke fase.
+      h.stage = "evaluation";
+    }
+  }
+
+  // Het laatste product is afgevinkt. De kleur en de fase op het ziekenhuis
+  // waren die van dat product; ze laten staan zou zeggen dat een ziekenhuis
+  // zonder product klant is. Terug naar wat de contactmomenten zeggen. Wat er
+  // per product stond blijft bewaard en komt terug als het vinkje terugkomt.
+  function zonderProduct(h) {
+    if (h.products.length) return;
+    const contacted = h.activities.length > 0;
+    h.status = contacted ? "orange" : "red";
+    h.stage = contacted ? "first_contact" : "prospect";
+  }
+
+  // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
+  // x is waar de fase en de kleur staan: de opvolging van één product, of het
+  // ziekenhuis zelf zolang er geen product aan hangt.
+  function stageStatus(x, contacted) {
+    const before = x.status;
+    if (x.stage === "customer") x.status = "green";
+    else if (x.stage === "prospect") x.status = contacted ? x.status : "red";
+    else if (x.stage !== "not_interested" && x.status !== "green") x.status = "orange";
+    // De nieuwe kleur als ze veranderde, anders niets: de app toont er een
+    // melding bij, de koppeling en de controles niet.
+    return x.status !== before ? x.status : null;
+  }
+
+  // Kleur automatisch mee laten evolueren; manueel aanpassen blijft altijd mogelijk.
+  // Een contactmoment hoort bij één product, dus het is de opvolging van dát
+  // product die meebeweegt — een bestelling voor het ene maakt het andere niet
+  // groen.
+  function autoStatus(h, act) {
+    // Zonder product op het contactmoment: hangt er precies één product aan
+    // het ziekenhuis, dan is het dat. Hangen er meer aan, dan valt niet te
+    // raden welk — en dan blijft alles staan, liever dan het verkeerde product
+    // groen te maken. Hangt er geen aan, dan is het het ziekenhuis zelf.
+    // Gaat het over meer dan één product, dan beweegt elk van die rijen mee.
+    const rows = myProducts().filter((p) => h.products.includes(p) && h.pipeline[p]);
+    const named = productsOf(act).filter((p) => h.pipeline[p]);
+    const targets = named.length ? named.map((p) => [h.pipeline[p], p])
+      : rows.length === 1 ? [[h.pipeline[rows[0]], rows[0]]] : rows.length ? [] : [[h, ""]];
+    // Welke kleur erbij kwam, voor de melding in de app: groen wint.
+    let naar = null;
+    for (const [x, p] of targets) {
+      if ((act.type === "installation" || act.type === "order") && x.status !== "green") {
+        x.status = "green";
+        if (PRE_SALE.includes(x.stage)) x.stage = "customer";
+        naar = "green";
+      } else if (x.status === "red") {
+        x.status = "orange";
+        if (x.stage === "prospect") x.stage = "first_contact";
+        if (naar !== "green") naar = "orange";
+      }
+      // Na een demo: geïnstalleerd bij een product per abonnement, in evaluatie
+      // bij een product per ingreep, waar niets geïnstalleerd wordt. Een
+      // procedure waar een van ons bij stond is daar hetzelfde: het product is
+      // gebruikt, dus het wordt geëvalueerd. Een klant blijft klant.
+      if ((act.type === "demo" || act.type === "procedure") && ["prospect", "first_contact", "meeting", "demo_planned"].includes(x.stage)) {
+        x.stage = productKind(p) === "procedure" ? "evaluation" : "demo_installed";
+      }
+    }
+    syncPipeline(h);
+    return naar;
+  }
+
+  // Kamers van de afdeling bijwerken na een demo, installatie of stopzetting.
+  //
+  // Installaties tellen op: na een installatie van 2 en later nog een van 3
+  // staan er 5 kamers live. Een stopgezet abonnement telt er weer af. We passen
+  // het verschil toe en niet de som van alle contactmomenten, zodat een aantal
+  // dat hier al handmatig stond blijft staan.
+  // Een demo overschrijft wél: dat is de huidige toestand, geen optelsom — we
+  // nemen het aantal van de laatste demo waarvoor een aantal is ingevuld.
+  function syncRooms(h, before, after) {
+    // Alleen voor een product per abonnement: het aantal bij een RFA-bestelling
+    // zijn stuks, geen kamers, en hoort dus niet bij de afdeling opgeteld.
+    const perKamer = (a) => !!a && productKind(productOf(a)) === "subscription";
+    const installed = (a) => {
+      if (!perKamer(a) || !a.rooms) return 0;
+      if (a.type === "installation") return a.rooms;
+      if (a.type === "cancellation") return -a.rooms;
+      return 0;
+    };
+    const delta = installed(after) - installed(before);
+    if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
+      h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);
+    }
+    if ((perKamer(before) && before.type === "demo") || (perKamer(after) && after.type === "demo")) {
+      const demos = h.activities.filter((a) => a.type === "demo" && a.rooms && perKamer(a));
+      if (demos.length) h.unit.roomsDemo = demos.sort((a, b) => b.date.localeCompare(a.date))[0].rooms;
+    }
+  }
+
+  // ---------- planning en tellen ----------
+  // Ook hier omdat de koppeling (en voor de volgorde ook de databank) een
+  // kopie houdt, en tests/ die kopieën naast deze legt.
+  //
+  // De volgorde van geplande momenten: op datum, en op dezelfde dag eerst wat
+  // een uur heeft, in volgorde; wat "ergens die dag" is, komt na wat om negen
+  // uur begint. Een moment zonder datum heeft een lege datum en komt dus
+  // vooraan. Zo ligt h.planned opgeslagen, net als in fix_planned() in de
+  // databank en sortPlanned() in de koppeling: nextAction is dan wat de
+  // agenda als eerste toont.
+  const byWhen = (a, b) => (a.date || "").localeCompare(b.date || "") || (a.time || "99").localeCompare(b.time || "99");
+  // Voor wie een gepland moment is. Zonder toewijzing is dat wie het invoerde:
+  // wie iets plant, volgt het bijna altijd ook op, en zo werkt de filter in de
+  // agenda meteen voor alles wat er al stond.
+  const assigneeOf = (p) => p.assignee || p.createdBy || "";
+  // Wat afgevinkt wordt, gebeurde ten laatste vandaag: een plan zonder datum
+  // of voor volgende week staat dan op vandaag, tot iemand iets anders kiest.
+  const tickOffDate = (plan, vandaag) => (plan.date && plan.date <= vandaag ? plan.date : vandaag);
+  // Een installatie zonder aantal telt als één kamer; een stopzetting telt
+  // negatief, zodat "actief" echt actief blijft.
+  const rooms = (a) => Number(a.rooms) || 1;
+  const signedRooms = (a) => (a.type === "cancellation" ? -rooms(a) : rooms(a));
+  // Verkochte stuks: wat besteld is, en wat verbruikt is tijdens een
+  // procedure. Zonder aantal telt een bestelling als één, maar een ingevulde
+  // nul is nul: een gratis proefzending is geen verkoop. Een procedure zonder
+  // aantal telt níet: daar is het aantal net wat ze tot een verkoop maakt, en
+  // wat er gebruikt werd kan evengoed al op een bestelling staan.
+  const units = (a) => (a.rooms == null || a.rooms === "" ? (a.type === "procedure" ? 0 : 1) : Math.max(0, Number(a.rooms) || 0));
+
   return {
     merge3, deepEqual, setMain, mainContact,
+    normalizeFacts, syncPipeline, zonderProduct, stageStatus, autoStatus, syncRooms,
+    byWhen, assigneeOf, tickOffDate, rooms, signedRooms, units,
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
+    ROOM_TYPES, SOLD_TYPES, typesFor, typesOffered, typesAmong, typesInAll, shared, productsOf, productOf, familiesFor, wantsFamily, factsFor, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
   };
 })();

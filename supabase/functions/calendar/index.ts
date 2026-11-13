@@ -26,12 +26,12 @@ const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const TYPES: Record<string, Record<string, string>> = {
   nl: {
     prospecting: "Prospectie", email: "E-mail", call: "Telefoon", visit: "Bezoek",
-    congress: "Congres / beurs", demo: "Demo", installation: "Installatie", training: "Training",
+    congress: "Congres", demo: "Demo", procedure: "Procedure", installation: "Installatie", training: "Training",
     quote: "Offerte", order: "Bestelling", cancellation: "Stopgezet", other: "Andere",
   },
   en: {
     prospecting: "Prospecting", email: "E-mail", call: "Call", visit: "Visit",
-    congress: "Congress / fair", demo: "Demo", installation: "Installation", training: "Training",
+    congress: "Congress", demo: "Demo", procedure: "Procedure", installation: "Installation", training: "Training",
     quote: "Quote", order: "Order", cancellation: "Stopped", other: "Other",
   },
 };
@@ -49,6 +49,13 @@ const VTIMEZONE: Record<string, string[]> = {
     "END:VTIMEZONE",
   ],
 };
+
+// Zie public/ics.js: het id staat onontsnapt in UID, dus enkel veilige tekens;
+// een land of soort opzoeken zonder via het prototype te gaan.
+const uidOf = (id: unknown) => String(id ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64) || "x";
+const zoneOf = (country: string) => (Object.hasOwn(ZONES, country) ? ZONES[country] : "");
+const typeName = (lang: string, type: string) =>
+  (Object.hasOwn(TYPES[lang], type) ? TYPES[lang][type] : TYPES[lang].other);
 
 type Ev = { id: string; date: string; time: string; country: string; title: string; location: string; description: string };
 
@@ -78,9 +85,9 @@ const day = (dt: Date) => `${dt.getUTCFullYear()}${pad(dt.getUTCMonth() + 1)}${p
 const clock = (dt: Date) => `${day(dt)}T${pad(dt.getUTCHours())}${pad(dt.getUTCMinutes())}00`;
 
 function event(ev: Ev, dtstamp: string) {
-  const zone = ZONES[ev.country] || "";
+  const zone = zoneOf(ev.country);
   const start = parts(ev.date, ev.time);
-  const lines = ["BEGIN:VEVENT", `UID:${ev.id}@followup.prionmedical.be`, `DTSTAMP:${dtstamp}`];
+  const lines = ["BEGIN:VEVENT", `UID:${uidOf(ev.id)}@followup.prionmedical.be`, `DTSTAMP:${dtstamp}`];
   if (ev.time) {
     const end = new Date(start.getTime() + 60 * 60 * 1000);
     const tz = zone ? `;TZID=${zone}` : "";
@@ -98,7 +105,7 @@ function event(ev: Ev, dtstamp: string) {
 
 function calendar(events: Ev[], name: string) {
   const dtstamp = clock(new Date()) + "Z";
-  const zones = [...new Set(events.filter((e) => e.time).map((e) => ZONES[e.country]).filter(Boolean))];
+  const zones = [...new Set(events.filter((e) => e.time).map((e) => zoneOf(e.country)).filter(Boolean))];
   const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Prion Medical//FollowUp//NL",
     "CALSCALE:GREGORIAN", "METHOD:PUBLISH"];
   if (name) lines.push(`X-WR-CALNAME:${text(name)}`);
@@ -127,6 +134,18 @@ function secretOf(url: URL) {
 }
 
 Deno.serve(async (req) => {
+  // Wat hierbinnen ook misloopt (een antwoord dat geen JSON is, een moment in
+  // een vorm die we niet verwachtten): een 503 met Retry-After, nooit een
+  // kale 500. Een agenda die een 404 of 500 krijgt, gooit het abonnement
+  // soms weg.
+  try {
+    return await serveFeed(req);
+  } catch {
+    return plain("temporarily unavailable", 503, { "Retry-After": "300" });
+  }
+});
+
+async function serveFeed(req: Request): Promise<Response> {
   if (req.method !== "GET" && req.method !== "HEAD") return plain("method not allowed", 405, { Allow: "GET, HEAD" });
   const secret = secretOf(new URL(req.url));
   // Wat geen geheim kan zijn, gaat niet eens naar de databank.
@@ -152,13 +171,14 @@ Deno.serve(async (req) => {
 
   const lang = feed.lang === "en" ? "en" : "nl";
   const events: Ev[] = (Array.isArray(feed.events) ? feed.events : [])
-    .filter((e: Record<string, unknown>) => typeof e.id === "string" && /^\d{4}-\d{2}-\d{2}$/.test(String(e.date)))
+    .filter((e: Record<string, unknown>) => typeof e.id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(e.id)
+      && /^\d{4}-\d{2}-\d{2}$/.test(String(e.date)))
     .map((e: Record<string, unknown>) => ({
       id: String(e.id),
       date: String(e.date),
       time: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(e.time || "")) ? String(e.time) : "",
       country: String(e.country || ""),
-      title: title(TYPES[lang][String(e.type)] || TYPES[lang].other,
+      title: title(typeName(lang, String(e.type)),
         Array.isArray(e.products) ? e.products.map(String) : [], String(e.hospital || "")),
       location: place(String(e.hospital || ""), String(e.address || "")),
       description: String(e.note || ""),
@@ -175,4 +195,4 @@ Deno.serve(async (req) => {
       "X-Robots-Tag": "noindex",
     },
   });
-});
+}

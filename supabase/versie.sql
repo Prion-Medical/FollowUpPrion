@@ -24,8 +24,7 @@
 
 with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('scope_hospital',  'fix_planned',    'nextAction van het andere product niet meesturen'),
-  ('scope_hospital',  'scope_contacts', 'de productlijst van een contactpersoon afschermen'),
-  ('scope_contacts',  'both_in',        'bestaat die functie überhaupt'),
+  ('scope_hospital',  'scope_entries(h -> ''contacts''', 'de productlijst van een contactpersoon afschermen'),
   -- Deze is de belangrijkste van de lijst. Draait er nog een oude in_scope,
   -- dan kijkt die enkel naar "product" en leest ze een contactpersoon met een
   -- "products"-lijst als "heeft geen product" — en dan is die voor iedereen
@@ -40,6 +39,10 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('merge_hospital',  'merge_products', 'dezelfde formule voor het ziekenhuis'),
   ('merge_doc',       'merge_entries',  'een nieuw ziekenhuis gaat door dezelfde regels'),
   ('producten',       'Fibroid RFA',    'de productenlijst kent de RFA-producten'),
+  ('producten',       'Stents',         'de productenlijst kent stents'),
+  -- Een moment kan over meer dan één product gaan. Snoeit scope_entries die
+  -- lijst niet, dan leest wie afgeschermd is het product van de collega mee.
+  ('scope_entries',   'both_in',        'de productlijst van een moment afschermen'),
   -- De opvolging per product. Draait er nog een oude scope_hospital, dan gaat
   -- de fase en de verantwoordelijke van het andere product gewoon mee naar
   -- een browser die ze niet mag zien.
@@ -76,7 +79,19 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   -- Momenten zonder datum. Een oude fix_planned gooit ze bij elke opslag weg;
   -- een oude doc_keys laat een contributor ze ongezien verwijderen.
   ('fix_planned',     'order by coalesce(t.e ->> ''date''', 'een gepland moment zonder datum blijft staan'),
-  ('doc_keys',        'ook een gepland moment zonder datum', 'een moment zonder datum verwijderen is verwijderen')
+  ('fix_planned',     'coalesce(t.e ->> ''time'', ''99'')', 'op dezelfde dag op uur, zoals de agenda'),
+  ('doc_keys',        'ook een gepland moment zonder datum', 'een moment zonder datum verwijderen is verwijderen'),
+  -- Uit de veiligheidscontrole van 2026-11-13.
+  ('check_payload',   '[[:cntrl:]]',    'een id met een regeleinde komt het document niet in'),
+  ('feed_create',     'pg_advisory_xact_lock', 'het maximum aan abonnementen geldt ook bij gelijktijdige oproepen'),
+  ('feed_list',       'via_assistant',  'een assistent ziet geen abonnementen'),
+  ('feed_remove',     'via_assistant',  'een assistent zet geen abonnement stop'),
+  -- Uit de review van 2026-11-13: momenten over meer producten.
+  ('in_scope',        'products_of',    'beide vormen via één functie'),
+  ('merge_products',  'products_of',    'een contactmoment in de oude vorm verliest bij het samenvoegen zijn product niet'),
+  ('merge_entries',   'zonder_aantal',  'een moment over meer producten draagt geen aantal'),
+  ('merge_entries',   'left join lateral', 'een afgevinkt plan geeft zijn producten, niet zijn plaats'),
+  ('merge_hospital',  'afgevinkt',      'afvinken houdt het product van de collega op het contactmoment')
 )
 select v.functie,
        v.waarvoor,

@@ -2,8 +2,8 @@
 
 Sales follow-up for **EndoQ** (ScopeWatch) and **Ainex** (ENAD), two AI-assisted
 colonoscopy systems Prion Medical distributes in the **Benelux**, and since November
-2026 also for **Thyroid RFA** and **Fibroid RFA**, which are sold per procedure
-rather than per subscription. A map of hospitals,
+2026 also for **Thyroid RFA**, **Fibroid RFA** and **Stents**, which are sold per
+piece rather than per subscription. A map of hospitals,
 a record per hospital with contacts, contact moments and endoscopy-unit details, and a
 statistics page. Bilingual Dutch / English.
 
@@ -47,6 +47,35 @@ Two databases below.
 Pushing to `main` deploys: GitHub Pages serves the repository root, where `index.html`
 redirects to `public/`. Browsers keep the old files until the `?v=` stamp changes, so a
 deploy that skips the stamp bump ships nothing.
+
+## Checking the copies
+
+Some rules live in more than one place, because the app, the connector, the database
+and the calendar feed cannot share a file: the product, stage and type lists, the type
+names, what a contact moment does to the colour, stage and rooms, and what an event
+looks like. Nothing fails when two copies drift apart, so `tests/` checks it:
+
+```bash
+node --experimental-strip-types tests/alles.mjs   # the flag can go from Node 23.6
+```
+
+| File | Checks |
+|---|---|
+| `tests/lijsten.mjs` | Products, stages, types (and their names), kinds of stent and facts per product agree between `domain.js`, `i18n.js`, the connector, the calendar function and `schema.sql` |
+| `tests/vertalingen.mjs` | Every key in both languages, and every key the code asks for exists |
+| `tests/regels.mjs` | The same contact moments, new and edited, through `domain.js` and the connector's `add_contact_moment` / `update_moment` give the same colour, stage, follow-up, rooms and stored record; the connector accepts exactly the types `typesAmong()` offers, for no product, one, two, a shared moment and a restricted account |
+| `tests/planning.mjs` | Planned moments: planning without a date, the order (date, time, undated first) in the app, the connector and `fix_planned()`, ticking off (id reused, time dropped, kind of stent kept, date at the latest today) and "planned for" |
+| `tests/cijfers.mjs` | Units sold, per kind of stent, and active rooms: `domain.js`'s counting against the connector's `get_statistics`, with awkward quantities |
+| `tests/samenvoegen.mjs` | `merge3()`: both sides' edits survive, a real clash is a conflict, deletions, stamps, ticks, the list form |
+| `tests/agenda.mjs` | The download (`ics.js`) and the feed write the same events, and the feed answers 404 / 503 correctly |
+
+Each file runs in its own process (`alles.mjs`), and within a file every case is
+reported, so one run lists everything that is broken. Run it before every commit,
+the way `controle.sql` is run after every schema change.
+It needs no browser, no database and no network: the rules come from `domain.js`, and
+the Edge Functions run against a faked `fetch`. It uses invented
+data only — the repository is public. `roomsDemo` is left out of the comparison on
+purpose: the connector leaves it to `fix_rooms_demo()` in the database.
 
 ## Two databases
 
@@ -93,7 +122,7 @@ Two things that cost an evening to find out:
 
 | File | What it is |
 |---|---|
-| `public/domain.js` | Fixed values both app.js and stats.js need, plus `esc()` and `pickBox()` |
+| `public/domain.js` | Fixed values and pure rules both app.js and stats.js need: what a contact moment does to colour, stage and rooms (`autoStatus`, `syncPipeline`, `syncRooms`), the order of planned moments (`byWhen`), how units and rooms are counted, plus `esc()` and `pickBox()`. The connector copies these; `tests/` compares the copies |
 | `public/ui.js` | What the page does without knowing about hospitals: icons, `leave()`, `ask()`, row motion, the sliding switch, the select list |
 | `public/app.js` | The whole app: map, list, record, agenda, dialogs, export/import (~1,500 lines) |
 | `public/i18n.js` | NL/EN dictionaries and `t()` |
@@ -163,13 +192,18 @@ do not say what they stand for; filters carry their wording inside the field and
 never as a label in front of it. `attrs` goes into the tag unescaped — they are attributes and not
 text — so the caller wraps its own values in `esc()`, as everywhere else here. A row
 called "all" is a row like any other, which is why "all products" is also automatically
-the text on the button. `type: "radio"` makes it a choice of one.
+the text on the button. `type: "radio"` makes it a choice of one; nothing uses
+that at the moment.
 
 **Questions and messages.** No `confirm()` or `alert()`: `ask(msg)` in `ui.js` opens
 the app's own dialog (`#ask`) and promises true or false, `tell(msg)` is the same box
 with one button. A form dialog with a delete button passes its question as the third
 argument of `openDialog()`, which asks it with the form still open underneath, so
-"Annuleer" puts you back where you were. The banner under the top bar takes a tone,
+"Annuleer" puts you back where you were. A fourth argument, `{ beforeClose }`, is a
+question asked before the dialog closes by any route, Escape included; it belongs to
+that dialog and the next `openDialog()` drops it. The subscription dialog uses it
+twice: not while the database is still making the address, and not without asking
+when the address was never copied. The banner under the top bar takes a tone,
 `showBanner(msg, reload, "error" | "warn" | "info")`, and is red unless told otherwise.
 
 **Making things go away.** Anything that closes with a fade goes through
@@ -252,26 +286,87 @@ the database knows about it. If it ever has to become one, it would key on
 
 **Two kinds of product.** `productKind()` in `public/domain.js` says how a product is
 sold: `"subscription"` (EndoQ, Ainex: per room, counted in rooms and active
-subscriptions) or `"procedure"` (Thyroid RFA, Fibroid RFA: used up per procedure, no
-installation, counted in units ordered). Anything not listed is a subscription, so an
+subscriptions) or `"procedure"` (Thyroid RFA, Fibroid RFA, Stents: used up per procedure, no
+installation, counted in units sold). Stents is one product for every stent
+we sell, not one per model. Anything not listed is a subscription, so an
 unknown product behaves as everything did before. `PRODUCTS` deliberately stays a list
 of names — the name is what is stored on every record and in every scope — and what a
 product *is* hangs beside it. Three things follow from the kind and should keep doing
 so instead of naming products: `wantsQuantity()` (the one number on a contact moment
 is rooms for a subscription product and units for a procedure product, and there only
-on an order), `stagesFor()` (one shared list of stages, of which a procedure product
+on an order or a procedure), `stagesFor()` (one shared list of stages, of which a procedure product
 skips "demo installed" and a subscription product skips "purchase started"), and the
 statistics page, which shows subscriptions, rooms and towers for the one kind and
-orders per month for the other. `syncRooms()` ignores procedure products. Units
-ordered is a sales figure per hospital per month — never a record per patient or per
+units sold per month for the other. `syncRooms()` ignores procedure products. Units
+sold is a sales figure per hospital per month — never a record per patient or per
 procedure.
 
-**One product or several.** A contact moment and a planned moment carry one
-`product`; a contact carries `products[]`, because the same clinician is often the
-point of contact for both. `normalizeContact()` migrates the old single `product`
+**Types of contact moment.** `ACT_TYPES` is every type that can be stored;
+`typesFor(product)` is what a dialog offers. A product sold per piece has no
+installation and no cancellation, a subscription product has no procedure, and
+`prospecting` is offered nowhere any more (it said that a hospital was approached
+but not how). The lists only narrow the choice: a saved moment keeps a type that is
+no longer offered and still shows it. The type dropdown in both moment dialogs
+follows the product chosen there, and the logbook's type filter follows the
+products filtered on.
+
+**A procedure** (type `procedure`) is a visit: a colleague stands by or assists
+while the doctor uses the product. Product that is only shipped is an order. Its
+one number is units *used*, and those count as sold (`SOLD_TYPES`), so the same
+units must not also be entered as an order — the dialog says so. A procedure
+without a number counts for nothing in the figures, where an order without one
+counts as one. It moves the product to "under evaluation" when it stood earlier
+and never moves a customer. This type sits closest to the no-patient-data rule:
+a date, a hospital, a doctor, a number and a few words, never anything about the
+patient and never a record per case.
+
+**Kinds within a product.** `FAMILIES` in `domain.js` gives Stents four:
+oesophageal, biliary, colonic and other. A moment that carries a number, so an
+order or a procedure (`wantsFamily()`), can carry one `family`, also while it is
+still planned (ticking it off takes the kind along), stored only when chosen, so older
+records are not rewritten. One per moment: an order of two kinds is two moments.
+The statistics show units per kind, with "no kind chosen" as its own row so the
+sum matches the tile.
+
+**One product or several.** A contact moment and a planned moment usually carry
+one `product`; a contact carries `products[]`, because the same clinician is often
+the point of contact for both. A moment can be about several products too (one
+meeting about Thyroid RFA and Fibroid RFA): it then carries `products[]` instead,
+and `productsOf()` / `productOf()` in `domain.js` are how every screen reads
+either shape. Existing moments are **not** converted, or the first save would make
+one person the last editor of the whole logbook; the list appears when someone
+ticks a second product, and from then on that record stays a list even if one
+product is left. That last part is not tidiness: a restricted user holds only
+their own part of the list, and the database only adds the colleague's part back
+while the record is a list. Whatever carries a number belongs to one product. So a
+*new* contact moment about several products with a type that carries a number (an
+order for Fibroid RFA and Stents) asks for a number per product and is saved as one
+contact moment per product, each with its own number and kind of stent; the first
+keeps a ticked-off plan's id. A plan carries no number, so it may be any type all its
+products know (`typesInAll()`); the numbers come when it is ticked off. An existing
+moment in the list form, and a shared plan ticked off by someone who may not see all
+its products, offer only the types without a number (`typesAmong()`), with no
+quantity and no kind of stent: the colleague's product may be hidden in it. The
+connector does not split: it refuses a number on several products and says to log
+one moment per product. Such a moment
+moves the follow-up of each of its products, shows under each in the filters,
+and counts once as a contact moment. Its note is shared between the people who
+can see it, as a contact's fields are, and either of them can remove it.
+
+**A moment in the list form is shared, and never carries a number.** That holds
+even when only one product is left in the list, and even when someone who may see
+only one product looks at it: the database has trimmed the list for them, so it
+looks like a single-product moment but is not. `shared()` in `domain.js` is the
+test; `typesAmong(list, mine, gedeeld)` then offers no type with a number, the
+dialogs show no quantity and no kind of stent, `normalize()` drops them, and the
+connector refuses them. The database is the safety net: `followup.zonder_aantal()`
+strips `rooms` and `family` from any list-form record it merges. Ticking off a
+shared plan keeps the list form, and `followup.afgevinkt()` hands the merge the
+stored plan as the stored side of the new contact moment, so the colleague's
+product stays on it (`controle.sql` 71–74). `normalizeContact()` migrates the old single `product`
 and drops the field, the way `demoDate` was folded into `planned[]`. The database
-reads both shapes — `followup.in_scope()` branches on whether the record has a
-`products` key — and deliberately does **not** rewrite the old shape on the way out:
+reads both shapes through `followup.products_of()`, the counterpart of `productsOf()`,
+and deliberately does **not** rewrite the old shape on the way out:
 that would make loading and saving return a different document and break the check
 that matters most. A contact is visible as soon as one product overlaps your scope,
 and `products` is then trimmed to your scope and merged back with the same
@@ -301,7 +396,8 @@ first planned item by `syncNextAction()`, which keeps the list, the "actie te la
 and the CSV working; do not write to them directly. The old `demoDate` field was folded
 into `planned[]` the same way: `normalize()` turns it into a planned moment of type
 `demo` and drops the field, and the "demo's gepland" KPI and the CSV column both read
-`planned[]` now. There is one place to plan a demo, and it clears itself when ticked off.
+`planned[]` now. There is one place to plan a demo, and it clears itself when ticked off. A demo planned
+without a date counts as planned too: it still has to be arranged.
 
 A planned moment may have **no date**: something that has to happen but has no day
 yet. It sorts first (an empty date sorts before any other, in `normalize()`,
@@ -320,8 +416,11 @@ A planned moment can carry a `time` (`"14:00"`), and only when someone gave one 
 like `assignee`, writing an empty one onto every older moment would make the first
 saver the last editor of the agenda. It belongs to the plan: ticking off builds a
 fresh contact moment, so the time is dropped, and a contact moment has a date and
-no time. `h.planned` stays sorted by date alone, as `fix_planned()` sorts it in the
-database; `byWhen()` orders by time as well, for display only.
+no time. `h.planned` is stored in `byWhen()` order — date, then time (a moment
+without a time after those with one), undated first — and `fix_planned()` and the
+connector's `sortPlanned()` sort the same way, so the next action is the moment the
+agenda shows first. Ticking off dates the contact moment at the latest today
+(`tickOffDate()`): a plan for next week ticked off now happened today.
 
 **Assigned to, and planned for.** Two things belong to a person, and they have two
 words on purpose. A product at a hospital is *assigned to* someone: `owner` in that
@@ -347,6 +446,13 @@ making `setView()` draw placeholders (`skelAgenda()`, `skelStats()`, `skelFiche(
 instead of an empty screen; `restoreSelection()` and `restoreView()` finish the job
 around the first `renderAll()`. The users screen waits for the data, because who may
 see it is not known before sign-in.
+
+**Sections of the record** fold: the heading is a button (`secHead()` in
+`app.js`) with an arrow that points right when closed and down when open. What is
+closed is remembered per browser (`followup-sections` in `localStorage`) and
+applies to every hospital, since it is about what someone works with and not
+about one record. The click only switches a class, so nothing is redrawn and a
+half-typed field survives; a print always shows everything.
 
 **The logbook.** The agenda page has two tabs: what is planned (`planned[]`) and the
 logbook, every contact moment across hospitals, newest first and grouped per week
@@ -386,7 +492,10 @@ moves the only row there is, and nothing when there are several.
 
 **What you need to know for an RFA product** — CMM approval, priority, whether they
 already perform RFA, the current system and a note — is the counterpart of the
-endoscopy unit, and shows as a section of its own per product. It is stored in that
+endoscopy unit, and `factsFor(product)` says which of them a product keeps: all
+five for the RFA products, only the note for Stents (CMM approval
+differs per kind of stent, so one field per hospital would mean nothing). It
+shows as a section of its own per product, and is stored in that
 product's row in `h.pipeline` (`normalizeFacts()`), not in a block on the hospital
 like `unit`: Thyroid and Fibroid each have their own approval at the same hospital,
 and a row is already inside the product wall, so these facts never reach an account
@@ -588,11 +697,13 @@ Three rules it rests on:
   the cap on deletions apply exactly as in the app. `controle.sql` therefore still
   says everything there is to say about what an assistant can reach.
 - **The rules now exist in a third place.** What a contact moment does to the colour
-  and the stage (`autoStatus`, `stageStatus`, `syncPipeline`, `syncRooms`,
-  `syncNextAction`, `syncProducts`), the fixed lists from `domain.js` and the counting
-  rules from `stats.js` are copied into the function. Change one in `app.js` and it
-  must change there too. If the connector stays, these belong in the database, where
-  the app and the assistant would share them and `controle.sql` could check them.
+  and the stage (`autoStatus`, `stageStatus`, `syncPipeline`, `syncRooms`), the
+  order of planned moments (`byWhen`, `tickOffDate`), the fixed lists and the type
+  rules (`typesFor`, `typesAmong`, `shared`) and the counting rules (`units`,
+  `rooms`, `signedRooms`) live in `domain.js` and are copied into the function.
+  Change one in `domain.js` and it must change there too. `tests/` runs the same
+  moments, plans and figures through both and fails when they disagree. If the connector stays, these belong in the database, where the app and the
+  assistant would share them and `controle.sql` could check them (issue #21).
 
 Signing in goes through Supabase Auth acting as an OAuth server. In the dashboard:
 OAuth Server on, authorization path `/consent.html`, dynamic client registration off,
@@ -677,7 +788,19 @@ file (`public/ics.js`), which is a copy that does not follow changes.
   It is pure, so `controle.sql` checks it on a literal document (60–66).
 - **A subscription belongs to an account**: `owner` references `app_users` with
   `on delete cascade`, which itself cascades from `auth.users`. An admin sees
-  and stops every subscription at the foot of the users screen.
+  and stops every subscription at the foot of the users screen. **Banning** an
+  account in Supabase Auth or resetting its password does **not** stop its
+  feeds: the address needs no sign-in. When someone leaves, stop their
+  subscriptions on the users screen, or delete the account.
+- **Managed by a person.** `feed_create()`, `feed_list()` and `feed_remove()` all
+  refuse an assistant's key (`via_assistant()`), and `feed_create()` takes an
+  advisory lock so two simultaneous calls cannot pass the cap of ten together.
+- **What reaches the calendar is escaped, or reduced.** Every text property
+  goes through `text()`; the record id, which sits in `UID`, is cut down to
+  letters, digits, `-` and `_` (`uidOf()`), because anyone who can write can put
+  any string there, and `check_payload()` refuses an id with a control
+  character. Countries and types are looked up with `Object.hasOwn`, never
+  through the prototype. `tests/agenda.mjs` keeps both.
 - **The Edge Function** `supabase/functions/calendar/index.ts` turns
   `calendar_feed()` into `text/calendar`. It runs with the public key and no
   service key, needs **Verify JWT off** (a calendar sends no token), answers 404
@@ -737,7 +860,8 @@ Not bugs; decisions. Reviewers will flag them, so the reasoning is recorded here
 - **Restoring a backup is a dashboard job.** `app_state_backups` is revoked from
   `authenticated`, because it holds the full unscoped document and would have been a
   door next to the wall.
-- **No tests.** If this changes, plain Node assertions over the pure functions
-  (`normalize`, VRR-style maths, CSV writing, i18n key coverage) — not a test framework.
+- **Tests only for the copies.** `tests/` holds plain Node assertions, no framework
+  and no packages (see Checking the copies). They check that rules kept in more than one
+  place still agree, not the app as a whole.
 - **`app.js` is large** for a single file. Splitting it is reasonable eventually, but
   there is no module bundler and no appetite for one, so it stays until the pain is real.
