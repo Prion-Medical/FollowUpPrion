@@ -26,12 +26,12 @@ const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const TYPES: Record<string, Record<string, string>> = {
   nl: {
     prospecting: "Prospectie", email: "E-mail", call: "Telefoon", visit: "Bezoek",
-    congress: "Congres / beurs", demo: "Demo", installation: "Installatie", training: "Training",
+    congress: "Congres", demo: "Demo", procedure: "Procedure", installation: "Installatie", training: "Training",
     quote: "Offerte", order: "Bestelling", cancellation: "Stopgezet", other: "Andere",
   },
   en: {
     prospecting: "Prospecting", email: "E-mail", call: "Call", visit: "Visit",
-    congress: "Congress / fair", demo: "Demo", installation: "Installation", training: "Training",
+    congress: "Congress", demo: "Demo", procedure: "Procedure", installation: "Installation", training: "Training",
     quote: "Quote", order: "Order", cancellation: "Stopped", other: "Other",
   },
 };
