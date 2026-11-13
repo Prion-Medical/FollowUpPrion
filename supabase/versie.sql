@@ -40,6 +40,10 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('merge_hospital',  'merge_products', 'dezelfde formule voor het ziekenhuis'),
   ('merge_doc',       'merge_entries',  'een nieuw ziekenhuis gaat door dezelfde regels'),
   ('producten',       'Fibroid RFA',    'de productenlijst kent de RFA-producten'),
+  ('producten',       'Stents',         'de productenlijst kent stents'),
+  -- Een moment kan over meer dan één product gaan. Snoeit scope_entries die
+  -- lijst niet, dan leest wie afgeschermd is het product van de collega mee.
+  ('scope_entries',   'both_in',        'de productlijst van een moment afschermen'),
   -- De opvolging per product. Draait er nog een oude scope_hospital, dan gaat
   -- de fase en de verantwoordelijke van het andere product gewoon mee naar
   -- een browser die ze niet mag zien.

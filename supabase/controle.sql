@@ -131,6 +131,29 @@ opvwijzig as (
          '{Ainex}'::text[], false) as n
   from opvmijn),
 
+-- Momenten over meer dan één product: een gesprek over EndoQ en Ainex
+-- tegelijk draagt een lijst in "products", zoals een contactpersoon. ma2 is
+-- een lijst met enkel EndoQ: zo blijft een moment dat ooit over twee ging.
+meer as (select $j${
+  "version": 1,
+  "hospitals": [
+    { "id": "m1", "name": "UZ Twee Tegelijk", "products": ["EndoQ", "Ainex"],
+      "nextAction": "samen", "nextActionDate": "2026-02-01", "unit": {},
+      "contacts": [],
+      "activities": [
+        { "id": "ma1", "date": "2026-01-02", "type": "visit", "products": ["EndoQ", "Ainex"], "note": "" },
+        { "id": "ma2", "date": "2026-01-03", "type": "call",  "products": ["EndoQ"], "note": "" } ],
+      "planned": [
+        { "id": "mp1", "date": "2026-02-01", "type": "visit", "products": ["EndoQ", "Ainex"], "note": "samen" } ] }
+  ]}$j$::jsonb as d),
+meermijn as (select d, followup.scope_doc(d, '{Ainex}'::text[]) as s from meer),
+meerrond as (select d, followup.merge_doc(d, s, '{Ainex}'::text[], false) as n from meermijn),
+-- Ainex haalt zijn eigen product van het gesprek af.
+meerstrip as (
+  select d, followup.merge_doc(d, jsonb_set(s, '{hospitals,0,activities,0,products}', '[]'::jsonb),
+                               '{Ainex}'::text[], false) as n
+  from meermijn),
+
 -- Een document van vóór de opvolging per product: één fase per ziekenhuis.
 -- o1 heeft twee producten en is klant, o2 heeft er geen.
 oud as (select $j${
@@ -346,6 +369,20 @@ from (
          n #> '{hospitals,0,pipeline,EndoQ}' from omrond
   union all select 51, 'omzetten: laden en opslaan verandert het omgezette document niet',
          to_jsonb(true), to_jsonb(n = m) from omrond
+
+  -- --- een moment over meer dan één product ----------------------------------
+  union all select 52, 'moment over twee producten: zichtbaar, met enkel het eigen product',
+         '["Ainex"]'::jsonb, s #> '{hospitals,0,activities,0,products}' from meermijn
+  union all select 53, 'moment met enkel het andere product in de lijst blijft weg',
+         to_jsonb(1), to_jsonb(jsonb_array_length(s #> '{hospitals,0,activities}')) from meermijn
+  union all select 54, 'gepland moment over twee producten: enkel het eigen product',
+         '["Ainex"]'::jsonb, s #> '{hospitals,0,planned,0,products}' from meermijn
+  union all select 55, 'rondgang: de contactmomenten blijven zoals ze waren',
+         d #> '{hospitals,0,activities}', n #> '{hospitals,0,activities}' from meerrond
+  union all select 56, 'rondgang: het geplande moment blijft zoals het was',
+         d #> '{hospitals,0,planned}', n #> '{hospitals,0,planned}' from meerrond
+  union all select 57, 'Ainex kan het EndoQ-vinkje van een moment niet wegnemen',
+         '["EndoQ"]'::jsonb, n #> '{hospitals,0,activities,0,products}' from meerstrip
 ) q(nr, controle, verwacht, gekregen)
 order by nr;
 

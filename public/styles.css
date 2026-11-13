@@ -532,6 +532,19 @@ body[data-rights~="no-write"] .pipe-name .muted { display: inline; }
   display: flex; align-items: center; gap: 8px;
 }
 .section h3 .btn { margin-left: auto; letter-spacing: 0; }
+/* Het kopje is de knop waarmee je de sectie open- en dichtklapt. Het pijltje
+   wijst naar rechts als ze dicht is en draait naar beneden als ze openstaat. */
+.sec-toggle {
+  display: inline-flex; align-items: center; gap: 6px; min-height: var(--ctl-sm);
+  margin: 0 0 0 -4px; padding: 0 6px 0 2px; border: 0; border-radius: var(--radius);
+  background: none; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer;
+}
+.sec-toggle .ic { color: var(--muted); transform: rotate(90deg); transition: transform var(--fast) var(--ease); }
+.sec-toggle:hover .ic { color: var(--ink); }
+.section.closed .sec-toggle .ic { transform: none; }
+.section.closed h3 { margin-bottom: 0; }
+/* Alleen op het scherm: een afdruk toont altijd alles. */
+@media screen { .section.closed > :not(h3) { display: none; } }
 /* De knop waarmee je iets toevoegt aan een sectie: wit zoals de andere, maar
    met een blauw woord. Geen bleke vulling: die betekent hier "gekozen". */
 .section h3 .btn { color: var(--accent-ink); }
@@ -1243,6 +1256,8 @@ body[data-rights~="no-write"] .contact .c-name { padding-right: 0; }
   .topbar, .tabbar, .banner, .toast, .login, .map-wrap, dialog,
   .fiche-foot, .search, .filters, .btn, .icon-btn, .c-actions, .t-acts,
   .status-pick button:not(.active) { display: none !important; }
+  .sec-toggle .ic { display: none; }
+  .sec-toggle { margin: 0; padding: 0; }
 
   /* Het dossier is op het scherm een kolom met een eigen schuifbalk; op
      papier mag het gewoon doorlopen. */

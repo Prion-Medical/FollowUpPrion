@@ -16,7 +16,8 @@ window.FollowUpStats = (() => {
 
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
   const { PRODUCTS, CMM_STATES, STAGES, STATUSES, COUNTRIES, regionOf, SCOPE_BRANDS, PROCESSOR_BRANDS,
-          esc, pickBox, myProducts, productColor, productKind, pipelineView, emptyTargets } = window.FollowUpDomain;
+          esc, pickBox, myProducts, productColor, productKind, pipelineView, emptyTargets,
+          SOLD_TYPES, familiesFor, factsFor, productsOf, productOf } = window.FollowUpDomain;
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Een doelcijfer aanpassen is schrijven. Zonder dat recht staat het getal er
   // nog wel — het hoort bij de cijfers — maar op slot. storage.js is op dit
@@ -43,9 +44,12 @@ window.FollowUpStats = (() => {
   const rooms = (a) => Number(a.rooms) || 1;   // een installatie zonder aantal telt als één kamer
   // Een stopzetting telt negatief, zodat "actief" echt actief blijft.
   const signedRooms = (a) => (a.type === "cancellation" ? -rooms(a) : rooms(a));
-  // Bestelde stuks. Zonder aantal telt een bestelling als één, maar een
-  // ingevulde nul is nul: een gratis proefzending is geen verkoop.
-  const units = (a) => (a.rooms == null || a.rooms === "" ? 1 : Math.max(0, Number(a.rooms) || 0));
+  // Verkochte stuks: wat besteld is, en wat verbruikt is tijdens een
+  // procedure. Zonder aantal telt een bestelling als één, maar een ingevulde
+  // nul is nul: een gratis proefzending is geen verkoop. Een procedure zonder
+  // aantal telt níet: daar is het aantal net wat ze tot een verkoop maakt, en
+  // wat er gebruikt werd kan evengoed al op een bestelling staan.
+  const units = (a) => (a.rooms == null || a.rooms === "" ? (a.type === "procedure" ? 0 : 1) : Math.max(0, Number(a.rooms) || 0));
   const sum = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
   const months = () => Array.from({ length: 12 }, (_, i) => new Date(2021, i, 1).toLocaleDateString(I18N.locale, { month: "short" }));
   const productLabel = (p) => p || t("stats.noProduct");
@@ -69,8 +73,10 @@ window.FollowUpStats = (() => {
       for (const a of h.activities) {
         if (types && !types.includes(a.type)) continue;
         if (!ignoreYear && view.year !== "all" && !a.date.startsWith(view.year)) continue;
-        if (view.products.length && !view.products.includes(a.product)) continue;
-        out.push({ ...a, hospital: h });
+        if (view.products.length && !productsOf(a).some((p) => view.products.includes(p))) continue;
+        // Alles wat hier per product telt (kamers, stuks) hoort bij één
+        // product; een moment over meer producten telt alleen als moment.
+        out.push({ ...a, product: productOf(a), hospital: h });
       }
     }
     return out;
@@ -242,12 +248,27 @@ window.FollowUpStats = (() => {
     return card(t("stats.orders"), (series.length > 1 ? legend(series) : "") + columns(buckets, series.length ? series : [myProducts().find((p) => productKind(p) === "procedure")]), "wide");
   }
 
+  // Verkochte stuks per soort, voor een product dat soorten kent (stents).
+  // Eén kaart per zo'n product in de keuze; wat geen soort meekreeg staat
+  // apart, zodat de som met de tegel blijft kloppen.
+  function familyCards(sold, keuze) {
+    return keuze.filter((p) => familiesFor(p).length).map((p) => {
+      const mine = sold.filter((a) => a.product === p);
+      const items = [...familiesFor(p), ""].map((k) => ({
+        label: k ? t("family." + k) : t("family.none"),
+        total: sum(mine.filter((a) => (a.family || "") === k), units),
+        values: {},
+      })).filter((i) => i.total);
+      return card(`${p} · ${t("stats.perFamily")}`, hbars(items, null, t("stats.noData")));
+    }).join("");
+  }
+
   // Hoe ver staat de goedkeuring door het Comité Medisch Materiaal, voor de
   // producten per ingreep in de keuze. Geteld per ziekenhuis en per product:
   // een ziekenhuis met Thyroid RFA én Fibroid RFA telt twee keer, want het
   // zijn twee aanvragen.
   function cmmCard(db, keuze) {
-    const procedure = keuze.filter((p) => productKind(p) === "procedure");
+    const procedure = keuze.filter((p) => factsFor(p).includes("cmm"));
     const rows = hospitals(db).flatMap((h) => procedure.filter((p) => h.products.includes(p) && h.pipeline && h.pipeline[p]).map((p) => ({ p, cmm: h.pipeline[p].cmm || "" })));
     const items = ["ok", "requested", "not_ok", ""].map((k) => {
       const hit = rows.filter((r) => r.cmm === k);
@@ -358,9 +379,11 @@ window.FollowUpStats = (() => {
     const isSub = (a) => productKind(a.product) === "subscription";
     const installs = rows(db, { types: ["installation"] }).filter(isSub);
     const subsEvents = rows(db, { types: ["installation", "cancellation"], ignoreYear: true }).filter(isSub);
-    const orders = metOrders ? rows(db, { types: ["order"] }).filter((a) => !isSub(a)) : [];
+    const orders = metOrders ? rows(db, { types: SOLD_TYPES }).filter((a) => !isSub(a)) : [];
     // Voor het doelcijfer: over alle jaren, want die kaart kiest zelf haar jaar.
-    const orderEvents = metOrders ? rows(db, { types: ["order"], ignoreYear: true }).filter((a) => !isSub(a)) : [];
+    const orderEvents = metOrders ? rows(db, { types: SOLD_TYPES, ignoreYear: true }).filter((a) => !isSub(a)) : [];
+    // Hoeveel daarvan tijdens een procedure verbruikt is, naast wat besteld is.
+    const usedUnits = sum(orders.filter((a) => a.type === "procedure"), units);
     const acts = rows(db);
     const hs = hospitals(db);
     const live = hs.filter((h) => h.unit.roomsInstalled);
@@ -392,14 +415,15 @@ window.FollowUpStats = (() => {
         ${tile(fmt(hs.filter((h) => shown(h).stage === "customer").length), t("stats.customers"))}
         ${!metSubs ? "" : tile(fmt(roomsLive), t("stats.roomsLive"), roomsTotal ? `${t("stats.coverage")}: ${fmt((roomsLive / roomsTotal) * 100)}%` : "")
           + tile(fmt(roomsDemo), t("stats.roomsDemo"))}
-        ${!metOrders ? "" : tile(fmt(sum(orders, units)), t("stats.ordersTile"))}
+        ${!metOrders ? "" : tile(fmt(sum(orders, units)), t("stats.ordersTile"), usedUnits ? `${t("stats.ofWhichUsed")}: ${fmt(usedUnits)}` : "")}
         ${tile(fmt(acts.length), t("section.activities"))}
         ${!metSubs ? "" : tile(colosCovered ? fmt(colosCovered) : "—", t("stats.colosCovered"), live.length ? `n = ${live.length}` : "")}
       </div>
       <div class="s-grid-cards">
         ${!metSubs ? "" : (view.chart === "subs" ? subscriptionsCard(subsEvents) : installationsCard(installs))}
         ${!metOrders ? "" : ordersCard(orders)}
-        ${!metOrders ? "" : cmmCard(db, keuze)}
+        ${familyCards(orders, keuze)}
+        ${!keuze.some((p) => factsFor(p).includes("cmm")) ? "" : cmmCard(db, keuze)}
         ${targetsCard(db, subsEvents, orderEvents)}
         ${!metSubs ? "" : hospitalsCard(db)}
         ${pipelineCard(db)}

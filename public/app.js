@@ -12,6 +12,7 @@
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
+    typesAmong, productsOf, productOf, familiesFor, wantsFamily, factsFor,
     esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual, setMain, mainContact,
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
@@ -30,6 +31,29 @@
   // staan, anders stond wie alleen de Benelux volgt na één klik weer tussen
   // de ziekenhuizen van de rest van de wereld.
   const REGION_KEY = "followup-regions";
+  // Welke secties van het dossier dichtgeklapt staan, onthouden per browser:
+  // wie veel producten heeft klapt dicht wat hij zelden nodig heeft, en dat
+  // geldt dan voor elk ziekenhuis. Per sectie een sleutel; voor een product
+  // is dat "product:" met zijn naam erachter.
+  const SECTIONS_KEY = "followup-sections";
+  const closedSections = (() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(SECTIONS_KEY) || "[]");
+      return new Set(Array.isArray(v) ? v.filter((k) => typeof k === "string") : []);
+    } catch (e) { return new Set(); }
+  })();
+  function toggleSection(key) {
+    if (closedSections.has(key)) closedSections.delete(key); else closedSections.add(key);
+    try { localStorage.setItem(SECTIONS_KEY, JSON.stringify([...closedSections])); } catch (e) { /* privévenster */ }
+    return closedSections.has(key);
+  }
+  // Het begin van een sectie en haar kopje. Het kopje is zelf de knop: het
+  // pijltje wijst naar rechts als de sectie dicht is en naar beneden als ze
+  // openstaat. Wat er na de titel in het kopje komt (een teller, de knop om
+  // iets toe te voegen) blijft ook bij een dichte sectie staan.
+  const secOpen = (key) => `<div class="section${closedSections.has(key) ? " closed" : ""}" data-sec="${esc(key)}">`;
+  const secHead = (key, title, rest = "") =>
+    `<h3><button type="button" class="sec-toggle" data-sec-toggle="${esc(key)}" aria-expanded="${closedSections.has(key) ? "false" : "true"}">${icon("next")}<span>${esc(title)}</span></button>${rest}</h3>`;
   function savedRegions() {
     try {
       const v = JSON.parse(localStorage.getItem(REGION_KEY) || "[]");
@@ -107,7 +131,7 @@
   // Hoort dit contactmoment of geplande moment bij de producten waarop
   // gefilterd is? Zonder filter alles; een record zonder product hoort overal
   // bij, zoals het ook voor iedereen zichtbaar is.
-  const inFilter = (r) => !state.filter.products.length || !r.product || state.filter.products.includes(r.product);
+  const inFilter = (r) => !state.filter.products.length || !productsOf(r).length || productsOf(r).some((p) => state.filter.products.includes(p));
   // "Te laat", "stil gevallen" en "demo gepland" volgen de productfilter, net
   // als de kleur: wie op Thyroid RFA filtert wil niet de achterstallige actie
   // van EndoQ zien. planned staat op datum, dus het eerste dat past is de
@@ -484,14 +508,35 @@
     c.primary = !!c.primary;
     return c;
   }
+  // Eén product in "product", of meer in "products": zie productsOf() in
+  // domain.js. Wat er staat blijft in zijn vorm; hier wordt niets omgezet,
+  // anders gaf laden en opslaan een ander document terug.
+  function productShape(r) {
+    if (Array.isArray(r.products)) {
+      r.products = [...new Set(r.products.filter((p) => typeof p === "string" && p))];
+      delete r.product;
+    } else r.product = str(r.product);
+  }
+  // Een aantal hoort bij één product: gaat het moment over meer, dan is er
+  // geen aantal.
+  const wantsNumber = (type, r) => productsOf(r).length <= 1 && wantsQuantity(type, productOf(r));
+  // De soort binnen het product (bij stents). Het veld staat er alleen als
+  // er een gekozen is: een lege waarde bij elk ouder moment zou wie als
+  // eerste opslaat de laatste bewerker van het hele logboek maken.
+  function familyShape(r) {
+    const p = productOf(r);
+    if (wantsFamily(r.type, p) && familiesFor(p).includes(r.family)) r.family = str(r.family);
+    else delete r.family;
+  }
   function normalizeActivity(a) {
     a.id = str(a.id) || uid();
     a.type = ACT_TYPE_KEYS.includes(a.type) ? a.type : "other";
     a.date = dateOrEmpty(a.date);
-    a.product = str(a.product);
+    productShape(a);
     a.contactId = str(a.contactId);
     a.note = str(a.note);
-    a.rooms = wantsQuantity(a.type, a.product) ? numOrNull(a.rooms) : null;
+    a.rooms = wantsNumber(a.type, a) ? numOrNull(a.rooms) : null;
+    familyShape(a);
     stampFields(a);
     return a;
   }
@@ -502,9 +547,10 @@
     p.id = str(p.id) || uid();
     p.type = ACT_TYPE_KEYS.includes(p.type) ? p.type : "other";
     p.date = dateOrEmpty(p.date);
-    p.product = str(p.product);
+    productShape(p);
     p.contactId = str(p.contactId);
     p.note = str(p.note);
+    familyShape(p);
     // Aan wie het moment is toegewezen. Het veld staat er alleen als iemand
     // gekozen is: schreven we bij elk ouder moment een lege waarde, dan zou
     // wie als eerste opslaat de laatste bewerker van de hele agenda worden.
@@ -521,12 +567,16 @@
   // Thyroid RFA en Fibroid RFA hebben elk hun eigen goedkeuring, prioriteit en
   // concurrent in hetzelfde ziekenhuis, en zo vallen ze vanzelf binnen de
   // productmuur — de databank schermt die rijen al af per product.
-  function normalizeFacts(e) {
-    e.cmm = CMM_STATES.includes(e.cmm) ? e.cmm : "";
-    e.prio = [1, 2, 3].includes(Number(e.prio)) ? Number(e.prio) : null;
-    e.doesAlready = YES_NO.includes(e.doesAlready) ? e.doesAlready : "";
-    e.currentSystem = str(e.currentSystem);
-    e.notes = str(e.notes);
+  // Welke er bij een product horen zegt factsFor() in domain.js: bij stents
+  // alleen de notitie. Wat er niet bij hoort krijgt ook geen
+  // lege sleutel.
+  function normalizeFacts(e, p) {
+    const has = (k) => factsFor(p).includes(k);
+    if (has("cmm")) e.cmm = CMM_STATES.includes(e.cmm) ? e.cmm : "";
+    if (has("prio")) e.prio = [1, 2, 3].includes(Number(e.prio)) ? Number(e.prio) : null;
+    if (has("doesAlready")) e.doesAlready = YES_NO.includes(e.doesAlready) ? e.doesAlready : "";
+    if (has("currentSystem")) e.currentSystem = str(e.currentSystem);
+    if (has("notes")) e.notes = str(e.notes);
     return e;
   }
   // De opvolging per product. Elk product dat bij het ziekenhuis aangevinkt
@@ -549,18 +599,18 @@
       e.stage = STAGES.includes(e.stage) ? e.stage : "prospect";
       e.status = STATUSES.includes(e.status) ? e.status : "red";
       e.owner = str(e.owner);
-      if (productKind(p) === "procedure") normalizeFacts(e);
+      if (productKind(p) === "procedure") normalizeFacts(e, p);
     }
     const eerste = !Object.keys(h.pipeline).length;
     for (const p of h.products) {
       if (h.pipeline[p]) continue;
-      const contacted = h.activities.some((a) => a.product === p);
+      const contacted = h.activities.some((a) => productsOf(a).includes(p));
       const e = eerste ? { stage: h.stage, status: h.status, owner: "" }
         : { stage: contacted ? "first_contact" : "prospect", status: contacted ? "orange" : "red", owner: "" };
       // Een fase die dit product niet kent, schuift naar de dichtste die het
       // wel kent: allebei liggen ze net voor of net na de evaluatie.
       if (!stagesFor(p).includes(e.stage)) e.stage = "evaluation";
-      if (productKind(p) === "procedure") normalizeFacts(e);
+      if (productKind(p) === "procedure") normalizeFacts(e, p);
       h.pipeline[p] = e;
     }
     if (h.products.length) {
@@ -600,18 +650,21 @@
     // Een account dat niet meer bestaat is "?", niet niets: anders lijkt het
     // moment van wie het invoerde.
     const to = r.assignee && r.assignee !== store.me().id && r.assignee !== r.createdBy && (personName(r.assignee) || "?");
-    return [withType && t("act." + r.type), r.product, c && c.name,
-      r.rooms ? `${r.rooms} ${t(productKind(r.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
+    return [withType && t("act." + r.type), productsOf(r).join(" + "), r.family && t("family." + r.family), c && c.name,
+      r.rooms ? `${r.rooms} ${t(productKind(productOf(r)) !== "procedure" ? "act.rooms" : r.type === "procedure" ? "act.used" : "act.units")}` : "",
       to && t("for", { name: to }),
       by && t("by", { name: by })].filter(Boolean).join(" · ");
   }
   // De contactmomenten als CSV, recentste eerst: voor de export van alles en
   // voor "CSV van deze keuze" in het logboek.
   function activitiesCsv(items) {
+    // De kolom met de soort staat er alleen voor wie een product heeft dat
+    // soorten kent.
+    const withFamily = myProducts().some((p) => familiesFor(p).length);
     return csv([
-      [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.quantity"), t("col.note"), t("col.addedBy")],
+      [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), ...(withFamily ? [t("col.family")] : []), t("col.contact"), t("col.quantity"), t("col.note"), t("col.addedBy")],
       ...[...items].sort((x, y) => y.a.date.localeCompare(x.a.date))
-        .map(({ h, a }) => [a.date, h.name, t("act." + a.type), a.product,
+        .map(({ h, a }) => [a.date, h.name, t("act." + a.type), productsOf(a).join(", "), ...(withFamily ? [a.family ? t("family." + a.family) : ""] : []),
           (h.contacts.find((c) => c.id === a.contactId) || {}).name, a.rooms ?? "", a.note, personName(a.createdBy)]),
     ]);
   }
@@ -652,10 +705,12 @@
   // Aan wie je een gepland moment kunt toewijzen: wie het product van dat
   // moment mag zien. Zonder product is dat iedereen. Een keuze, geen muur: de
   // databank verbergt het moment sowieso voor wie het product niet heeft.
-  function assigneeOptions(product, current) {
+  // products: de producten van het moment. Wie er minstens één van heeft,
+  // ziet het moment en kan het dus opvolgen.
+  function assigneeOptions(products, current) {
     const list = owners().filter(([id]) => {
       const scope = id === store.me().id ? (store.can.products || []) : (peopleScope.get(id) || []);
-      return !product || !scope.length || scope.includes(product);
+      return !products.length || !scope.length || products.some((p) => scope.includes(p));
     });
     if (current && !list.some(([id]) => id === current)) list.push([current, personName(current) || "?"]);
     // "—" alleen als er niemand bekend is (een moment van vóór de stempel):
@@ -1123,18 +1178,6 @@
 
   // ---------- fiche ----------
   const opt = (value, label, current) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
-  // Eén product kiezen, in dezelfde uitklapper als overal elders. Radio's en
-  // geen vinkjes: een contactmoment hoort bij één product. Omdat ze allemaal
-  // name="product" dragen, komt de keuze via FormData binnen, en de
-  // samenvatting houdt de uitklapper zelf bij — de dialoog hoeft er dus
-  // helemaal niets voor te doen. Het streepje is een rij als alle andere, en
-  // daarmee ook meteen de tekst die er staat als er niets gekozen is.
-  const productOne = (chosen) => pickBox([
-    { attrs: `name="product" value=""`, label: "—", checked: !chosen, type: "radio" },
-    ...myProducts().map((p) => ({
-      attrs: `name="product" value="${esc(p)}"`, label: p, checked: chosen === p, type: "radio",
-    })),
-  ], "—");
   // Twee afvinklijsten met dezelfde merken: de scopes en de videoprocessors.
   // Welke lijst
   // een vakje bijwerkt staat in data-brand-list.
@@ -1198,8 +1241,8 @@
         </div>
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.followup"))}</h3>
+      ${secOpen("followup")}
+        ${secHead("followup", t("section.followup"))}
         ${pipe.length ? pipe.map((p) => {
           const e = h.pipeline[p];
           return `<div class="pipe">
@@ -1225,8 +1268,8 @@
         </div>`}
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
+      ${secOpen("planned")}
+        ${secHead("planned", t("section.planned"), `${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned">${esc(t("btn.addPlanned"))}</button>`)}
         ${h.planned.length ? `<ul class="timeline">${h.planned.map((p) => {
           // Dezelfde regel als in de agenda, zodat ook hier staat voor wie
           // het moment is.
@@ -1246,8 +1289,8 @@
         }).join("")}</ul>` : `<p class="muted">${esc(t("empty.planned"))}</p>`}
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.activities"))} <button class="btn small" data-act="add-activity">${esc(t("btn.addActivity"))}</button></h3>
+      ${secOpen("activities")}
+        ${secHead("activities", t("section.activities"), ` <button class="btn small" data-act="add-activity">${esc(t("btn.addActivity"))}</button>`)}
         ${acts.length ? `<ul class="timeline ${state.actsOpen === h.id ? "" : "capped"}">${acts.map((a, i) => {
           const sub = momentLine(h, a, false);
           return `<li${i >= ACT_CAP ? ' class="extra"' : ""}>
@@ -1267,8 +1310,8 @@
           : `<p class="muted">${esc(t("empty.activities"))}</p>`}
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.contacts"))} <button class="btn small" data-act="add-contact">${esc(t("btn.addContact"))}</button></h3>
+      ${secOpen("contacts")}
+        ${secHead("contacts", t("section.contacts"), ` <button class="btn small" data-act="add-contact">${esc(t("btn.addContact"))}</button>`)}
         ${contacts.length ? contacts.map((c) => `
           <div class="contact ${c.primary ? "primary" : ""}">
             <div class="c-actions">
@@ -1284,8 +1327,8 @@
           </div>`).join("") : `<p class="muted">${esc(t("empty.contacts"))}</p>`}
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.data"))}</h3>
+      ${secOpen("data")}
+        ${secHead("data", t("section.data"))}
         <div class="grid">
           <label class="field">${esc(t("field.country"))}
             <select data-field="country">${[opt("", "—", h.country), ...COUNTRIES.map((c) => opt(c, t("country." + c), h.country))].join("")}</select>
@@ -1327,31 +1370,32 @@
         // dit ziekenhuis aangevinkt is en binnen je bereik valt.
         const e = h.pipeline[p];
         const fact = (k) => `data-fact="${k}" data-fact-product="${esc(p)}"`;
-        return `<div class="section">
-        <h3>${esc(p)}</h3>
+        const facts = factsFor(p);
+        return `${secOpen("product:" + p)}
+        ${secHead("product:" + p, p)}
         <p class="muted">${esc(t("unit.unknownOk"))}</p>
         <div class="grid">
-          <label class="field">${esc(t("rfa.cmm"))}
+          ${!facts.includes("cmm") ? "" : `<label class="field">${esc(t("rfa.cmm"))}
             <select ${fact("cmm")}>${[opt("", "—", e.cmm), ...CMM_STATES.map((k) => opt(k, t("rfa.cmm." + k), e.cmm))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("rfa.prio"))}
+          </label>`}
+          ${!facts.includes("prio") ? "" : `<label class="field">${esc(t("rfa.prio"))}
             <select ${fact("prio")}>${[opt("", "—", String(e.prio ?? "")), ...[1, 2, 3].map((n) => opt(String(n), String(n), String(e.prio ?? "")))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("rfa.doesAlready"))}
+          </label>`}
+          ${!facts.includes("doesAlready") ? "" : `<label class="field">${esc(t("rfa.doesAlready"))}
             <select ${fact("doesAlready")}>${[opt("", "—", e.doesAlready), ...YES_NO.map((k) => opt(k, t("yn." + k), e.doesAlready))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("rfa.currentSystem"))}
+          </label>`}
+          ${!facts.includes("currentSystem") ? "" : `<label class="field">${esc(t("rfa.currentSystem"))}
             <input ${fact("currentSystem")} value="${esc(e.currentSystem)}" placeholder="${esc(t("rfa.currentSystem.ph"))}">
-          </label>
-          <label class="field full">${esc(t("rfa.notes"))}
+          </label>`}
+          ${!facts.includes("notes") ? "" : `<label class="field full">${esc(t("rfa.notes"))}
             <textarea ${fact("notes")} rows="3">${esc(e.notes)}</textarea>
-          </label>
+          </label>`}
         </div>
       </div>`;
       }).join("")}
 
-      ${!endoFor(h) ? "" : `<div class="section">
-        <h3>${esc(t("section.unit"))}</h3>
+      ${!endoFor(h) ? "" : `${secOpen("unit")}
+        ${secHead("unit", t("section.unit"))}
         <p class="muted">${esc(t("unit.unknownOk"))}</p>
         <div class="grid">
           <div class="field full"><span class="field-label">${esc(t("unit.scopeBrands"))}</span>
@@ -1406,14 +1450,14 @@
       if (d.field === "stage") stageStatus(h, h.activities.length > 0);
     } else if (d.pstage && h.pipeline[d.pstage]) {
       h.pipeline[d.pstage].stage = el.value;
-      stageStatus(h.pipeline[d.pstage], h.activities.some((a) => a.product === d.pstage));
+      stageStatus(h.pipeline[d.pstage], h.activities.some((a) => productsOf(a).includes(d.pstage)));
       syncPipeline(h);
     } else if (d.powner && h.pipeline[d.powner]) {
       h.pipeline[d.powner].owner = el.value;
     } else if (d.fact && h.pipeline[d.factProduct]) {
       // normalizeFacts houdt de vaste sleutels en het getal in de hand.
       h.pipeline[d.factProduct][d.fact] = el.value;
-      normalizeFacts(h.pipeline[d.factProduct]);
+      normalizeFacts(h.pipeline[d.factProduct], d.factProduct);
     } else if (d.unit) {
       h.unit[d.unit] = el.type === "number" ? num(el.value) : el.value;
     } else if (d.unitBool) {
@@ -1447,6 +1491,15 @@
     if (e.target.closest("[data-acts-toggle]")) {
       state.actsOpen = state.actsOpen === h.id ? null : h.id;
       renderFiche();
+      return;
+    }
+    // Een sectie open- of dichtklappen. Zonder hertekenen: alleen de klasse
+    // wisselt, zodat wat je in een veld aan het typen was blijft staan.
+    const sec = e.target.closest("[data-sec-toggle]");
+    if (sec) {
+      const dicht = toggleSection(sec.dataset.secToggle);
+      sec.closest(".section").classList.toggle("closed", dicht);
+      sec.setAttribute("aria-expanded", dicht ? "false" : "true");
       return;
     }
     const b = e.target.closest("[data-act]");
@@ -1691,7 +1744,7 @@
       const e = h.pipeline[p];
       const followed = !!e && (!!e.owner || e.status !== "red" || e.stage !== "prospect"
         || !!(e.cmm || e.prio || e.doesAlready || e.currentSystem || e.notes));
-      const used = followed || h.contacts.some((c) => c.products.includes(p)) || h.activities.some((a) => a.product === p);
+      const used = followed || h.contacts.some((c) => c.products.includes(p)) || h.activities.some((a) => productsOf(a).includes(p));
       if (!used) h.products = h.products.filter((x) => x !== p);
     }
     // Enkel als hier het laatste product wegviel — een ziekenhuis dat er al
@@ -1762,27 +1815,60 @@
     }, c && t("confirm.deleteContact", { name: c.name }));
   }
 
+  // De keuzelijst van soorten voor een product; zonder product die van de
+  // producten waar dit account mee werkt. Een moment dat al een soort heeft
+  // die hier niet (meer) wordt aangeboden, houdt haar: de lijst versmalt de
+  // keuze, ze herschrijft niets.
+  function typeOptions(products, current) {
+    const keys = typesAmong(products, myProducts());
+    return (current && !keys.includes(current) ? [current, ...keys] : keys).map((k) => opt(k, t("act." + k), current)).join("");
+  }
+  // De producten van een moment: vinkjes in dezelfde uitklapper als overal.
+  // Meestal één, soms meer (een gesprek over twee producten tegelijk).
+  const productMany = (chosen) => pickBox(myProducts().map((p) => ({
+    attrs: `data-mproduct="${esc(p)}"`, label: p, checked: chosen.includes(p),
+  })), "—");
+  const pickedProducts = (form) => [...form.querySelectorAll("[data-mproduct]:checked")].map((x) => x.dataset.mproduct);
+  // De keuze in het record zetten, in de vorm die erbij hoort: een lijst
+  // zodra het er meer dan één zijn of het record al een lijst droeg, anders
+  // gewoon de ene naam.
+  function setProducts(rec, list) {
+    if (list.length > 1 || Array.isArray(rec.products)) { rec.products = list; delete rec.product; }
+    else rec.product = list[0] || "";
+  }
+  // Een ander product gekozen in de dialoog: de lijst volgt. Bestaat de
+  // gekozen soort daar niet, dan valt de keuze terug op de eerste.
+  function retype(select, products) {
+    const keys = typesAmong(products, myProducts());
+    const was = select.value;
+    select.innerHTML = keys.map((k) => opt(k, t("act." + k), keys.includes(was) ? was : keys[0])).join("");
+  }
+
   function activityDialog(h, a, plan) {
     const v = a || (plan ? { ...plan, rooms: "" } : {
       date: today(),
-      type: h.activities.length ? "email" : "prospecting",
+      type: "email",
       product: defaultProduct(h),
       contactId: (mainContact(h, defaultProduct(h)) || {}).id || "",
       rooms: "", note: "",
     });
+    const had = productsOf(v);
     const form = openDialog(`
       <h2>${esc(a ? t("dlg.actEdit") : t("dlg.actNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
         <label class="field">${esc(t("dlg.a.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
         <label class="field">${esc(t("dlg.a.type"))}
-          <select name="type">${Object.keys(ACT_TYPES).map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
+          <select name="type">${typeOptions(had, v.type)}</select>
         </label>
-        <div class="field">${esc(t("dlg.a.product"))}${productOne(v.product)}</div>
+        <div class="field">${esc(t("dlg.a.product"))}${productMany(had)}</div>
         <label class="field">${esc(t("dlg.a.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
-        <label class="field full" id="roomsField"><span id="roomsLabel">${esc(t("dlg.a.rooms"))}</span><input type="number" min="0" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
+        <label class="field" id="roomsField"><span id="roomsLabel">${esc(t("dlg.a.rooms"))}</span><input type="number" min="0" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
+        <label class="field" id="familyField">${esc(t("dlg.a.family"))}<select name="family"></select></label>
+        <p class="muted full" id="roomsHint">${esc(t("dlg.a.used.hint"))}</p>
         <label class="field full">${esc(t("dlg.a.note"))}<textarea name="note" rows="4" placeholder="${esc(t("dlg.a.note.ph"))}">${esc(v.note)}</textarea></label>
+        <p class="muted full" id="noteHint">${esc(t("dlg.a.procedure.hint"))}</p>
       </div>
       ${stampLine(a)}
       <div class="actions">
@@ -1799,18 +1885,23 @@
         // weet dat dit afvinken is en geen verwijderen. Niets verwijst naar een
         // id van een gepland moment, dus hergebruiken kan veilig.
         const rec = a || { id: plan ? plan.id : uid() };
-        const wantsRooms = wantsQuantity(data.type, data.product);
+        const keuze = pickedProducts(form);
+        const product = keuze.length === 1 ? keuze[0] : "";
+        const wantsRooms = keuze.length <= 1 && wantsQuantity(data.type, product);
         // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
-        const before = a ? { type: rec.type, rooms: rec.rooms, product: rec.product } : null;
+        const before = a ? { type: rec.type, rooms: rec.rooms, product: productOf(rec) } : null;
         Object.assign(rec, {
-          date: data.date, type: data.type, product: data.product, contactId: data.contactId,
+          date: data.date, type: data.type, contactId: data.contactId,
           rooms: wantsRooms ? num(data.rooms) : null, note: data.note.trim(),
         });
+        setProducts(rec, keuze);
+        if (wantsFamily(data.type, product) && data.family) rec.family = data.family;
+        else delete rec.family;
         stamp(rec, !a);
         if (!a) h.activities.push(rec);
         // Een contactmoment voor een product zet dat product bij het
         // ziekenhuis: anders is er geen opvolging om bij te werken.
-        if (rec.product && !h.products.includes(rec.product)) h.products.push(rec.product);
+        for (const p of productsOf(rec)) if (!h.products.includes(p)) h.products.push(p);
         syncPipeline(h);
         // Ook bij een wijziging: een contactmoment dat nú een installatie of
         // een bestelling is, zet de kleur en de fase mee goed.
@@ -1831,10 +1922,27 @@
     // Het aantal hangt af van soort én product: kamers bij een abonnement,
     // bestelde stuks bij een product per ingreep. Het veld is hetzelfde, het
     // opschrift volgt het product.
-    const sync = () => {
-      const product = form.elements.product.value;
-      $("#roomsField", form).hidden = !wantsQuantity(form.elements.type.value, product);
-      $("#roomsLabel", form).textContent = t(productKind(product) === "procedure" ? "dlg.a.quantity" : "dlg.a.rooms");
+    // De soorten volgen het product, en de soort binnen het product (bij
+    // stents) staat er alleen waar ook het aantal staat.
+    let familyFor = null;
+    const sync = (e) => {
+      const keuze = pickedProducts(form);
+      const product = keuze.length === 1 ? keuze[0] : "";
+      if (e && e.target.dataset.mproduct) retype(form.elements.type, keuze);
+      const type = form.elements.type.value;
+      const perPiece = productKind(product) === "procedure";
+      const number = keuze.length <= 1 && wantsQuantity(type, product);
+      $("#roomsField", form).hidden = !number;
+      $("#roomsLabel", form).textContent = t(!perPiece ? "dlg.a.rooms" : type === "procedure" ? "dlg.a.used" : "dlg.a.quantity");
+      $("#roomsHint", form).hidden = !(perPiece && number);
+      $("#noteHint", form).hidden = type !== "procedure";
+      const fam = form.elements.family;
+      if (familyFor !== product) {
+        const was = familyFor === null ? v.family || "" : fam.value;
+        fam.innerHTML = [opt("", "—", was), ...familiesFor(product).map((k) => opt(k, t("family." + k), was))].join("");
+        familyFor = product;
+      }
+      $("#familyField", form).hidden = !wantsFamily(type, product);
     };
     form.onchange = sync;
     sync();
@@ -1854,6 +1962,7 @@
     // Een nieuw moment is voor jezelf tot je iemand anders kiest; een bestaand
     // toont wie het nu opvolgt.
     const assignee = p ? assigneeOf(p) : store.me().id;
+    const had = productsOf(v);
     // Lokaal zonder naam is er niemand om aan toe te wijzen: dan geen veld.
     const canAssign = owners().length > 0 || !!assignee;
     const form = openDialog(`
@@ -1861,15 +1970,16 @@
       <div class="grid">
         <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
         <label class="field">${esc(t("dlg.p.type"))}
-          <select name="type">${ACT_TYPE_KEYS.map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
+          <select name="type">${typeOptions(had, v.type)}</select>
         </label>
-        <div class="field">${esc(t("dlg.p.product"))}${productOne(v.product)}</div>
+        <div class="field">${esc(t("dlg.p.product"))}${productMany(had)}</div>
         <label class="field">${esc(t("dlg.p.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
         ${canAssign ? `<label class="field full">${esc(t("dlg.p.assignee"))}
-          <select name="assignee">${assigneeOptions(v.product, assignee)}</select>
+          <select name="assignee">${assigneeOptions(had, assignee)}</select>
         </label>` : ""}
+        <label class="field full" id="familyField">${esc(t("dlg.a.family"))}<select name="family"></select></label>
         <label class="field full">${esc(t("dlg.p.note"))}<textarea name="note" rows="3" placeholder="${esc(t("dlg.p.note.ph"))}">${esc(v.note)}</textarea></label>
       </div>
       ${stampLine(p)}
@@ -1883,9 +1993,14 @@
       } else {
         const rec = p || { id: uid() };
         Object.assign(rec, {
-          date: data.date, type: data.type, product: data.product,
+          date: data.date, type: data.type,
           contactId: data.contactId, note: data.note.trim(),
         });
+        const keuze = pickedProducts(form);
+        setProducts(rec, keuze);
+        // De soort stent kan al bij het plannen: bij het afvinken gaat ze mee.
+        if (keuze.length === 1 && wantsFamily(data.type, keuze[0]) && data.family) rec.family = data.family;
+        else delete rec.family;
         // Het veld komt er alleen bij als het moment voor iemand anders is dan
         // wie het invoerde: voor die persoon volgt het al uit de stempel. Zo
         // krijgt een moment dat je voor jezelf plant geen naam mee, en blijft
@@ -1905,15 +2020,32 @@
     // gekozen was blijft staan als hij dat product ook heeft.
     // onchange en geen luisteraar: #dialogForm wordt hergebruikt, en een
     // luisteraar per geopende dialoog zou zich opstapelen (zie openDialog).
+    let familyFor = null;
+    const family = () => {
+      const keuze = pickedProducts(form);
+      const product = keuze.length === 1 ? keuze[0] : "";
+      const fam = form.elements.family;
+      if (familyFor !== product) {
+        const was = familyFor === null ? v.family || "" : fam.value;
+        fam.innerHTML = [opt("", "—", was), ...familiesFor(product).map((k) => opt(k, t("family." + k), was))].join("");
+        familyFor = product;
+      }
+      $("#familyField", form).hidden = !wantsFamily(form.elements.type.value, product);
+    };
+    family();
     form.onchange = (e) => {
+      const changed = !!e.target.dataset.mproduct;
+      const keuze = pickedProducts(form);
+      if (changed) retype(form.elements.type, keuze);
+      family();
       const pick = form.elements.assignee;
-      if (!pick || e.target.name !== "product") return;
+      if (!pick || !changed) return;
       const was = pick.value;
       // Een collega die het nieuwe product niet heeft valt weg. Iemand die we
       // niet (meer) kennen blijft staan: over hem valt niets te zeggen, en een
       // ander product kiezen mag het moment niet stil aan jou toewijzen.
       const unknown = !!was && !owners().some(([id]) => id === was);
-      pick.innerHTML = assigneeOptions(e.target.value, unknown ? was : "");
+      pick.innerHTML = assigneeOptions(keuze, unknown ? was : "");
       const has = (id) => [...pick.options].some((o) => o.value === id);
       const next = has(was) ? was : has(store.me().id) ? store.me().id : "";
       const blank = pick.querySelector('option[value=""]');
@@ -1942,23 +2074,28 @@
     // het ziekenhuis, dan is het dat. Hangen er meer aan, dan valt niet te
     // raden welk — en dan blijft alles staan, liever dan het verkeerde product
     // groen te maken. Hangt er geen aan, dan is het het ziekenhuis zelf.
+    // Gaat het over meer dan één product, dan beweegt elk van die rijen mee.
     const rows = myProducts().filter((p) => h.products.includes(p) && h.pipeline[p]);
-    const x = (act.product && h.pipeline[act.product])
-      || (rows.length === 1 ? h.pipeline[rows[0]] : rows.length ? null : h);
-    if (!x) return;
-    if ((act.type === "installation" || act.type === "order") && x.status !== "green") {
-      x.status = "green";
-      if (PRE_SALE.includes(x.stage)) x.stage = "customer";
-      toast(t("status.toGreen"));
-    } else if (x.status === "red") {
-      x.status = "orange";
-      if (x.stage === "prospect") x.stage = "first_contact";
-      toast(t("status.toOrange"));
-    }
-    // Na een demo: geïnstalleerd bij een product per abonnement, in evaluatie
-    // bij een product per ingreep, waar niets geïnstalleerd wordt.
-    if (act.type === "demo" && ["prospect", "first_contact", "meeting", "demo_planned"].includes(x.stage)) {
-      x.stage = productKind(act.product) === "procedure" ? "evaluation" : "demo_installed";
+    const named = productsOf(act).filter((p) => h.pipeline[p]);
+    const targets = named.length ? named.map((p) => [h.pipeline[p], p])
+      : rows.length === 1 ? [[h.pipeline[rows[0]], rows[0]]] : rows.length ? [] : [[h, ""]];
+    for (const [x, p] of targets) {
+      if ((act.type === "installation" || act.type === "order") && x.status !== "green") {
+        x.status = "green";
+        if (PRE_SALE.includes(x.stage)) x.stage = "customer";
+        toast(t("status.toGreen"));
+      } else if (x.status === "red") {
+        x.status = "orange";
+        if (x.stage === "prospect") x.stage = "first_contact";
+        toast(t("status.toOrange"));
+      }
+      // Na een demo: geïnstalleerd bij een product per abonnement, in evaluatie
+      // bij een product per ingreep, waar niets geïnstalleerd wordt. Een
+      // procedure waar een van ons bij stond is daar hetzelfde: het product is
+      // gebruikt, dus het wordt geëvalueerd. Een klant blijft klant.
+      if ((act.type === "demo" || act.type === "procedure") && ["prospect", "first_contact", "meeting", "demo_planned"].includes(x.stage)) {
+        x.stage = productKind(p) === "procedure" ? "evaluation" : "demo_installed";
+      }
     }
     syncPipeline(h);
   }
@@ -1974,7 +2111,7 @@
   function syncRooms(h, before, after) {
     // Alleen voor een product per abonnement: het aantal bij een RFA-bestelling
     // zijn stuks, geen kamers, en hoort dus niet bij de afdeling opgeteld.
-    const perKamer = (a) => !!a && productKind(a.product) === "subscription";
+    const perKamer = (a) => !!a && productKind(productOf(a)) === "subscription";
     const installed = (a) => {
       if (!perKamer(a) || !a.rooms) return 0;
       if (a.type === "installation") return a.rooms;
@@ -2133,7 +2270,7 @@
             t("col.address"), t("col.createdAt"), t("col.notes"),
             t("field.network"), t("field.sites"),
             ...myProducts().flatMap((p) => [`${t("col.stage")} ${p}`, `${t("col.owner")} ${p}`,
-              ...(productKind(p) === "procedure" ? ["rfa.cmm", "rfa.prio", "rfa.doesAlready", "rfa.currentSystem", "rfa.notes"].map((k) => `${t(k)} ${p}`) : [])])],
+              ...factsFor(p).map((k) => `${t("rfa." + k)} ${p}`)])],
           ...hs.map((h) => [h.name, h.country && t("country." + h.country), h.sector && t("sector." + h.sector),
             t("status." + h.status), t("stage." + h.stage), h.products.join(", "), lastContact(h),
             countType(h, "demo"), ...(endoAccount() ? [countType(h, "installation"), h.unit.roomsInstalled ?? ""] : []),
@@ -2142,10 +2279,10 @@
             h.network, h.sites,
             ...myProducts().flatMap((p) => {
               const e = h.products.includes(p) && h.pipeline[p];
-              const rfa = productKind(p) === "procedure";
-              if (!e) return rfa ? ["", "", "", "", "", "", ""] : ["", ""];
-              return [t("stage." + e.stage), personName(e.owner),
-                ...(rfa ? [e.cmm && t("rfa.cmm." + e.cmm), e.prio ?? "", e.doesAlready && t("yn." + e.doesAlready), e.currentSystem, e.notes] : [])];
+              const facts = factsFor(p);
+              if (!e) return ["", "", ...facts.map(() => "")];
+              const shown = { cmm: e.cmm && t("rfa.cmm." + e.cmm), prio: e.prio ?? "", doesAlready: e.doesAlready && t("yn." + e.doesAlready), currentSystem: e.currentSystem, notes: e.notes };
+              return [t("stage." + e.stage), personName(e.owner), ...facts.map((k) => shown[k])];
             })]),
         ]), "text/csv");
       } else if (kind === "contacts") {
@@ -2163,7 +2300,7 @@
           [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("dlg.p.assignee"), t("col.addedBy")],
           ...hs.flatMap((h) => h.planned.filter((p) => inPeriod(p.date)).map((p) => ({ h, p })))
             .sort((x, y) => x.p.date.localeCompare(y.p.date) || x.h.name.localeCompare(y.h.name))
-            .map(({ h, p }) => [p.date, h.name, t("act." + p.type), p.product,
+            .map(({ h, p }) => [p.date, h.name, t("act." + p.type), productsOf(p).join(", "),
               (h.contacts.find((c) => c.id === p.contactId) || {}).name, p.note, personName(assigneeOf(p)) || (p.assignee ? "?" : ""), personName(p.createdBy)]),
         ]), "text/csv");
       } else if (kind === "units") {
@@ -2411,7 +2548,7 @@
         if (L.authors.length && !L.authors.includes(a.createdBy)) continue;
         if (words.length) {
           const c = h.contacts.find((x) => x.id === a.contactId);
-          const hay = [place, c && c.name, t("act." + a.type), a.product, a.note].join(" ").toLowerCase();
+          const hay = [place, c && c.name, t("act." + a.type), productsOf(a).join(" "), a.note].join(" ").toLowerCase();
           if (!words.every((w) => hay.includes(w))) continue;
         }
         out.push({ h, a });
@@ -2484,13 +2621,22 @@
         <button class="btn small" data-log-more>${esc(t("log.more"))}</button></p>` : ""}`;
     settle();
   }
+  // De soorten in de filter: die van de producten waarop gefilterd is, of van
+  // je eigen producten. Wat al aangevinkt staat blijft erbij, anders valt een
+  // vinkje weg dat nog wel filtert.
+  function logTypes() {
+    const offered = typesOffered(state.filter.products.length ? state.filter.products : myProducts());
+    return ACT_TYPE_KEYS.filter((k) => offered.includes(k) || state.log.types.includes(k));
+  }
+  const logPick = (key, items, label, leeg, voor) => pickBox(items.map((k) => ({
+    attrs: `data-log-pick="${esc(key)}" data-value="${esc(k)}"`, label: label(k), checked: state.log[key].includes(k),
+  })), leeg, false, voor);
+  const logTypesPick = () => logPick("types", logTypes(), (k) => t("act." + k), t("log.allTypes"));
   function renderLog() {
     const L = state.log;
     const only = L.hospitalId && byId(L.hospitalId);
     if (L.hospitalId && !only) clearLogHospital();
-    const pick = (key, items, label, leeg, voor) => pickBox(items.map((k) => ({
-      attrs: `data-log-pick="${esc(key)}" data-value="${esc(k)}"`, label: label(k), checked: L[key].includes(k),
-    })), leeg, false, voor);
+    const pick = logPick;
     agendaView.innerHTML = `
       <div class="s-head">
         <h2>${esc(t("agenda.title"))}</h2>
@@ -2505,7 +2651,7 @@
         ${only ? "" : FILTERS.filter((f) => f.key !== "statuses" && f.items().length).map((f) => `<label>${pickBox(f.items().map((k) => ({
           attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`, label: f.label(k), checked: chosen(f.key).includes(k),
         })), f.leeg(), false, f.voor && f.voor())}</label>`).join("")}
-        <label>${pick("types", ACT_TYPE_KEYS, (k) => t("act." + k), t("log.allTypes"))}</label>
+        <label data-log-types>${logTypesPick()}</label>
         ${owners().length ? `<label>${pick("authors", owners().map(([id]) => id), personLabel, t("log.anyAuthor"), t("log.author"))}</label>` : ""}
         ${only ? "" : `<input type="search" data-log-search value="${esc(state.filter.query)}" placeholder="${esc(t("log.search"))}" aria-label="${esc(t("log.search"))}">`}
       </div>
@@ -2757,6 +2903,10 @@
       renderList();
       renderMarkers();
       renderKpis();
+      // Andere producten, andere soorten: alleen dat ene veld, de rest van de
+      // filterrij blijft staan zodat de open uitklapper niet dichtklapt.
+      const types = d.filter === "products" && $("[data-log-types]", agendaView);
+      if (types) types.innerHTML = logTypesPick();
     } else if (d.logPick) {
       state.log[d.logPick] = toggle(state.log[d.logPick], d.value);
     } else if ("logPeriod" in d) {

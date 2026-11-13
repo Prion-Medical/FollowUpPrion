@@ -241,7 +241,7 @@ $$;
 -- bijgewerkt is.
 create or replace function followup.producten() returns text[]
 language sql immutable set search_path = public as $$
-  select array['EndoQ', 'Ainex', 'Thyroid RFA', 'Fibroid RFA'];
+  select array['EndoQ', 'Ainex', 'Thyroid RFA', 'Fibroid RFA', 'Stents'];
 $$;
 
 -- De vaste volgorde uit domain.js. Die houden we aan zodat laden-en-opslaan
@@ -270,10 +270,12 @@ $$;
 -- meeste contactmomenten van vóór deze afscherming hebben geen product, en een
 -- geschiedenis met gaten erin is erger dan een regel te veel zien.
 --
--- Twee vormen. Een contactmoment en een gepland moment dragen één product in
--- "product"; een contactpersoon draagt er meerdere in "products", want dezelfde
--- arts is vaak het aanspreekpunt voor allebei. Bij een lijst volstaat één
--- overlapping: wie Ainex mag, ziet de arts die EndoQ én Ainex doet.
+-- Twee vormen. Een contactmoment en een gepland moment dragen meestal één
+-- product in "product"; een contactpersoon draagt er meerdere in "products",
+-- want dezelfde arts is vaak het aanspreekpunt voor allebei. Sinds een gesprek
+-- over twee producten tegelijk kan gaan, mag ook een moment die lijst dragen.
+-- Bij een lijst volstaat één overlapping: wie Ainex mag, ziet de arts die
+-- EndoQ én Ainex doet, en het gesprek dat over allebei ging.
 create or replace function followup.in_scope(e jsonb, allowed text[]) returns boolean
 language sql immutable set search_path = public as $$
   select case
@@ -431,10 +433,20 @@ $$;
 -- 4. Afschermen bij het lezen
 -- ---------------------------------------------------------------------------
 
+-- Contactmomenten en geplande momenten. Draagt een moment een productlijst
+-- (een gesprek over twee producten tegelijk), dan gaat die gesnoeid mee, net
+-- als bij een contactpersoon hieronder: het moment blijft zichtbaar zodra er
+-- één product overlapt, maar het product van de collega staat er niet bij.
+-- De nota is gedeeld, zoals de velden van een contactpersoon dat zijn. Een
+-- moment in de oude vorm, met één "product", gaat ongemoeid mee.
 create or replace function followup.scope_entries(entries jsonb, allowed text[]) returns jsonb
 language sql immutable set search_path = public as $$
   select coalesce((
-    select jsonb_agg(t.e order by t.i)
+    select jsonb_agg(case when t.e ? 'products'
+                          then t.e || jsonb_build_object('products',
+                                 to_jsonb(followup.product_sort(
+                                   followup.both_in(followup.texts(t.e -> 'products'), allowed))))
+                          else t.e end order by t.i)
       from jsonb_array_elements(followup.arr(entries)) with ordinality t(e, i)
      where followup.in_scope(t.e, allowed)
   ), '[]'::jsonb);
@@ -790,8 +802,8 @@ begin
   -- plaats. Nieuw: achteraan, zoals de app zelf ook toevoegt. Binnen het zicht
   -- en niet meegestuurd: verwijderd — write_state beslist of dat mocht.
   --
-  -- Draagt het record een productlijst — vandaag enkel een contactpersoon —
-  -- dan gaat die door dezelfde formule als bij het ziekenhuis in plaats van
+  -- Draagt het record een productlijst — een contactpersoon, of een moment
+  -- over meer dan één product — dan gaat die door dezelfde formule als bij het ziekenhuis in plaats van
   -- rechtstreeks uit de payload te komen. We kijken naar de vorm van het
   -- record en niet naar welke lijst het is: zo klopt het ook als er later nog
   -- een soort bijkomt.
