@@ -1645,23 +1645,34 @@
   // De formulierdialoog sluit zacht (softClose in ui.js), langs elke weg: een
   // knop of Escape. Dit staat op de dialoog en loopt dus na de afhandeling op
   // het formulier zelf; hield die het sluiten al tegen, dan blijft hij open.
+  // beforeClose hoort bij de dialoog die nu open is (openDialog() zet hem):
+  // een vraag die eerst beantwoord wordt, voor een dialoog die iets toont dat
+  // na het sluiten weg is, of die nog op de databank wacht.
+  function closeDialog(dlg, value) {
+    const guard = $("#dialogForm").beforeClose;
+    if (!guard) return softClose(dlg, value);
+    guard().then((yes) => { if (yes) softClose(dlg, value); });
+  }
   $("#dialog").addEventListener("submit", (e) => {
     if (e.defaultPrevented) return;
     e.preventDefault();
-    softClose(e.currentTarget, e.submitter ? e.submitter.value : "");
+    closeDialog(e.currentTarget, e.submitter ? e.submitter.value : "");
   });
-  $("#dialog").addEventListener("cancel", (e) => { e.preventDefault(); softClose(e.currentTarget); });
+  $("#dialog").addEventListener("cancel", (e) => { e.preventDefault(); closeDialog(e.currentTarget); });
   // askDelete is de vraag die de knop "Verwijder" eerst stelt; een dialoog
   // zonder zo'n knop laat hem weg.
-  function openDialog(html, onSubmit, askDelete) {
+  // opts.beforeClose: zie closeDialog(). Een dialoog die al openstaat (de
+  // tweede stap van het abonnement) krijgt enkel nieuwe inhoud.
+  function openDialog(html, onSubmit, askDelete, opts = {}) {
     const dlg = $("#dialog");
     const form = $("#dialogForm");
+    form.beforeClose = opts.beforeClose || null;
     form.innerHTML = html;
     // #dialogForm wordt door elke dialoog hergebruikt. onchange is een
     // eigenschap en geen luisteraar, zodat die van de vorige dialoog hier
     // vervalt in plaats van zich op te stapelen.
     form.onchange = null;
-    dlg.showModal();
+    if (!dlg.open) dlg.showModal();
     const first = form.querySelector("input, select, textarea");
     if (first) first.focus();
     form.onsubmit = (e) => {
@@ -2296,27 +2307,37 @@
   ].join(" · ");
   // Eén abonnement in een lijst. button is de knop om het stop te zetten: in
   // de dialoog een verzendknop, op het gebruikersscherm een gewone knop.
-  const feedRow = (f, owner, button) => `<li class="feed-row">
+  const feedRow = (f, owner, button) => `<div class="u-row feed-row">
       <div class="feed-what">
-        <b>${esc(f.label || t("feeds.unnamed"))}</b>${owner ? ` <span class="muted">· ${esc(owner)}</span>` : ""}
+        <span><b>${esc(f.label || t("feeds.unnamed"))}</b>${owner ? ` <span class="muted">· ${esc(owner)}</span>` : ""}</span>
         <span class="muted">${esc(feedSummary(f))}</span>
         <span class="muted">${esc(t("feeds.created", { date: feedDate(f.created_at) }))} · ${
           esc(f.last_used ? t("feeds.used", { date: feedDate(f.last_used) }) : t("feeds.neverUsed"))}</span>
       </div>
       ${button}
-    </li>`;
+    </div>`;
 
-  // Abonneren: een adres dat je agenda-app zelf ophaalt. De dialoog maakt er
-  // een aan, toont het één keer, en lijst de abonnementen die je al hebt.
+  // Abonneren: een adres dat je agenda-app zelf ophaalt. Twee toestanden in
+  // dezelfde dialoog. Eerst de abonnementen die je al hebt en het formulier
+  // voor een nieuw. Na het aanmaken maakt dat plaats voor het adres zelf, met
+  // "Klaar" als enige knop: het adres is een sleutel die je maar één keer te
+  // zien krijgt, dus er mag dan niets anders meer om aandacht vragen. Wie
+  // sluit zonder te kopiëren, krijgt eerst de vraag of dat de bedoeling is.
+  // Het maximum aantal abonnementen per account. De databank beslist het
+  // (c_max in feed_create(), schema.sql); dit is enkel om het formulier op
+  // tijd weg te laten. Verander je het daar, verander het dan ook hier.
+  const FEED_MAX = 10;
   function feedDialog() {
     if (!store.feeds) return tell(t("feeds.localOnly"));
     const products = myProducts();
     // Een tweede klik terwijl de eerste nog onderweg is, maakt geen tweede adres.
     let busy = false;
-    const form = openDialog(`
+    const keuzeHtml = () => `
       <h2>${esc(t("feeds.title"))}</h2>
       <p class="muted">${esc(t("feeds.intro"))}</p>
-      <div class="feed-fresh" hidden></div>
+      <h3 class="feed-h">${esc(t("feeds.yours"))}</h3>
+      <div class="feed-list"><p class="muted">${esc(t("feeds.loading"))}</p></div>
+      <div class="feed-new">
       <h3 class="feed-h">${esc(t("feeds.new"))}</h3>
       <div class="grid">
         <label class="field full">${esc(t("feeds.label"))}<input name="label" maxlength="80" placeholder="${esc(t("feeds.label.ph"))}"></label>
@@ -2332,17 +2353,56 @@
         ], t("feeds.allProducts"))}</div>` : ""}
       </div>
       <p class="muted">${esc(t("feeds.delay"))}</p>
+      </div>
+      <p class="muted feed-full" hidden>${esc(t("feeds.limit"))}</p>
       <div class="actions">
         <button class="btn" value="cancel" formnovalidate>${esc(t("btn.close"))}</button>
         <button class="btn primary" value="create">${esc(t("feeds.create"))}</button>
+      </div>`;
+    const adresHtml = (url) => {
+      const webcal = url.replace(/^https:/, "webcal:");
+      const google = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}`;
+      // Per agenda hoe je het toevoegt, dichtgeklapt: wie Outlook gebruikt,
+      // hoeft de stappen voor Apple niet te lezen. name maakt er één groep
+      // van, zodat er telkens één openstaat. Gewone <details>, geen .pick:
+      // de luisteraar in domain.js laat ze dus met rust.
+      return `
+      <h2>${esc(t("feeds.readyTitle"))}</h2>
+      <p class="muted">${esc(t("feeds.ready"))}</p>
+      <div class="feed-url">
+        <input readonly value="${esc(url)}" aria-label="${esc(t("feeds.address"))}">
+        <button type="button" class="btn" data-feed-copy>${icon("copy")} ${esc(t("feeds.copy"))}</button>
       </div>
-      <h3 class="feed-h">${esc(t("feeds.yours"))}</h3>
-      <div class="feed-list"><p class="muted">${esc(t("feeds.loading"))}</p></div>`, (data, action) => {
+      <p class="feed-warn">${esc(t("feeds.secret"))}</p>
+      <div class="feed-how">
+        ${[
+          ["apple", `<a class="btn small" href="${esc(webcal)}">${icon("calendar")} ${esc(t("feeds.openApp"))}</a>`],
+          ["google", `<a class="btn small" href="${esc(google)}" target="_blank" rel="noopener noreferrer">${esc(t("feeds.openGoogle"))}</a>`],
+          ["outlook", ""],
+        ].map(([k, button]) => `<details name="feed-how">
+          <summary>${icon("next")}<span>${esc(t("feeds.how." + k))}</span></summary>
+          <div class="feed-how-body">
+            ${button ? `<p>${button}</p>` : ""}
+            <ol>${t("feeds.how." + k + ".steps").split("\n").map((step) => `<li>${esc(step)}</li>`).join("")}</ol>
+          </div>
+        </details>`).join("")}
+      </div>
+      <div class="actions">
+        <button class="btn primary" value="done">${esc(t("feeds.done"))}</button>
+      </div>`;
+    };
+    // Zolang de databank het adres nog maakt, gaat de dialoog niet dicht: het
+    // antwoord hoort in deze dialoog en nergens anders.
+    const nietTerwijlBezig = () => {
+      if (busy) toast(t("feeds.busy"));
+      return Promise.resolve(!busy);
+    };
+    const form = openDialog(keuzeHtml(), (data, action) => {
       if (action === "create" && !busy) {
         busy = true;
         const chosen = [...form.querySelectorAll("[data-feed-product]:checked")].map((b) => b.dataset.feedProduct);
         store.feedCreate({ label: data.label.trim(), mine: data.mine === "1", products: chosen, lang: data.lang })
-          .then((r) => { showFresh(store.feedUrl(r.secret)); form.elements.label.value = ""; return loadList(); })
+          .then((r) => toonAdres(store.feedUrl(r.secret)))
           .catch((e) => tell(t("feeds.failed", { msg: e.message })))
           .finally(() => { busy = false; });
       } else if (action.startsWith("remove:")) {
@@ -2352,7 +2412,14 @@
           .catch((e) => tell(t("feeds.failed", { msg: e.message }))));
       }
       return KEEP_OPEN;
-    });
+    }, null, { beforeClose: nietTerwijlBezig });
+    // Enter in het naamveld maakt het adres. Anders nam de browser de eerste
+    // knop van het formulier, en dat is "Stopzetten" bij het eerste abonnement.
+    form.elements.label.onkeydown = (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      $('[value="create"]', form).click();
+    };
     // "Alle producten" en de losse vakjes sluiten elkaar uit, zoals op het
     // gebruikersscherm. Niets aangevinkt is weer alles.
     form.onchange = (e) => {
@@ -2364,53 +2431,40 @@
       if (!all.checked && !boxes.some((b) => b.checked)) all.checked = true;
       syncPick(all.closest("details.pick"));
     };
-    // Het adres, één keer. De databank bewaart enkel een hash: wie het hier
-    // niet kopieert, maakt later een nieuw.
-    function showFresh(url) {
-      const box = $(".feed-fresh", form);
-      const webcal = url.replace(/^https:/, "webcal:");
-      const google = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}`;
-      box.innerHTML = `
-        <p><b>${esc(t("feeds.ready"))}</b></p>
-        <div class="feed-url">
-          <input readonly value="${esc(url)}" aria-label="${esc(t("feeds.address"))}">
-          <button type="button" class="btn small" data-feed-copy>${icon("copy")} ${esc(t("feeds.copy"))}</button>
-        </div>
-        <p class="feed-warn">${esc(t("feeds.secret"))}</p>
-        ${/* Per agenda hoe je het toevoegt, dichtgeklapt: wie Outlook gebruikt,
-             hoeft de stappen voor Apple niet te lezen. name maakt er één groep
-             van, zodat er telkens één openstaat. Gewone <details>, geen
-             .pick: de luisteraar in domain.js laat ze dus met rust. */""}
-        <div class="feed-how">
-          ${[
-            ["apple", `<a class="btn small" href="${esc(webcal)}">${icon("calendar")} ${esc(t("feeds.openApp"))}</a>`],
-            ["google", `<a class="btn small" href="${esc(google)}" target="_blank" rel="noopener noreferrer">${esc(t("feeds.openGoogle"))}</a>`],
-            ["outlook", ""],
-          ].map(([k, button]) => `<details name="feed-how">
-            <summary>${icon("next")}<span>${esc(t("feeds.how." + k))}</span></summary>
-            <div class="feed-how-body">
-              ${button ? `<p>${button}</p>` : ""}
-              <ol>${t("feeds.how." + k + ".steps").split("\n").map((step) => `<li>${esc(step)}</li>`).join("")}</ol>
-            </div>
-          </details>`).join("")}
-        </div>`;
-      box.hidden = false;
-      const input = $("input", box);
-      $("[data-feed-copy]", box).onclick = () => {
+    // De tweede toestand. De databank bewaart enkel een hash: wie het adres
+    // hier niet kopieert, maakt later een nieuw.
+    function toonAdres(url) {
+      let copied = false;
+      // Een eigen dialoog, in dezelfde doos: "Klaar" sluit hem, en wie sluit
+      // zonder te kopiëren krijgt eerst de vraag.
+      openDialog(adresHtml(url), () => undefined, null, {
+        beforeClose: () => (copied ? Promise.resolve(true) : ask(t("feeds.notCopied"), { ok: t("feeds.closeAnyway") })),
+      });
+      const input = $(".feed-url input", form);
+      $("[data-feed-copy]", form).onclick = () => {
         input.select();
-        (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject())
-          .then(() => toast(t("feeds.copied")), () => { document.execCommand("copy"); toast(t("feeds.copied")); });
+        const gelukt = () => { copied = true; toast(t("feeds.copied")); };
+        const mislukt = () => toast(t("feeds.copyFailed"));
+        if (navigator.clipboard) navigator.clipboard.writeText(url).then(gelukt, () => (document.execCommand("copy") ? gelukt() : mislukt()));
+        else if (document.execCommand("copy")) gelukt(); else mislukt();
       };
       input.focus();
       input.select();
     }
     function loadList() {
       const list = $(".feed-list", form);
+      if (!list) return Promise.resolve();
       return store.feedList().then((feeds) => {
-        list.innerHTML = feeds.length ? `<ul class="feed-rows">${feeds.map((f) => feedRow(f, "",
-          `<button class="btn small danger" value="remove:${esc(f.id)}" formnovalidate>${esc(t("feeds.remove"))}</button>`)).join("")}</ul>`
+        // Bij het maximum geen formulier dat pas na een klik zegt dat het niet
+        // kan: dan staat er meteen dat je er eerst een moet stopzetten.
+        const vol = feeds.length >= FEED_MAX;
+        $(".feed-new", form).hidden = vol;
+        $(".feed-full", form).hidden = !vol;
+        $('[value="create"]', form).hidden = vol;
+        list.innerHTML = feeds.length ? `<div class="u-list">${feeds.map((f) => feedRow(f, "",
+          `<button class="btn small danger" value="remove:${esc(f.id)}" formnovalidate>${esc(t("feeds.remove"))}</button>`)).join("")}</div>`
           : `<p class="muted">${esc(t("feeds.none"))}</p>`;
-      }, (e) => { list.innerHTML = `<p class="login-error">${esc(t("feeds.failed", { msg: e.message }))}</p>`; });
+      }, (e) => { list.innerHTML = `<p class="feed-error">${esc(t("feeds.failed", { msg: e.message }))}</p>`; });
     }
     loadList();
   }
@@ -3169,10 +3223,10 @@
     const box = usersView.querySelector(".feed-list-all");
     if (!box) return;
     store.feedList(true).then((feeds) => {
-      box.innerHTML = feeds.length ? `<ul class="feed-rows">${feeds.map((f) => feedRow(f, f.owner_name || "?",
-        `<button type="button" class="btn small danger" data-feed-remove="${esc(f.id)}">${esc(t("feeds.remove"))}</button>`)).join("")}</ul>`
+      box.innerHTML = feeds.length ? `<div class="u-list">${feeds.map((f) => feedRow(f, f.owner_name || "?",
+        `<button type="button" class="btn small danger" data-feed-remove="${esc(f.id)}">${esc(t("feeds.remove"))}</button>`)).join("")}</div>`
         : `<p class="muted">${esc(t("feeds.noneAll"))}</p>`;
-    }, (e) => { box.innerHTML = `<p class="login-error">${esc(t("feeds.failed", { msg: e.message }))}</p>`; });
+    }, (e) => { box.innerHTML = `<p class="feed-error">${esc(t("feeds.failed", { msg: e.message }))}</p>`; });
   }
   usersView.addEventListener("click", async (e) => {
     const b = e.target.closest("[data-feed-remove]");

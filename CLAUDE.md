@@ -170,7 +170,11 @@ that at the moment.
 the app's own dialog (`#ask`) and promises true or false, `tell(msg)` is the same box
 with one button. A form dialog with a delete button passes its question as the third
 argument of `openDialog()`, which asks it with the form still open underneath, so
-"Annuleer" puts you back where you were. The banner under the top bar takes a tone,
+"Annuleer" puts you back where you were. A fourth argument, `{ beforeClose }`, is a
+question asked before the dialog closes by any route, Escape included; it belongs to
+that dialog and the next `openDialog()` drops it. The subscription dialog uses it
+twice: not while the database is still making the address, and not without asking
+when the address was never copied. The banner under the top bar takes a tone,
 `showBanner(msg, reload, "error" | "warn" | "info")`, and is red unless told otherwise.
 
 **Making things go away.** Anything that closes with a fade goes through
