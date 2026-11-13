@@ -93,6 +93,9 @@
     return v === "" || v == null || !Number.isFinite(n) ? null : n;
   };
   const dateOrEmpty = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(str(v)) ? str(v) : "");
+  // Een uur als 14:00. Enkel bij een gepland moment: een contactmoment heeft
+  // een datum en geen uur.
+  const timeOrEmpty = (v) => (/^([01]\d|2[0-3]):[0-5]\d$/.test(str(v)) ? str(v) : "");
   const coord = (v, max) => {
     const n = numOrNull(v);
     return n == null || Math.abs(n) > max ? null : n;
@@ -129,6 +132,11 @@
   }
   // Een datum als YYYY-MM-DD uit de losse delen. Niet via toISOString(): die
   // rekent in UTC en schuift bij ons 's avonds een dag op.
+  // Op datum, en op dezelfde dag eerst wat een uur heeft, in volgorde: wat
+  // "ergens die dag" is, komt na wat om negen uur begint. Enkel om te tonen:
+  // h.planned zelf blijft op datum, zoals fix_planned() in de databank het
+  // ook legt, anders verschuift elke opslag de volgorde.
+  const byWhen = (a, b) => a.date.localeCompare(b.date) || (a.time || "99").localeCompare(b.time || "99");
   const ymd = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   // nextAction en nextActionDate volgen uit het eerste geplande moment. Zo
   // blijven de lijst, de filter "actie te laat" en de CSV werken zoals
@@ -509,6 +517,9 @@
     // gekozen is: schreven we bij elk ouder moment een lege waarde, dan zou
     // wie als eerste opslaat de laatste bewerker van de hele agenda worden.
     if (str(p.assignee)) p.assignee = str(p.assignee); else delete p.assignee;
+    // Een uur is er alleen als iemand het invulde, om dezelfde reden: een leeg
+    // veld bij elk ouder moment zou het hele rooster als gewijzigd opslaan.
+    if (timeOrEmpty(p.time)) p.time = timeOrEmpty(p.time); else delete p.time;
     stampFields(p);
     return p;
   }
@@ -1227,12 +1238,12 @@
 
       <div class="section">
         <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
-        ${h.planned.length ? `<ul class="timeline">${h.planned.map((p) => {
+        ${h.planned.length ? `<ul class="timeline">${[...h.planned].sort(byWhen).map((p) => {
           // Dezelfde regel als in de agenda, zodat ook hier staat voor wie
           // het moment is.
           const sub = momentLine(h, p, false);
           return `<li class="${p.date < today() ? "late" : ""}">
-            <div class="t-date">${esc(fmtDate(p.date))}<span class="t-rel">${esc(relDays(p.date))}</span></div>
+            <div class="t-date">${esc(fmtDate(p.date))}<span class="t-rel">${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
             <div class="t-body">
               <div class="t-type"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(t("act." + p.type))}</div>
               ${sub ? `<div class="t-sub">${esc(sub)}</div>` : ""}
@@ -1860,6 +1871,8 @@
       <h2>${esc(p ? t("dlg.plannedEdit") : t("dlg.plannedNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
         <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
+        <label class="field">${esc(t("dlg.p.time"))}<input type="time" name="time" value="${esc(v.time || "")}"
+          title="${esc(t("dlg.p.time.hint"))}"></label>
         <label class="field">${esc(t("dlg.p.type"))}
           <select name="type">${ACT_TYPE_KEYS.map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
         </label>
@@ -1886,6 +1899,8 @@
           date: data.date, type: data.type, product: data.product,
           contactId: data.contactId, note: data.note.trim(),
         });
+        // Zonder uur een hele dag in de agenda; met een uur een uur lang.
+        if (timeOrEmpty(data.time)) rec.time = timeOrEmpty(data.time); else delete rec.time;
         // Het veld komt er alleen bij als het moment voor iemand anders is dan
         // wie het invoerde: voor die persoon volgt het al uit de stempel. Zo
         // krijgt een moment dat je voor jezelf plant geen naam mee, en blijft
@@ -2160,10 +2175,10 @@
         // De agenda, eerst wat het eerst komt. Voor wie het is staat er
         // altijd: zonder toewijzing is dat wie het invoerde.
         download(`planned-${span}.csv`, csv([
-          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("dlg.p.assignee"), t("col.addedBy")],
+          [t("col.date"), t("col.time"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("dlg.p.assignee"), t("col.addedBy")],
           ...hs.flatMap((h) => h.planned.filter((p) => inPeriod(p.date)).map((p) => ({ h, p })))
-            .sort((x, y) => x.p.date.localeCompare(y.p.date) || x.h.name.localeCompare(y.h.name))
-            .map(({ h, p }) => [p.date, h.name, t("act." + p.type), p.product,
+            .sort((x, y) => byWhen(x.p, y.p) || x.h.name.localeCompare(y.h.name))
+            .map(({ h, p }) => [p.date, p.time || "", h.name, t("act." + p.type), p.product,
               (h.contacts.find((c) => c.id === p.contactId) || {}).name, p.note, personName(assigneeOf(p)) || (p.assignee ? "?" : ""), personName(p.createdBy)]),
         ]), "text/csv");
       } else if (kind === "units") {
@@ -2237,7 +2252,7 @@
     // Het rooster, "te laat" en de lijst volgen alle drie de keuze "voor wie".
     const who = state.agenda.assignees;
     for (const h of state.db.hospitals) for (const p of h.planned) if (!who.length || who.includes(assigneeOf(p))) out.push({ h, p });
-    return out.sort((a, b) => a.p.date.localeCompare(b.p.date) || a.h.name.localeCompare(b.h.name));
+    return out.sort((a, b) => byWhen(a.p, b.p) || a.h.name.localeCompare(b.h.name));
   }
 
   // Voor wie: dezelfde uitklapper als de filters in het logboek en de zijbalk,
@@ -2260,7 +2275,7 @@
     const sub = momentLine(h, p, true);
     const when = new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" });
     return `<li class="ag-row ${p.date < today() ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
-      <div class="ag-date"><b>${esc(when)}</b><span>${esc(relDays(p.date))}</span></div>
+      <div class="ag-date"><b>${esc(when)}</b><span>${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
       <div class="ag-body">
         <div class="ag-name">${esc(h.name)}</div>
         <div class="ag-sub"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(sub)}</div>

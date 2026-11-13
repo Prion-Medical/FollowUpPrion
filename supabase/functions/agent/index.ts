@@ -95,6 +95,16 @@ const plain = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[\u0300-
 // 30 februari en schuift die stil door naar maart.
 const isDate = (s: unknown) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s)
   && !isNaN(Date.parse(`${s}T00:00:00Z`)) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s;
+// Een uur bij een gepland moment, als 14:00. "9:30", "9.30" en "14h00" mogen
+// ook binnenkomen; opgeslagen wordt altijd HH:MM, zoals de app het schrijft.
+// Leeg is geen uur: een hele dag.
+function timeOf(v: unknown): string {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  const m = s.match(/^(\d{1,2})[:.h](\d{2})$/i);
+  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) throw new ToolError("time must be HH:MM on a 24-hour clock, for example 14:00, or empty text for all day.");
+  return `${m[1].padStart(2, "0")}:${m[2]}`;
+}
 
 // ---------- de databank, als de gebruiker ----------
 class ToolError extends Error {}
@@ -267,7 +277,7 @@ async function getHospital(token: string, args: Any) {
     },
     contacts: (h.contacts || []).map((c: Any) => ({ id: c.id, name: c.name, role: c.role, department: c.department, language: c.language, phone: c.phone, email: c.email, address: c.address || "", notes: c.notes || "", products: c.products || [], primary: !!c.primary })),
     recent_contact_moments: acts.slice(0, 8).map(pick),
-    planned: (h.planned || []).map((r: Any) => ({ ...pick(r), planned_for: who(assigneeOf(r)) })),
+    planned: (h.planned || []).map((r: Any) => ({ ...pick(r), time: r.time || "", planned_for: who(assigneeOf(r)) })),
   };
 }
 
@@ -454,6 +464,7 @@ async function addPlannedMoment(token: string, args: Any, user: Any) {
   const type = oneOf(args.type, ACT_TYPES, "type");
   const product = String(args.product || "");
   if (!isDate(args.date)) throw new ToolError("date is required, as YYYY-MM-DD.");
+  const time = timeOf(args.time);
   const to = has(args, "planned_for") ? findPerson(await people(token), args.planned_for, user.id) : null;
   if (to && !worksOn(to, product)) throw new ToolError(`${to.name} does not work on ${product} and would not see this moment.`);
   return await change(token, ({ doc, scope }) => {
@@ -465,9 +476,11 @@ async function addPlannedMoment(token: string, args: Any, user: Any) {
     // Alleen als het voor iemand anders is: voor jezelf volgt het al uit de
     // stempel die de databank zet.
     if (to && to.id !== user.id) rec.assignee = to.id;
+    // Ook het uur staat er enkel als het gegeven is, zoals in de app.
+    if (time) rec.time = time;
     h.planned.push(rec);
     sortPlanned(h);
-    return { saved: true, hospital: h.name, planned: { id: rec.id, date: rec.date, type, product, note: rec.note, planned_for: to && to.id !== user.id ? to.name : "you" } };
+    return { saved: true, hospital: h.name, planned: { id: rec.id, date: rec.date, time: time || "all day", type, product, note: rec.note, planned_for: to && to.id !== user.id ? to.name : "you" } };
   });
 }
 
@@ -489,6 +502,7 @@ async function completePlannedMoment(token: string, args: Any) {
     const date = has(args, "date") ? String(args.date) : (plan.date && plan.date <= today() ? plan.date : today());
     h.planned = h.planned.filter((p: Any) => p.id !== plan.id);
     sortPlanned(h);
+    // Het uur gaat niet mee: een contactmoment heeft een datum en geen uur.
     return logActivity(h, {
       id: plan.id, date, type, product, contactId: String(plan.contactId || ""),
       rooms: wantsQuantity(type, product) ? qty : null,
@@ -979,11 +993,13 @@ async function listMoments(token: string, args: Any, user: Any) {
       rows.push({
         hospital: h.name, hospital_id: h.id, id: r.id, date: d, type: r.type, product: r.product || "",
         contact: contact(r.contactId), note: r.note || "", entered_by: name(r.createdBy),
-        ...(kind === "logged" ? { quantity: r.rooms ?? null } : { planned_for: name(assigneeOf(r)), overdue: late }),
+        ...(kind === "logged" ? { quantity: r.rooms ?? null } : { time: r.time || "", planned_for: name(assigneeOf(r)), overdue: late }),
       });
     }
   }
-  rows.sort((a, b) => (kind === "planned" ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)));
+  rows.sort((a, b) => (kind === "planned"
+    ? a.date.localeCompare(b.date) || String(a.time || "99").localeCompare(String(b.time || "99"))
+    : b.date.localeCompare(a.date)));
   return {
     about_this_data: NOT_INSTRUCTIONS,
     kind,
@@ -1004,6 +1020,8 @@ async function updateMoment(token: string, args: Any, user: Any) {
   if (has(args, "date") && !isDate(args.date)) throw new ToolError("date must be YYYY-MM-DD.");
   const qty = has(args, "quantity") ? quantity(args) : undefined;
   if (has(args, "planned_for") && kind !== "planned_moment") throw new ToolError("Only a planned moment is planned for someone.");
+  if (has(args, "time") && kind !== "planned_moment") throw new ToolError("Only a planned moment has a time. A contact moment has a date only.");
+  const time = has(args, "time") ? timeOf(args.time) : undefined;
   // De namen zijn nodig om toe te wijzen, en ook om na te kijken of wie het
   // moment al had het nieuwe product wel heeft.
   const all = has(args, "planned_for") || (kind === "planned_moment" && has(args, "product")) ? await people(token) : null;
@@ -1020,6 +1038,7 @@ async function updateMoment(token: string, args: Any, user: Any) {
     if (has(args, "product")) { const p = String(args.product); checkProduct(p, scope); rec.product = p; changed.push("product"); }
     if (has(args, "contact_id")) { const c = String(args.contact_id); checkContact(h, c); rec.contactId = c; changed.push("contact"); }
     if (has(args, "note")) { rec.note = String(args.note).trim(); changed.push("note"); }
+    if (time !== undefined) { if (time) rec.time = time; else delete rec.time; changed.push("time"); }
     // Het product dat er al stond is niet nagekeken toen het werd opgeslagen.
     if (rec.product && !PRODUCTS.includes(rec.product)) throw new ToolError("This moment has a product this connector does not know. Correct it in the app.");
     if (kind === "planned_moment") {
@@ -1042,7 +1061,7 @@ async function updateMoment(token: string, args: Any, user: Any) {
       sortPlanned(h);
       return {
         saved: true, hospital: h.name, changed,
-        planned: { id: rec.id, date: rec.date, type: rec.type, product: rec.product || "", note: rec.note || "" },
+        planned: { id: rec.id, date: rec.date, time: rec.time || "all day", type: rec.type, product: rec.product || "", note: rec.note || "" },
         ...(to !== undefined ? { planned_for: to ? (to.id === user.id ? "you" : to.name) : "whoever entered it" } : {}),
       };
     }
@@ -1258,12 +1277,13 @@ const TOOLS = [
   {
     name: "add_planned_moment",
     title: "Plan a moment",
-    description: "Put something in the agenda that is STILL TO HAPPEN at a hospital: a visit, call, demo and so on, on a date. A planned moment does not change the hospital's status or the statistics. It is planned for the signed-in user unless planned_for names a colleague, who must work on that product. Convert relative dates ('next Tuesday') to a real date yourself and say which date you used.",
+    description: "Put something in the agenda that is STILL TO HAPPEN at a hospital: a visit, call, demo and so on, on a date and optionally at a time. A planned moment does not change the hospital's status or the statistics. It is planned for the signed-in user unless planned_for names a colleague, who must work on that product. Convert relative dates and times ('next Tuesday at two') to a real date and a 24-hour time yourself and say which you used. Without a time it is an all-day moment; with one it takes an hour in a subscribed calendar.",
     inputSchema: {
       type: "object",
       properties: {
         hospital_id: HOSPITAL_ID,
         date: { type: "string", description: "When it is planned, YYYY-MM-DD." },
+        time: { type: "string", description: "Start time, HH:MM on a 24-hour clock, local time at the hospital. Leave out for an all-day moment." },
         type: { type: "string", enum: ACT_TYPES },
         product: { type: "string", enum: PRODUCTS },
         contact_id: { type: "string", description: "Id of the person it is with, from get_hospital. Optional." },
@@ -1340,7 +1360,7 @@ const TOOLS = [
   {
     name: "update_moment",
     title: "Correct a moment",
-    description: "Correct a saved contact moment or planned moment: its date, type, product, the person it was with, the quantity (contact moments only), who it is planned for (planned moments only) or the note. Only the fields you give change, and a note you give replaces the old one, so repeat what should stay. Use it when the user corrects something they reported earlier; to mark a planned moment as done use complete_planned_moment. Get the ids from get_hospital or list_moments.",
+    description: "Correct a saved contact moment or planned moment: its date, type, product, the person it was with, the quantity (contact moments only), the time or who it is planned for (planned moments only) or the note. Only the fields you give change, and a note you give replaces the old one, so repeat what should stay. Use it when the user corrects something they reported earlier; to mark a planned moment as done use complete_planned_moment. Get the ids from get_hospital or list_moments.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1348,6 +1368,7 @@ const TOOLS = [
         hospital_id: HOSPITAL_ID,
         record_id: { type: "string", description: "Id of the moment." },
         date: { type: "string", description: "YYYY-MM-DD." },
+        time: { type: "string", description: "Planned moments only: HH:MM on a 24-hour clock, or empty text to make it all day." },
         type: { type: "string", enum: ACT_TYPES },
         product: { type: "string", enum: PRODUCTS },
         contact_id: { type: "string", description: "Id of the person, from get_hospital. Empty text for nobody." },

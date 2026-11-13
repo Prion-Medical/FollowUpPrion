@@ -301,6 +301,13 @@ into `planned[]` the same way: `normalize()` turns it into a planned moment of t
 `demo` and drops the field, and the "demo's gepland" KPI and the CSV column both read
 `planned[]` now. There is one place to plan a demo, and it clears itself when ticked off.
 
+A planned moment can carry a `time` (`"14:00"`), and only when someone gave one —
+like `assignee`, writing an empty one onto every older moment would make the first
+saver the last editor of the agenda. It belongs to the plan: ticking off builds a
+fresh contact moment, so the time is dropped, and a contact moment has a date and
+no time. `h.planned` stays sorted by date alone, as `fix_planned()` sorts it in the
+database; `byWhen()` orders by time as well, for display only.
+
 **Assigned to, and planned for.** Two things belong to a person, and they have two
 words on purpose. A product at a hospital is *assigned to* someone: `owner` in that
 product's row in `h.pipeline` (the field kept its name; the label became "Assigned
