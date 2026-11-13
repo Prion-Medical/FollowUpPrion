@@ -80,7 +80,12 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   -- Momenten zonder datum. Een oude fix_planned gooit ze bij elke opslag weg;
   -- een oude doc_keys laat een contributor ze ongezien verwijderen.
   ('fix_planned',     'order by coalesce(t.e ->> ''date''', 'een gepland moment zonder datum blijft staan'),
-  ('doc_keys',        'ook een gepland moment zonder datum', 'een moment zonder datum verwijderen is verwijderen')
+  ('doc_keys',        'ook een gepland moment zonder datum', 'een moment zonder datum verwijderen is verwijderen'),
+  -- Uit de veiligheidscontrole van 2026-11-13.
+  ('check_payload',   '[[:cntrl:]]',    'een id met een regeleinde komt het document niet in'),
+  ('feed_create',     'pg_advisory_xact_lock', 'het maximum aan abonnementen geldt ook bij gelijktijdige oproepen'),
+  ('feed_list',       'via_assistant',  'een assistent ziet geen abonnementen'),
+  ('feed_remove',     'via_assistant',  'een assistent zet geen abonnement stop')
 )
 select v.functie,
        v.waarvoor,

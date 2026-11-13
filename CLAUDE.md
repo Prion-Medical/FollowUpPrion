@@ -730,7 +730,19 @@ file (`public/ics.js`), which is a copy that does not follow changes.
   It is pure, so `controle.sql` checks it on a literal document (60–66).
 - **A subscription belongs to an account**: `owner` references `app_users` with
   `on delete cascade`, which itself cascades from `auth.users`. An admin sees
-  and stops every subscription at the foot of the users screen.
+  and stops every subscription at the foot of the users screen. **Banning** an
+  account in Supabase Auth or resetting its password does **not** stop its
+  feeds: the address needs no sign-in. When someone leaves, stop their
+  subscriptions on the users screen, or delete the account.
+- **Managed by a person.** `feed_create()`, `feed_list()` and `feed_remove()` all
+  refuse an assistant's key (`via_assistant()`), and `feed_create()` takes an
+  advisory lock so two simultaneous calls cannot pass the cap of ten together.
+- **What reaches the calendar is escaped, or reduced.** Every text property
+  goes through `text()`; the record id, which sits in `UID`, is cut down to
+  letters, digits, `-` and `_` (`uidOf()`), because anyone who can write can put
+  any string there, and `check_payload()` refuses an id with a control
+  character. Countries and types are looked up with `Object.hasOwn`, never
+  through the prototype. `tests/agenda.mjs` keeps both.
 - **The Edge Function** `supabase/functions/calendar/index.ts` turns
   `calendar_feed()` into `text/calendar`. It runs with the public key and no
   service key, needs **Verify JWT off** (a calendar sends no token), answers 404

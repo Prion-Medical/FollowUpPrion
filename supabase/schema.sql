@@ -609,6 +609,17 @@ begin
       using errcode = 'PT422', hint = 'invalid_payload';
   end if;
 
+  -- Een id met een stuurteken (een regeleinde, een tab) maakt de app nooit:
+  -- uid() geeft hextekens. Wie er toch een stuurt, schrijft niet langs de
+  -- app, en een id komt op plaatsen terecht die het niet ontsnappen, zoals de
+  -- UID in een agenda-abonnement.
+  select k into v_bad from unnest(followup.doc_keys(payload)) k
+   where k ~ '[[:cntrl:]]' limit 1;
+  if v_bad is not null then
+    raise exception 'followup:invalid_payload een id bevat een stuurteken'
+      using errcode = 'PT422', hint = 'invalid_payload';
+  end if;
+
   select k into v_bad from unnest(followup.doc_keys(payload)) k
    group by k having count(*) > 1 limit 1;
   if v_bad is not null then
@@ -1354,6 +1365,9 @@ begin
     raise exception 'followup:feed_denied een abonnement maak je in de app'
       using errcode = 'PT403', hint = 'feed_denied';
   end if;
+  -- Eén aanmaak per account tegelijk, anders lopen twee gelijktijdige
+  -- oproepen allebei langs de telling en komen er elf.
+  perform pg_advisory_xact_lock(hashtext('calendar_feeds:' || auth.uid()::text));
   if (select count(*) from public.calendar_feeds where owner = auth.uid()) >= c_max then
     raise exception 'followup:feed_limit al % abonnementen', c_max
       using errcode = 'PT422', hint = 'feed_limit';
@@ -1385,6 +1399,12 @@ end $$;
 create or replace function public.feed_list(everyone boolean default false) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 begin
+  -- Abonnementen beheert een mens, in de app: ook bekijken en stopzetten, niet
+  -- enkel aanmaken (zie feed_create).
+  if followup.via_assistant() then
+    raise exception 'followup:feed_denied abonnementen beheer je in de app'
+      using errcode = 'PT403', hint = 'feed_denied';
+  end if;
   if everyone and not public.is_admin() then
     raise exception 'followup:feed_denied enkel een beheerder ziet alle abonnementen'
       using errcode = 'PT403', hint = 'feed_denied';
@@ -1409,6 +1429,10 @@ language plpgsql volatile security definer set search_path = public as $$
 declare
   v_n int;
 begin
+  if followup.via_assistant() then
+    raise exception 'followup:feed_denied abonnementen beheer je in de app'
+      using errcode = 'PT403', hint = 'feed_denied';
+  end if;
   delete from public.calendar_feeds
    where id = p_id
      and (owner = auth.uid() or public.is_admin());

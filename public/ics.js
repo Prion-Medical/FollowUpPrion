@@ -29,6 +29,15 @@ window.FollowUpIcs = (() => {
     ],
   };
 
+  // Het id komt uit het document, en dat schrijft iedereen met schrijfrecht.
+  // Alle andere velden gaan door text(); het id staat in UID en moet dus zelf
+  // ontdaan worden van alles wat een regel of een eigenschap kan beginnen.
+  // Echte id's zijn tien hextekens (uid() in app.js): daar verandert niets.
+  const uidOf = (id) => String(id ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64) || "x";
+  // Een land opzoeken zonder via het prototype te gaan: "constructor" is geen
+  // land, maar ZONES["constructor"] is wel iets.
+  const zoneOf = (country) => (Object.hasOwn(ZONES, country) ? ZONES[country] : "");
+
   // Tekst in een eigenschap: backslash, puntkomma, komma en regeleinde
   // krijgen een backslash (RFC 5545, 3.3.11).
   const text = (s) => String(s ?? "").replace(/\\/g, "\\\\").replace(/;/g, "\\;")
@@ -65,12 +74,12 @@ window.FollowUpIcs = (() => {
   // ev: { id, date, time, country, title, location, description }.
   // Zonder uur een hele dag; met een uur een uur lang.
   function event(ev, dtstamp) {
-    const zone = ZONES[ev.country] || "";
+    const zone = zoneOf(ev.country);
     const start = parts(ev.date, ev.time);
     const lines = ["BEGIN:VEVENT",
       // Het id van het geplande moment: zo herkent een agenda een verzette
       // afspraak als dezelfde en zet ze er geen tweede naast.
-      `UID:${ev.id}@followup.prionmedical.be`,
+      `UID:${uidOf(ev.id)}@followup.prionmedical.be`,
       `DTSTAMP:${dtstamp}`];
     if (ev.time) {
       const end = new Date(start.getTime() + 60 * 60 * 1000);
@@ -91,7 +100,7 @@ window.FollowUpIcs = (() => {
 
   function calendar(events, name) {
     const dtstamp = stampNow();
-    const zones = [...new Set(events.filter((e) => e.time).map((e) => ZONES[e.country]).filter(Boolean))];
+    const zones = [...new Set(events.filter((e) => e.time).map((e) => zoneOf(e.country)).filter(Boolean))];
     const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Prion Medical//FollowUp//NL",
       "CALSCALE:GREGORIAN", "METHOD:PUBLISH"];
     if (name) lines.push(`X-WR-CALNAME:${text(name)}`);

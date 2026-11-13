@@ -544,6 +544,13 @@ select followup.check_payload('{"hospitals":[{"id":"h1","contacts":{}}]}'::jsonb
 select followup.check_payload('{"hospitals":[{"id":"h1"},{"id":"h1"}]}'::jsonb);
 */
 
+-- 5b. PT422 invalid_payload — een id met een regeleinde. De app maakt dat
+--     nooit; wie het stuurt, probeert eigen regels in een agenda-abonnement
+--     te krijgen (het id staat daar in UID).
+/*
+select followup.check_payload('{"hospitals":[{"id":"h1","planned":[{"id":"x\r\nURL:https://kwaad.example","date":"2026-11-20"}]}]}'::jsonb);
+*/
+
 -- 6. PT403 out_of_scope — een ziekenhuis zonder vinkje weggooien terwijl er
 --    een contactmoment van het andere product in zit. Het vinkje alleen zou
 --    dit doorlaten: [] valt binnen elk bereik. De inhoud houdt het tegen.

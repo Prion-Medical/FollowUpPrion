@@ -116,6 +116,16 @@ from (
          exists (select 1 from pg_constraint
                   where conrelid = 'public.calendar_feeds'::regclass and contype = 'f'
                     and confrelid = 'public.app_users'::regclass and confdeltype = 'c')
+
+  -- --- het opgeslagen document --------------------------------------------
+  -- check_payload() weigert een id met een stuurteken (een regeleinde, een
+  -- tab). De app maakt zo'n id nooit; staat er toch een in het opgeslagen
+  -- document, dan stuurt elke opslag het mee terug en weigert de databank
+  -- voortaan elke opslag, van iedereen. Vóór schema.sql op live gaat, en
+  -- daarna af en toe.
+  union all select 31, 'geen id met een stuurteken in het opgeslagen document', false,
+         exists (select 1 from unnest(followup.doc_keys((select data from public.app_state where id = 'main'))) k
+                  where k ~ '[[:cntrl:]]')
 ) q(nr, controle, verwacht, gekregen)
 order by nr;
 
