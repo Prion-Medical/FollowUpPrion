@@ -46,6 +46,12 @@ window.FollowUpDomain = (() => {
   // wat besteld is, en wat verbruikt is tijdens een procedure waar een van ons
   // bij stond. Dat laatste wordt evengoed betaald en telt dus mee.
   const SOLD_TYPES = ["order", "procedure"];
+  // De soorten die een aantal kunnen dragen, bij welk product ook. Een
+  // gedeeld moment (shared() hieronder) krijgt er geen van: wie maar een deel
+  // van de producten ziet, kan een gedeeld plan er niet in veranderen, want
+  // de databank zet de soort dan stil terug (followup.tellende_soorten() in
+  // schema.sql is de kopie daar).
+  const COUNTING_TYPES = ["installation", "cancellation", "order", "procedure"];
   // De producten die Prion verdeelt. Dit is de énige lijst: de filters, de
   // dialogen, het beheerscherm en de statistieken lezen hem allemaal hier, en
   // alles wat per product bestaat (kleur, doelcijfer) wordt eruit afgeleid.
@@ -97,14 +103,29 @@ window.FollowUpDomain = (() => {
   // kan haar al dragen; bij het afvinken gaat ze mee.
   const wantsFamily = (type, product) => familiesFor(product).length > 0 && wantsQuantity(type, product);
   // Een moment gaat meestal over één product, soms over meer: een gesprek
-  // over Thyroid RFA en Fibroid RFA tegelijk. Twee vormen dus, zoals de
-  // databank ze ook leest (in_scope): "product" met één naam, of "products"
-  // met een lijst. Bestaande momenten houden de eerste vorm; de lijst komt er
-  // pas als iemand er meer dan één kiest, en blijft dan de vorm van dat
-  // record, ook als er later maar één overblijft. Terugzetten kan niet
-  // veilig: wie afgeschermd is ziet maar een deel van de lijst, en de
-  // databank voegt de rest er alleen bij zolang het een lijst is.
-  const productsOf = (r) => (!r ? [] : Array.isArray(r.products) ? r.products : r.product ? [r.product] : []);
+  // over Thyroid RFA en Fibroid RFA tegelijk. Het staat altijd in één vorm:
+  // "products", een lijst (eventueel leeg). De oude vorm, "product" met één
+  // naam, zet de databank om (followup.lijstvorm() in schema.sql) en
+  // normalize() in app.js voor een oude back-up of data/db.json.
+  const productsOf = (r) => (r && Array.isArray(r.products) ? r.products : []);
+  // De omzetting zelf, regel voor regel die van followup.een_lijst() in
+  // schema.sql, voor een moment en voor een contactpersoon: een lijst blijft
+  // een lijst, anders wordt een naam een lijst van één en al de rest een lege
+  // lijst, en "product" verdwijnt. De lijst wordt daarbij opgeruimd zoals
+  // followup.product_sort() het doet: elke naam één keer, geen lege en
+  // niets anders dan tekst, in de volgorde van PRODUCTS, en een onbekend
+  // product achteraan, op naam. Wijkt dit af, dan geeft de eerste opslag van
+  // zo'n record een ander record dan de databank er zelf van maakt, en
+  // krijgt het een nieuwe laatste bewerker.
+  const productRank = (p) => (PRODUCTS.includes(p) ? PRODUCTS.indexOf(p) : 99);
+  const toProductList = (r) => {
+    const list = Array.isArray(r.products) ? r.products
+      : typeof r.product === "string" && r.product ? [r.product] : [];
+    r.products = [...new Set(list.filter((p) => typeof p === "string" && p))]
+      .sort((a, b) => productRank(a) - productRank(b) || (a < b ? -1 : a > b ? 1 : 0));
+    delete r.product;
+    return r;
+  };
   // Hét product van een moment: de naam als het er precies één is, anders
   // leeg. Alles wat een aantal telt (kamers, stuks) hoort bij één product.
   const productOf = (r) => { const l = productsOf(r); return l.length === 1 ? l[0] : ""; };
@@ -113,17 +134,19 @@ window.FollowUpDomain = (() => {
   // bij elk ervan bestaat en bij geen ervan een aantal draagt, want een
   // aantal is niet over twee producten te verdelen.
   //
-  // gedeeld: het moment staat in de lijstvorm (shared() hieronder). Wie
-  // maar één product mag, ziet van een gesprek over twee producten enkel het
-  // zijne; het is toch een moment over meer, en draagt dus geen aantal.
+  // gedeeld: het moment gaat over meer dan één product (shared() hieronder).
+  // Wie maar één product mag, ziet van een gesprek over twee producten enkel
+  // het zijne; het is toch een moment over meer, en draagt dus geen aantal.
   const typesAmong = (list, mine, gedeeld = false) => (!list.length ? typesOffered(mine)
     : list.length === 1 && !gedeeld ? typesFor(list[0])
     : Object.keys(ACT_TYPES).filter((k) => list.every((p) => typesFor(p).includes(k) && !wantsQuantity(k, p))));
-  // Staat een moment in de lijstvorm, dan gaat het over meer dan één product,
-  // ook als wie het bekijkt er maar één van ziet (de databank snoeit de
-  // lijst). Zo'n moment draagt nooit een aantal of een soort stent; de
-  // databank haalt ze er ook zelf af (zonder_aantal() in schema.sql).
-  const shared = (r) => !!r && Array.isArray(r.products);
+  // Gaat een moment over meer dan één product? De lengte die de browser ziet
+  // zegt het niet altijd: wie maar één product mag, krijgt van een gesprek
+  // over twee producten een lijst van één, en de databank zet er dan
+  // "shared": true bij (scope_entries() in schema.sql). Zo'n moment draagt
+  // nooit een aantal of een soort stent; de databank haalt ze er ook zelf af
+  // (zonder_aantal() in schema.sql), op de volledige lijst.
+  const shared = (r) => !!r && (r.shared === true || productsOf(r).length > 1);
   // De soorten die elk van de gekozen producten kent, ook die met een aantal.
   // Voor een plan (dat draagt nooit een aantal) en voor een nieuw contactmoment
   // over meer producten met een aantal: dat wordt bij het bewaren één
@@ -665,7 +688,7 @@ window.FollowUpDomain = (() => {
   // loont het ophalen van wat ze besliste (save() in app.js); een getypt
   // veld in de fiche verandert er niets aan.
   function momentsMoved(before, after) {
-    const sig = (a) => JSON.stringify([a.type, a.rooms, a.product, a.products]);
+    const sig = (a) => JSON.stringify([a.type, a.rooms, a.products]);
     const acts = (db) => {
       const m = new Map();
       for (const h of (db && db.hospitals) || []) {
@@ -713,7 +736,7 @@ window.FollowUpDomain = (() => {
     normalizeFacts, syncPipeline, zonderProduct, stageStatus, autoStatus, syncRooms, momentsMoved,
     byWhen, assigneeOf, tickOffDate, rooms, signedRooms, units,
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS: Object.keys(ACT_TYPES),
-    ROOM_TYPES, SOLD_TYPES, typesFor, typesOffered, typesAmong, typesInAll, shared, productsOf, productOf, familiesFor, wantsFamily, factsFor, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
+    ROOM_TYPES, SOLD_TYPES, COUNTING_TYPES, typesFor, typesOffered, typesAmong, typesInAll, shared, productsOf, productOf, toProductList, familiesFor, wantsFamily, factsFor, PRODUCTS, CMM_STATES, YES_NO, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     esc, pickBox, syncPick, myProducts, productColor, productKind, wantsQuantity, stagesFor, furthest, pipelineView, emptyTargets,
   };
 })();

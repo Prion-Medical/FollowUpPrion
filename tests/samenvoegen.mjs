@@ -13,7 +13,7 @@ const basis = {
     { id: "h1", name: "AZ Proef", address: "Straat 1", notes: "", products: ["EndoQ"], status: "orange", stage: "meeting",
       pipeline: { EndoQ: { stage: "meeting", status: "orange", owner: "" } }, unit: { rooms: 4 },
       contacts: [{ id: "c1", name: "Dr. Proef", phone: "", email: "", products: ["EndoQ"] }],
-      activities: [{ id: "a1", date: "2026-01-02", type: "call", product: "EndoQ", note: "eerste", createdBy: "u1", updatedAt: "t0" }],
+      activities: [{ id: "a1", date: "2026-01-02", type: "call", products: ["EndoQ"], note: "eerste", createdBy: "u1", updatedAt: "t0" }],
       planned: [] },
     { id: "h2", name: "UZ Verzonnen", address: "", notes: "", products: [], status: "red", stage: "prospect",
       unit: {}, contacts: [], activities: [], planned: [] },
@@ -39,8 +39,8 @@ await geval("hetzelfde veld anders aangepast is een conflict, met zijn plaats", 
 });
 await geval("aan elke kant een nieuw record: allebei", () => {
   const { uit, conflicten } = twee(
-    (m) => { m.hospitals[0].activities.push({ id: "m1", date: "2026-02-01", type: "visit", product: "EndoQ", note: "" }); },
-    (h) => { h.hospitals[0].activities.push({ id: "t1", date: "2026-02-02", type: "email", product: "EndoQ", note: "" }); });
+    (m) => { m.hospitals[0].activities.push({ id: "m1", date: "2026-02-01", type: "visit", products: ["EndoQ"], note: "" }); },
+    (h) => { h.hospitals[0].activities.push({ id: "t1", date: "2026-02-02", type: "email", products: ["EndoQ"], note: "" }); });
   assert.deepEqual(conflicten, []);
   assert.deepEqual(uit.hospitals[0].activities.map((a) => a.id).sort(), ["a1", "m1", "t1"]);
 });
@@ -77,14 +77,13 @@ await geval("vinkjes: wat zij hebben, plus wat hier bijkwam, min wat hier weggin
   assert.deepEqual(conflicten, []);
   assert.deepEqual([...uit.hospitals[0].contacts[0].products].sort(), ["Ainex", "Stents"]);
 });
-await geval("een moment dat in de lijstvorm komt, blijft dat", () => {
+await geval("een tweede product hier, een nota daar: allebei", () => {
   const { uit, conflicten } = twee(
-    (m) => { const a = m.hospitals[0].activities[0]; delete a.product; a.products = ["EndoQ", "Ainex"]; },
+    (m) => { m.hospitals[0].activities[0].products = ["EndoQ", "Ainex"]; },
     (h) => { h.hospitals[0].activities[0].note = "daar"; });
   assert.deepEqual(conflicten, []);
   const a = uit.hospitals[0].activities[0];
   assert.deepEqual(a.products, ["EndoQ", "Ainex"]);
-  assert.ok(!("product" in a), "het oude product staat er nog naast");
   assert.equal(a.note, "daar");
 });
 
@@ -99,9 +98,10 @@ await geval("momentsMoved: alleen wat de databank raakt", () => {
   for (const [naam, f] of [
     ["een ander type", (a) => { a[0].type = "order"; }],
     ["een aantal", (a) => { a[0].rooms = 2; }],
-    ["een ander product", (a) => { a[0].product = "Ainex"; }],
-    ["de lijstvorm", (a) => { delete a[0].product; a[0].products = ["EndoQ", "Ainex"]; }],
-    ["erbij", (a) => { a.push({ id: "n1", date: "2026-02-01", type: "call", product: "EndoQ", note: "" }); }],
+    ["een ander product", (a) => { a[0].products = ["Ainex"]; }],
+    ["een product erbij", (a) => { a[0].products = ["EndoQ", "Ainex"]; }],
+    ["geen product meer", (a) => { a[0].products = []; }],
+    ["erbij", (a) => { a.push({ id: "n1", date: "2026-02-01", type: "call", products: ["EndoQ"], note: "" }); }],
     ["weg", (a) => { a.length = 0; }],
   ]) assert.equal(momentsMoved(basis, met(f)), true, naam);
   // Zelfde aantal, ander id: een moment weg en een ander erbij.
@@ -109,7 +109,7 @@ await geval("momentsMoved: alleen wat de databank raakt", () => {
 });
 await geval("na de opslag: de databank wint, wat intussen getypt werd blijft", () => {
   const verstuurd = kopie(basis);
-  verstuurd.hospitals[0].activities.push({ id: "o1", date: "2026-02-01", type: "order", product: "EndoQ", note: "" });
+  verstuurd.hospitals[0].activities.push({ id: "o1", date: "2026-02-01", type: "order", products: ["EndoQ"], note: "" });
   const hier = kopie(verstuurd);
   hier.hospitals[0].notes = "intussen getypt";
   const databank = kopie(verstuurd);

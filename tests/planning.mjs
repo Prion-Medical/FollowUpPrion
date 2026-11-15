@@ -16,9 +16,10 @@ const dag = (n) => { const d = new Date(vandaag + "T12:00:00Z"); d.setUTCDate(d.
 
 await geval("plannen zonder datum", async () => {
   K.stand = { version: 1, hospitals: [zh()] };
-  const r = await K.werktuig("add_planned_moment", { hospital_id: "h", type: "quote", product: "EndoQ", note: "ooit" });
+  const r = await K.werktuig("add_planned_moment", { hospital_id: "h", type: "quote", products: ["EndoQ"], note: "ooit" });
   assert.ok(!r.fout, r.tekst);
   assert.equal(K.stand.hospitals[0].planned[0].date, "");
+  assert.deepEqual(K.stand.hospitals[0].planned[0].products, ["EndoQ"]);
 });
 
 await geval("volgorde: datum, dan uur, zonder datum vooraan", async () => {
@@ -37,6 +38,8 @@ await geval("volgorde: datum, dan uur, zonder datum vooraan", async () => {
   assert.deepEqual(app, ["geen dag", "eerder", "ochtend", "middag", "ergens die dag"]);
   assert.equal(h.nextAction, "geen dag", "nextAction is niet het eerste moment");
   assert.equal(h.nextActionDate, "");
+  // "product" is invoer voor de assistent; bewaard wordt altijd de lijst.
+  for (const p of h.planned) assert.ok(!("product" in p) && Array.isArray(p.products), `${p.note}: niet in de lijstvorm bewaard`);
 });
 
 await geval("volgorde: de databank sorteert zoals byWhen", () => {
@@ -52,7 +55,7 @@ await geval("volgorde: de databank sorteert zoals byWhen", () => {
 // de soort stent wel, en de datum is ten laatste vandaag.
 for (const [naam, date] of [["voorbij", dag(-3)], ["vandaag", vandaag], ["toekomst", dag(4)], ["zonder datum", ""]]) {
   await geval(`afvinken: plan ${naam}`, async () => {
-    const plan = { id: "p1", date, type: "order", product: "Stents", family: "biliary", note: "", contactId: "" };
+    const plan = { id: "p1", date, type: "order", products: ["Stents"], family: "biliary", note: "", contactId: "" };
     if (date) plan.time = "10:00";
     K.stand = { version: 1, hospitals: [{ ...zh(), products: ["Stents"], planned: [plan] }] };
     const r = await K.werktuig("complete_planned_moment", { hospital_id: "h", planned_id: "p1", quantity: 6 });
@@ -64,6 +67,8 @@ for (const [naam, date] of [["voorbij", dag(-3)], ["vandaag", vandaag], ["toekom
     assert.ok(!("time" in a), "het uur ging mee");
     assert.equal(a.family, "biliary", "de soort stent ging niet mee");
     assert.equal(a.rooms, 6);
+    assert.deepEqual(a.products, ["Stents"]);
+    assert.ok(!("product" in a), "het contactmoment draagt een los product");
     assert.equal(a.date, D.tickOffDate(plan, vandaag), "de datum volgt een andere regel dan de app");
   });
 }
@@ -72,10 +77,10 @@ for (const [naam, date] of [["voorbij", dag(-3)], ["vandaag", vandaag], ["toekom
 // als planned_for; de agenda en de filter lezen assigneeOf().
 await geval("voor wie", async () => {
   const momenten = [
-    { id: "a", date: dag(1), type: "call", product: "", note: "", createdBy: "u1" },
-    { id: "b", date: dag(1), type: "call", product: "", note: "", createdBy: "u1", assignee: "u2" },
-    { id: "c", date: dag(1), type: "call", product: "", note: "", createdBy: "", assignee: "u2" },
-    { id: "d", date: dag(1), type: "call", product: "", note: "" },
+    { id: "a", date: dag(1), type: "call", products: [], note: "", createdBy: "u1" },
+    { id: "b", date: dag(1), type: "call", products: [], note: "", createdBy: "u1", assignee: "u2" },
+    { id: "c", date: dag(1), type: "call", products: [], note: "", createdBy: "", assignee: "u2" },
+    { id: "d", date: dag(1), type: "call", products: [], note: "" },
   ];
   K.stand = { version: 1, hospitals: [{ ...zh(), planned: momenten }] };
   const r = await K.werktuig("list_moments", { kind: "planned", hospital_id: "h" });

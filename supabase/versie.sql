@@ -87,8 +87,8 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('feed_list',       'via_assistant',  'een assistent ziet geen abonnementen'),
   ('feed_remove',     'via_assistant',  'een assistent zet geen abonnement stop'),
   -- Uit de review van 2026-11-13: momenten over meer producten.
-  ('in_scope',        'products_of',    'beide vormen via één functie'),
-  ('merge_products',  'products_of',    'een contactmoment in de oude vorm verliest bij het samenvoegen zijn product niet'),
+  ('in_scope',        'products_of',    'de producten van een record via één functie'),
+  ('merge_products',  'products_of',    'de productlijst van een record via één functie'),
   ('merge_entries',   'zonder_aantal',  'een moment over meer producten draagt geen aantal'),
   ('merge_entries',   'left join lateral', 'een afgevinkt plan geeft zijn producten, niet zijn plaats'),
   ('merge_hospital',  'afgevinkt',      'afvinken houdt het product van de collega op het contactmoment'),
@@ -111,7 +111,7 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('kent_fase',       'per_ingreep',    'bestaat die functie überhaupt'),
   ('soort_van',       'soorten',        'bestaat die functie überhaupt'),
   ('datum_van',       'jsonb_typeof(a -> ''date'')', 'een datum zoals dateOrEmpty() in de app'),
-  ('geinstalleerd',   'a ? ''products''', 'een moment in de lijstvorm telt geen kamers'),
+  ('geinstalleerd',   'count(distinct x)', 'een moment over meer producten telt geen kamers, een lijst van één wel'),
   ('write_state',     'v_basis',        'de regels vergelijken met hetzelfde omgezette document als het samenvoegen'),
   ('opvolging_bijwerken_doc', 'jsonb_object_agg', 'de opgeslagen ziekenhuizen één keer op id'),
   ('geinstalleerd',   'getal',          'kamers als tekst tellen zoals in de app'),
@@ -121,7 +121,39 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('geinstalleerd',   'per_ingreep',    'stuks van een product per ingreep zijn geen kamers'),
   ('per_ingreep',     'Stents',         'de producten per ingreep aan de databankkant'),
   ('voor_verkoop',    'purchasing',     'de fases vóór de verkoop aan de databankkant'),
-  ('opvolging_aanvullen', 'kent_fase',  'een fase die het product niet kent schuift naar evaluatie')
+  ('opvolging_aanvullen', 'kent_fase',  'een fase die het product niet kent schuift naar evaluatie'),
+  -- Issue 22: elk record draagt zijn producten in een lijst. Draait er een
+  -- oude zonder_aantal, dan haalt die het aantal van élk moment af (elk
+  -- moment is nu een lijst). Draait er een oude read_state, dan krijgt de
+  -- nieuwe app het oude document onomgezet, en de vlag shared nooit.
+  ('products_of',     'followup.obj(e) -> ''products''', 'enkel de lijst: het oude "product" is al omgezet'),
+  ('een_lijst',       'jsonb_build_array', 'bestaat die functie überhaupt'),
+  ('lijstvorm_record', 'shared',        'de vlag van read_state() gaat eraf bij het schrijven'),
+  ('lijstvorm_record', 'zonder_aantal', 'een moment over meer producten verliest zijn aantal, ook onbeperkt'),
+  ('lijstvorm_hospital', 'lijstvorm_record', 'bestaat die functie überhaupt'),
+  ('lijstvorm',       'lijstvorm_hospital', 'bestaat die functie überhaupt'),
+  ('zonder_aantal',   'count(distinct x)', 'telt de volledige lijst, niet de vorm'),
+  ('scope_entries',   'shared',         'een gesnoeid moment zegt de browser dat het gedeeld is'),
+  ('scope_hospital',  'allowed, true)', 'de vlag shared enkel op momenten, niet op contactpersonen'),
+  ('merge_entries',   'zonder_aantal_beperkt', 'geen aantal op een moment met het product van een collega'),
+  ('merge_entries',   'then s.e else p.e', 'wie zich van een gedeeld moment afhaalt, verandert er verder niets aan'),
+  ('merge_entries',   'only_in(followup.products_of(x.e), allowed)', 'een gedeeld plan afvinken zonder een eigen product wordt geweigerd'),
+  ('een_lijst',       'product_sort',   'een lijst producten komt er altijd op één manier uit: uniek, niet leeg, gesorteerd'),
+  ('product_sort',    'collate "C"',    'onbekende producten in een vaste volgorde, los van de taal van de server'),
+  ('zonder_aantal_beperkt', 'only_in',  'bestaat die functie überhaupt'),
+  -- Uit de veiligheidscontrole van 2026-11-15.
+  ('zonder_aantal_beperkt', 'tellende_soorten', 'een moment met het product van een collega wordt geen tellende soort'),
+  ('tellende_soorten', 'procedure',     'bestaat die functie überhaupt'),
+  ('afgevinkt',       'incoming -> ''planned''', 'afvinken enkel als het plan ook echt weg is'),
+  ('plan_bezet',      'planned',        'bestaat die functie überhaupt'),
+  ('write_state',     'plan_bezet',     'een nieuw contactmoment op het id van een plan dat blijft, wordt geweigerd'),
+  ('write_state',     'mode is null',   'een oproep zonder modus wordt geweigerd, niet stil als opslag behandeld'),
+  ('aantal_eraf',     'family',         'bestaat die functie überhaupt'),
+  ('read_state',      'lijstvorm',      'een oud document wordt bij het lezen omgezet'),
+  ('write_state',     'lijstvorm(payload)', 'wat binnenkomt wordt omgezet en verliest shared, in elke modus'),
+  ('write_state',     'lijstvorm(v_stored)', 'het opgeslagen document wordt omgezet vóór het vergelijken'),
+  ('write_state',     'stamp_doc(v_basis', 'de stempel vergelijkt met het omgezette document'),
+  ('feed_events',     'lijstvorm',      'een abonnement leest een oud document in de lijstvorm')
 )
 select v.functie,
        v.waarvoor,

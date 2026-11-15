@@ -11,6 +11,27 @@
 -- ===========================================================================
 --  DEEL A — afschermen, samenvoegen en stempelen, zonder de tabel
 -- ===========================================================================
+-- Wat write_state() met de opslag van een beperkte gebruiker doet vóór het
+-- samenvoegen: de payload in de lijstvorm, en de vlag "shared" eraf (die zet
+-- read_state() op wat het gesnoeid heeft). Een tijdelijke functie, enkel voor
+-- deze sessie: ze verdwijnt vanzelf en raakt het schema niet aan.
+create or replace function pg_temp.opslaan(stored jsonb, payload jsonb, allowed text[],
+                                           mag_verwijderen boolean) returns jsonb
+language sql as $$
+  select followup.merge_doc(stored, followup.lijstvorm(payload), allowed, mag_verwijderen);
+$$;
+
+-- Voert een opdracht uit en geeft de foutmelding terug, of null als er geen
+-- was. Zo kan een controle die moet mislukken toch hier, met OK of FOUT.
+create or replace function pg_temp.fout_bij(opdracht text) returns text
+language plpgsql as $$
+begin
+  execute opdracht;
+  return null;
+exception when others then
+  return sqlerrm;
+end $$;
+
 with doc as (select $j${
   "version": 1,
   "_note": "testdocument",
@@ -22,34 +43,34 @@ with doc as (select $j${
       "nextAction": "bellen", "nextActionDate": "2026-01-10",
       "unit": { "rooms": 4, "roomsDemo": 3 },
       "contacts": [
-        { "id": "c1", "name": "Dr EndoQ", "product": "EndoQ" },
-        { "id": "c2", "name": "Dr Ainex", "product": "Ainex" },
-        { "id": "c3", "name": "Aankoop",  "product": "" },
+        { "id": "c1", "name": "Dr EndoQ", "products": ["EndoQ"] },
+        { "id": "c2", "name": "Dr Ainex", "products": ["Ainex"] },
+        { "id": "c3", "name": "Aankoop",  "products": [] },
         { "id": "c6", "name": "Dr Allebei", "products": ["EndoQ", "Ainex"] } ],
       "activities": [
-        { "id": "a1", "date": "2026-01-02", "type": "call",  "product": "EndoQ", "note": "",
+        { "id": "a1", "date": "2026-01-02", "type": "call",  "products": ["EndoQ"], "note": "",
           "createdBy": "U1", "createdAt": "2026-01-02", "updatedBy": "U1", "updatedAt": "2026-01-02" },
-        { "id": "a2", "date": "2026-01-03", "type": "visit", "product": "Ainex", "note": "",
+        { "id": "a2", "date": "2026-01-03", "type": "visit", "products": ["Ainex"], "note": "",
           "createdBy": "U1", "createdAt": "2026-01-03", "updatedBy": "U1", "updatedAt": "2026-01-03" },
-        { "id": "a3", "date": "2026-01-04", "type": "email", "product": "", "note": "" },
-        { "id": "a4", "date": "2026-03-01", "type": "demo",  "product": "EndoQ", "rooms": 3, "note": "" },
-        { "id": "a5", "date": "2026-02-01", "type": "demo",  "product": "Ainex", "rooms": 1, "note": "" } ],
+        { "id": "a3", "date": "2026-01-04", "type": "email", "products": [], "note": "" },
+        { "id": "a4", "date": "2026-03-01", "type": "demo",  "products": ["EndoQ"], "rooms": 3, "note": "" },
+        { "id": "a5", "date": "2026-02-01", "type": "demo",  "products": ["Ainex"], "rooms": 1, "note": "" } ],
       "planned": [
-        { "id": "p1", "date": "2026-01-10", "type": "call",  "product": "EndoQ", "note": "bellen" },
-        { "id": "p2", "date": "2026-02-20", "type": "visit", "product": "Ainex", "note": "langsgaan" } ] },
-    { "id": "h2", "name": "AZ EndoQ", "products": ["EndoQ"],
+        { "id": "p1", "date": "2026-01-10", "type": "call",  "products": ["EndoQ"], "note": "bellen" },
+        { "id": "p2", "date": "2026-02-20", "type": "visit", "products": ["Ainex"], "note": "langsgaan" } ] },
+    { "id": "h2", "name": "AZ EndoQ", "products": ["EndoQ"], "status": "red", "stage": "prospect",
       "nextAction": "", "nextActionDate": "", "unit": {},
-      "contacts": [ { "id": "c4", "name": "Dr Twee", "product": "EndoQ" } ],
+      "contacts": [ { "id": "c4", "name": "Dr Twee", "products": ["EndoQ"] } ],
       "activities": [], "planned": [] },
     { "id": "h3", "name": "ZH Niemand", "products": [],
       "nextAction": "", "nextActionDate": "", "unit": {},
-      "contacts": [ { "id": "c5", "name": "Onbekend", "product": "" } ],
+      "contacts": [ { "id": "c5", "name": "Onbekend", "products": [] } ],
       "activities": [], "planned": [] },
     { "id": "h4", "name": "ZH Zonder vinkje", "products": [],
       "nextAction": "", "nextActionDate": "", "unit": {},
       "contacts": [],
       "activities": [
-        { "id": "a6", "date": "2026-01-05", "type": "call", "product": "EndoQ", "note": "" } ],
+        { "id": "a6", "date": "2026-01-05", "type": "call", "products": ["EndoQ"], "note": "" } ],
       "planned": [] }
   ]}$j$::jsonb as d),
 
@@ -57,17 +78,17 @@ with doc as (select $j${
 mijn as (select d, followup.scope_doc(d, '{Ainex}'::text[]) as s from doc),
 
 -- Dezelfde gebruiker slaat op zonder iets te wijzigen.
-rondgang as (select d, followup.merge_doc(d, s, '{Ainex}'::text[], false) as n from mijn),
+rondgang as (select d, pg_temp.opslaan(d, s, '{Ainex}'::text[], false) as n from mijn),
 
 -- En hier wijzigt hij wél iets: hij verbetert het telefoonnummer van zijn
 -- contact, voegt een contactmoment toe en vinkt zijn planning p2 af (p2 gaat
 -- weg en komt terug als contactmoment met hetzelfde id).
 gewijzigd as (
-  select d, followup.merge_doc(d, jsonb_set(jsonb_set(jsonb_set(s,
+  select d, pg_temp.opslaan(d, jsonb_set(jsonb_set(jsonb_set(s,
            '{hospitals,0,contacts,0,phone}', '"+32 11 22 33"'),
            '{hospitals,0,activities}', (s #> '{hospitals,0,activities}') ||
-             '[{"id":"n1","date":"2026-04-01","type":"call","product":"Ainex","note":"nieuw"},
-               {"id":"p2","date":"2026-02-20","type":"visit","product":"Ainex","note":"langsgaan"}]'::jsonb),
+             '[{"id":"n1","date":"2026-04-01","type":"call","products":["Ainex"],"note":"nieuw"},
+               {"id":"p2","date":"2026-02-20","type":"visit","products":["Ainex"],"note":"langsgaan"}]'::jsonb),
            '{hospitals,0,planned}', '[]'::jsonb),
          '{Ainex}'::text[], false) as n
   from mijn),
@@ -76,7 +97,7 @@ gewijzigd as (
 -- één staan, dus het EndoQ-vinkje mag daar niet mee sneuvelen: dat is niet
 -- van hem. Index 2 is c6 in zijn beeld — c1 valt weg, dus c2, c3, c6.
 strippen as (
-  select d, followup.merge_doc(d,
+  select d, pg_temp.opslaan(d,
            jsonb_set(s, '{hospitals,0,contacts,2,products}', '[]'::jsonb),
          '{Ainex}'::text[], false) as n
   from mijn),
@@ -88,7 +109,7 @@ strippen as (
 -- vertrekt: er ís nog niets opgeslagen om van te vertrekken. De regels moeten
 -- er dus apart gelden, en dat is precies wat hier nagekeken wordt.
 nieuwzh as (
-  select d, followup.merge_doc(d,
+  select d, pg_temp.opslaan(d,
            jsonb_set(s, '{hospitals}', (s -> 'hospitals') ||
              '[{"id":"h5","name":"Nieuw AZ","products":["Ainex"],
                 "nextAction":"","nextActionDate":"","unit":{},
@@ -121,7 +142,7 @@ opvmijn as (select d, followup.scope_doc(d, '{Ainex}'::text[]) as s from opv),
 -- niet van hem zijn: een EndoQ-rij (die hij niet eens gekregen heeft), en een
 -- kleur en een fase voor het ziekenhuis die niet kloppen.
 opvwijzig as (
-  select d, followup.merge_doc(d,
+  select d, pg_temp.opslaan(d,
            jsonb_set(jsonb_set(jsonb_set(s,
              '{hospitals,0,pipeline}',
              '{"Ainex": {"stage": "customer", "status": "green", "owner": "U2"},
@@ -132,12 +153,11 @@ opvwijzig as (
   from opvmijn),
 
 -- Momenten over meer dan één product: een gesprek over EndoQ en Ainex
--- tegelijk draagt een lijst in "products", zoals een contactpersoon. ma2 is
--- een lijst met enkel EndoQ: zo blijft een moment dat ooit over twee ging.
+-- tegelijk. ma2 gaat enkel over EndoQ en blijft dus weg voor Ainex.
 meer as (select $j${
   "version": 1,
   "hospitals": [
-    { "id": "m1", "name": "UZ Twee Tegelijk", "products": ["EndoQ", "Ainex"],
+    { "id": "m1", "name": "UZ Twee Tegelijk", "products": ["EndoQ", "Ainex"], "status": "red", "stage": "prospect",
       "nextAction": "samen", "nextActionDate": "2026-02-01", "unit": {},
       "contacts": [],
       "activities": [
@@ -147,10 +167,10 @@ meer as (select $j${
         { "id": "mp1", "date": "2026-02-01", "type": "visit", "products": ["EndoQ", "Ainex"], "note": "samen" } ] }
   ]}$j$::jsonb as d),
 meermijn as (select d, followup.scope_doc(d, '{Ainex}'::text[]) as s from meer),
-meerrond as (select d, followup.merge_doc(d, s, '{Ainex}'::text[], false) as n from meermijn),
+meerrond as (select d, pg_temp.opslaan(d, s, '{Ainex}'::text[], false) as n from meermijn),
 -- Ainex haalt zijn eigen product van het gesprek af.
 meerstrip as (
-  select d, followup.merge_doc(d, jsonb_set(s, '{hospitals,0,activities,0,products}', '[]'::jsonb),
+  select d, pg_temp.opslaan(d, jsonb_set(s, '{hospitals,0,activities,0,products}', '[]'::jsonb),
                                '{Ainex}'::text[], false) as n
   from meermijn),
 
@@ -172,7 +192,7 @@ om as (select d, followup.opvolging_aanvullen(d) as m from oud),
 -- De weg die write_state volgt: eerst omzetten, dan de opslag van een
 -- afgeschermde gebruiker ermee samenvoegen. Hij stuurt terug wat hij kreeg.
 omrond as (
-  select m, followup.merge_doc(m, followup.scope_doc(m, '{Ainex}'::text[]), '{Ainex}'::text[], false) as n
+  select m, pg_temp.opslaan(m, followup.scope_doc(m, '{Ainex}'::text[]), '{Ainex}'::text[], false) as n
   from om),
 
 -- Agenda-abonnementen (feed_events). U1 en U2 zijn twee eigenaars; de uuid's
@@ -187,18 +207,18 @@ feed as (select $j${
       "products": ["EndoQ", "Ainex"],
       "nextAction": "", "nextActionDate": "", "unit": {}, "contacts": [], "activities": [],
       "planned": [
-        { "id": "f1", "date": "2026-06-01", "time": "14:00", "type": "demo", "product": "EndoQ",
+        { "id": "f1", "date": "2026-06-01", "time": "14:00", "type": "demo", "products": ["EndoQ"],
           "note": "endoq", "createdBy": "00000000-0000-0000-0000-0000000000a1" },
-        { "id": "f2", "date": "2026-06-02", "type": "visit", "product": "Ainex",
+        { "id": "f2", "date": "2026-06-02", "type": "visit", "products": ["Ainex"],
           "note": "ainex", "createdBy": "00000000-0000-0000-0000-0000000000a2" },
-        { "id": "f3", "date": "2026-06-03", "type": "call", "product": "",
+        { "id": "f3", "date": "2026-06-03", "type": "call", "products": [],
           "note": "zonder", "createdBy": "00000000-0000-0000-0000-0000000000a1" },
-        { "id": "f4", "date": "2025-01-01", "type": "call", "product": "EndoQ",
+        { "id": "f4", "date": "2025-01-01", "type": "call", "products": ["EndoQ"],
           "note": "oud", "createdBy": "00000000-0000-0000-0000-0000000000a1" },
-        { "id": "f5", "date": "2026-06-04", "type": "call", "product": "Ainex", "note": "voor U2",
+        { "id": "f5", "date": "2026-06-04", "type": "call", "products": ["Ainex"], "note": "voor U2",
           "createdBy": "00000000-0000-0000-0000-0000000000a1",
           "assignee": "00000000-0000-0000-0000-0000000000a2" },
-        { "id": "f6", "type": "quote", "product": "Ainex", "note": "ooit offerte",
+        { "id": "f6", "type": "quote", "products": ["Ainex"], "note": "ooit offerte",
           "createdBy": "00000000-0000-0000-0000-0000000000a1" } ] }
   ]}$j$::jsonb as d),
 feedids as (
@@ -222,7 +242,8 @@ gedeeld as (select $j${
   "version": 1,
   "hospitals": [
     { "id": "s1", "name": "AZ Gedeeld Gesprek", "products": ["Thyroid RFA", "Fibroid RFA"],
-      "nextAction": "", "nextActionDate": "", "unit": {}, "contacts": [],
+      "status": "red", "stage": "prospect",
+      "nextAction": "samen", "nextActionDate": "2026-12-01", "unit": {}, "contacts": [],
       "activities": [
         { "id": "sa1", "date": "2026-10-01", "type": "visit", "products": ["Thyroid RFA", "Fibroid RFA"], "note": "" } ],
       "planned": [
@@ -231,20 +252,95 @@ gedeeld as (select $j${
 gedeeldmijn as (select d, followup.scope_doc(d, '{Thyroid RFA}'::text[]) as s from gedeeld),
 -- Hij maakt van het gesprek een bestelling met een aantal en een soort.
 gedeeldaantal as (
-  select followup.merge_doc(d,
+  select pg_temp.opslaan(d,
            jsonb_set(s, '{hospitals,0,activities,0}',
              (s #> '{hospitals,0,activities,0}') || '{"type": "order", "rooms": 5, "family": "other"}'::jsonb),
            '{Thyroid RFA}'::text[], false) as n
   from gedeeldmijn),
--- Hij vinkt het plan af, zoals een oudere app het deed: met één "product".
+-- Hij vinkt het plan af met wat zijn browser ervan zag: een lijst van één,
+-- met de vlag "shared" die read_state() erop zette.
 gedeeldaf as (
-  select followup.merge_doc(d,
+  select pg_temp.opslaan(d,
            jsonb_set(jsonb_set(s, '{hospitals,0,planned}', '[]'::jsonb),
              '{hospitals,0,activities}', (s #> '{hospitals,0,activities}') ||
-             '[{"id": "sp1", "date": "2026-11-13", "type": "visit", "product": "Thyroid RFA", "note": "samen"}]'::jsonb),
+             '[{"id": "sp1", "date": "2026-11-13", "type": "visit", "products": ["Thyroid RFA"], "shared": true, "note": "samen"}]'::jsonb),
            '{Thyroid RFA}'::text[], false) as n
   from gedeeldmijn),
 
+-- Elke oude vorm van de producten van een record, en wat lijstvorm() ervan
+-- hoort te maken (issue 22). v1 heeft alles; v2 heeft geen contacts en geen
+-- planned, en mag die er ook niet bij krijgen. Een lijst komt er altijd op
+-- één manier uit: tekst die niet leeg is, zonder dubbels, in de volgorde van
+-- PRODUCTS, en wat we niet kennen achteraan op de bytes van de naam (Zeta
+-- vóór alpha). tests/databank.mjs houdt toProductList() in de app aan
+-- dezelfde twee documenten.
+oudvorm as (select $j${
+  "version": 1,
+  "hospitals": [
+    { "id": "v1", "name": "UZ Oude Vorm", "products": ["EndoQ", "Ainex"],
+      "status": "orange", "stage": "meeting", "nextAction": "", "nextActionDate": "", "unit": {},
+      "contacts": [
+        { "id": "vc1", "name": "Dr EndoQ", "product": "EndoQ" },
+        { "id": "vc2", "name": "Aankoop", "product": "" },
+        { "id": "vc3", "name": "Dr Ainex", "products": ["Ainex"], "product": "EndoQ" },
+        { "id": "vc4", "name": "Onthaal" },
+        { "id": "vc5", "name": "Dr Rommel", "products": ["Ainex", "EndoQ", "EndoQ", "", 7] } ],
+      "activities": [
+        { "id": "va1", "date": "2026-01-02", "type": "installation", "product": "EndoQ", "rooms": 2,
+          "createdBy": "U1", "createdAt": "2026-01-02", "updatedBy": "U1", "updatedAt": "2026-01-02" },
+        { "id": "va2", "date": "2026-01-03", "type": "call", "product": "" },
+        { "id": "va3", "date": "2026-01-04", "type": "call" },
+        { "id": "va4", "date": "2026-01-05", "type": "order", "products": ["EndoQ", "Ainex"], "product": "EndoQ",
+          "rooms": 3, "family": "other" },
+        { "id": "va5", "date": "2026-01-06", "type": "order", "products": ["Ainex"], "rooms": 1 },
+        { "id": "va6", "date": "2026-01-07", "type": "call", "product": 5 },
+        { "id": "va7", "date": "2026-01-08", "type": "visit", "products": ["Ainex"], "shared": true },
+        { "id": "va8", "date": "2026-01-09", "type": "call", "products": ["Ainex", "EndoQ"] },
+        { "id": "va9", "date": "2026-01-10", "type": "order", "products": ["Ainex", "Ainex"], "rooms": 2 },
+        { "id": "va10", "date": "2026-01-11", "type": "call", "products": ["alpha", "Zeta", "Stents"] } ],
+      "planned": [
+        { "id": "vp1", "date": "2026-03-01", "type": "visit", "product": "Ainex" },
+        { "id": "vp2", "date": "2026-03-02", "type": "call", "products": "Ainex", "product": "Ainex" },
+        { "id": "vp3", "date": "2026-03-03", "type": "call", "products": [null, "Thyroid RFA", ""] } ] },
+    { "id": "v2", "name": "AZ Zonder Lijsten", "products": [],
+      "activities": [ { "id": "vb1", "date": "2026-01-02", "type": "call", "product": "EndoQ" } ] }
+  ]}$j$::jsonb as d),
+oudvormom as (select d, followup.lijstvorm(d) as m from oudvorm),
+-- Wat er na de omzetting hoort te staan.
+oudvormverwacht as (select $j${
+  "version": 1,
+  "hospitals": [
+    { "id": "v1", "name": "UZ Oude Vorm", "products": ["EndoQ", "Ainex"],
+      "status": "orange", "stage": "meeting", "nextAction": "", "nextActionDate": "", "unit": {},
+      "contacts": [
+        { "id": "vc1", "name": "Dr EndoQ", "products": ["EndoQ"] },
+        { "id": "vc2", "name": "Aankoop", "products": [] },
+        { "id": "vc3", "name": "Dr Ainex", "products": ["Ainex"] },
+        { "id": "vc4", "name": "Onthaal", "products": [] },
+        { "id": "vc5", "name": "Dr Rommel", "products": ["EndoQ", "Ainex"] } ],
+      "activities": [
+        { "id": "va1", "date": "2026-01-02", "type": "installation", "products": ["EndoQ"], "rooms": 2,
+          "createdBy": "U1", "createdAt": "2026-01-02", "updatedBy": "U1", "updatedAt": "2026-01-02" },
+        { "id": "va2", "date": "2026-01-03", "type": "call", "products": [] },
+        { "id": "va3", "date": "2026-01-04", "type": "call", "products": [] },
+        { "id": "va4", "date": "2026-01-05", "type": "order", "products": ["EndoQ", "Ainex"], "rooms": null },
+        { "id": "va5", "date": "2026-01-06", "type": "order", "products": ["Ainex"], "rooms": 1 },
+        { "id": "va6", "date": "2026-01-07", "type": "call", "products": [] },
+        { "id": "va7", "date": "2026-01-08", "type": "visit", "products": ["Ainex"] },
+        { "id": "va8", "date": "2026-01-09", "type": "call", "products": ["EndoQ", "Ainex"] },
+        { "id": "va9", "date": "2026-01-10", "type": "order", "products": ["Ainex"], "rooms": 2 },
+        { "id": "va10", "date": "2026-01-11", "type": "call", "products": ["Stents", "Zeta", "alpha"] } ],
+      "planned": [
+        { "id": "vp1", "date": "2026-03-01", "type": "visit", "products": ["Ainex"] },
+        { "id": "vp2", "date": "2026-03-02", "type": "call", "products": ["Ainex"] },
+        { "id": "vp3", "date": "2026-03-03", "type": "call", "products": ["Thyroid RFA"] } ] },
+    { "id": "v2", "name": "AZ Zonder Lijsten", "products": [],
+      "activities": [ { "id": "vb1", "date": "2026-01-02", "type": "call", "products": ["EndoQ"] } ] }
+  ]}$j$::jsonb as d),
+-- Wat read_state() een Ainex-gebruiker van dat oude document stuurt.
+oudvormmijn as (
+  select followup.scope_doc(followup.opvolging_aanvullen(followup.lijstvorm(d)), '{Ainex}'::text[]) as s
+    from oudvorm),
 -- Wat een contactmoment met de opvolging doet (issue 21): de kleur, de fase
 -- per product en de geïnstalleerde kamers. Eén geval per regel: het nummer
 -- van de controle, een naam, het ziekenhuis zoals het opgeslagen stond (s,
@@ -259,70 +355,71 @@ gedeeldaf as (
 -- databank na; de reden staat in een regel commentaar erboven.
 regels(nr, naam, s, h, bereik, modus, verwacht) as (values
 -- regels:begin
-  (80, 'bestelling EndoQ: klant', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"order","product":"EndoQ","rooms":null}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
-  (81, 'installatie EndoQ: klant, en twee kamers erbij', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"evaluation","pipeline":{"EndoQ":{"stage":"evaluation","status":"orange","owner":"U1"}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"evaluation","pipeline":{"EndoQ":{"stage":"evaluation","status":"orange","owner":"U1"}},"unit":{},"activities":[{"id":"n1","type":"installation","product":"EndoQ","rooms":2}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":"U1"}},"status":"green","stage":"customer","roomsInstalled":2}'),
-  (82, 'demo EndoQ bij een prospect: oranje, demo geïnstalleerd', '{"id":"r","products":["EndoQ"],"status":"red","stage":"prospect","pipeline":{"EndoQ":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"red","stage":"prospect","pipeline":{"EndoQ":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"demo","product":"EndoQ"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"demo_installed","status":"orange","owner":""}},"status":"orange","stage":"demo_installed","roomsInstalled":null}'),
-  (83, 'procedure Thyroid RFA: in evaluatie, en de stuks zijn geen kamers', '{"id":"r","products":["Thyroid RFA"],"status":"orange","stage":"first_contact","pipeline":{"Thyroid RFA":{"stage":"first_contact","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA"],"status":"orange","stage":"first_contact","pipeline":{"Thyroid RFA":{"stage":"first_contact","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"procedure","product":"Thyroid RFA","rooms":3}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"evaluation","status":"orange","owner":""}},"status":"orange","stage":"evaluation","roomsInstalled":null}'),
-  (84, 'demo Thyroid RFA bij een prospect: oranje, in evaluatie', '{"id":"r","products":["Thyroid RFA"],"status":"red","stage":"prospect","pipeline":{"Thyroid RFA":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA"],"status":"red","stage":"prospect","pipeline":{"Thyroid RFA":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"demo","product":"Thyroid RFA"}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"evaluation","status":"orange","owner":""}},"status":"orange","stage":"evaluation","roomsInstalled":null}'),
-  (85, 'bestelling stents: klant, en tien stuks zijn geen kamers', '{"id":"r","products":["Stents"],"status":"orange","stage":"evaluation","pipeline":{"Stents":{"stage":"evaluation","status":"orange","owner":""}},"unit":{"roomsInstalled":3},"activities":[]}', '{"id":"r","products":["Stents"],"status":"orange","stage":"evaluation","pipeline":{"Stents":{"stage":"evaluation","status":"orange","owner":""}},"unit":{"roomsInstalled":3},"activities":[{"id":"n1","type":"order","product":"Stents","rooms":10,"family":"biliary"}]}', '[]', 'save', '{"pipeline":{"Stents":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":3}'),
-  (86, 'bestelling Thyroid RFA tijdens de aankoop: klant', '{"id":"r","products":["Thyroid RFA"],"status":"orange","stage":"purchasing","pipeline":{"Thyroid RFA":{"stage":"purchasing","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA"],"status":"orange","stage":"purchasing","pipeline":{"Thyroid RFA":{"stage":"purchasing","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"order","product":"Thyroid RFA","rooms":5}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
-  (87, 'procedure bij een klant: blijft klant', '{"id":"r","products":["Thyroid RFA"],"status":"green","stage":"customer","pipeline":{"Thyroid RFA":{"stage":"customer","status":"green","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA"],"status":"green","stage":"customer","pipeline":{"Thyroid RFA":{"stage":"customer","status":"green","owner":""}},"unit":{},"activities":[{"id":"n1","type":"procedure","product":"Thyroid RFA","rooms":2}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
-  (88, 'zonder product, geen enkele rij: het ziekenhuis zelf', '{"id":"r","products":[],"status":"red","stage":"prospect","pipeline":{},"unit":{},"activities":[]}', '{"id":"r","products":[],"status":"red","stage":"prospect","pipeline":{},"unit":{},"activities":[{"id":"n1","type":"call","product":""}]}', '[]', 'save', '{"pipeline":{},"status":"orange","stage":"first_contact","roomsInstalled":null}'),
-  (89, 'zonder product, één rij: die rij', '{"id":"r","products":["Ainex"],"status":"red","stage":"prospect","pipeline":{"Ainex":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Ainex"],"status":"red","stage":"prospect","pipeline":{"Ainex":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"visit","product":""}]}', '[]', 'save', '{"pipeline":{"Ainex":{"stage":"first_contact","status":"orange","owner":""}},"status":"orange","stage":"first_contact","roomsInstalled":null}'),
-  (90, 'zonder product, twee rijen: niet te raden, dus niets, ook niet bij een bestelling', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"unit":{},"activities":[{"id":"n1","type":"order","product":""}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
-  (91, 'zonder product, enkel Ainex mag: Ainex beweegt, de rij van EndoQ niet', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"unit":{},"activities":[{"id":"n1","type":"demo","product":""}]}', '["Ainex"]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"demo_installed","status":"orange","owner":"U2"}},"status":"orange","stage":"demo_installed","roomsInstalled":null}'),
+  (80, 'bestelling EndoQ: klant', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"order","products":["EndoQ"],"rooms":null}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
+  (81, 'installatie EndoQ: klant, en twee kamers erbij', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"evaluation","pipeline":{"EndoQ":{"stage":"evaluation","status":"orange","owner":"U1"}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"evaluation","pipeline":{"EndoQ":{"stage":"evaluation","status":"orange","owner":"U1"}},"unit":{},"activities":[{"id":"n1","type":"installation","products":["EndoQ"],"rooms":2}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":"U1"}},"status":"green","stage":"customer","roomsInstalled":2}'),
+  (82, 'demo EndoQ bij een prospect: oranje, demo geïnstalleerd', '{"id":"r","products":["EndoQ"],"status":"red","stage":"prospect","pipeline":{"EndoQ":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"red","stage":"prospect","pipeline":{"EndoQ":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"demo","products":["EndoQ"]}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"demo_installed","status":"orange","owner":""}},"status":"orange","stage":"demo_installed","roomsInstalled":null}'),
+  (83, 'procedure Thyroid RFA: in evaluatie, en de stuks zijn geen kamers', '{"id":"r","products":["Thyroid RFA"],"status":"orange","stage":"first_contact","pipeline":{"Thyroid RFA":{"stage":"first_contact","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA"],"status":"orange","stage":"first_contact","pipeline":{"Thyroid RFA":{"stage":"first_contact","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"procedure","products":["Thyroid RFA"],"rooms":3}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"evaluation","status":"orange","owner":""}},"status":"orange","stage":"evaluation","roomsInstalled":null}'),
+  (84, 'demo Thyroid RFA bij een prospect: oranje, in evaluatie', '{"id":"r","products":["Thyroid RFA"],"status":"red","stage":"prospect","pipeline":{"Thyroid RFA":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA"],"status":"red","stage":"prospect","pipeline":{"Thyroid RFA":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"demo","products":["Thyroid RFA"]}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"evaluation","status":"orange","owner":""}},"status":"orange","stage":"evaluation","roomsInstalled":null}'),
+  (85, 'bestelling stents: klant, en tien stuks zijn geen kamers', '{"id":"r","products":["Stents"],"status":"orange","stage":"evaluation","pipeline":{"Stents":{"stage":"evaluation","status":"orange","owner":""}},"unit":{"roomsInstalled":3},"activities":[]}', '{"id":"r","products":["Stents"],"status":"orange","stage":"evaluation","pipeline":{"Stents":{"stage":"evaluation","status":"orange","owner":""}},"unit":{"roomsInstalled":3},"activities":[{"id":"n1","type":"order","products":["Stents"],"rooms":10,"family":"biliary"}]}', '[]', 'save', '{"pipeline":{"Stents":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":3}'),
+  (86, 'bestelling Thyroid RFA tijdens de aankoop: klant', '{"id":"r","products":["Thyroid RFA"],"status":"orange","stage":"purchasing","pipeline":{"Thyroid RFA":{"stage":"purchasing","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA"],"status":"orange","stage":"purchasing","pipeline":{"Thyroid RFA":{"stage":"purchasing","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"order","products":["Thyroid RFA"],"rooms":5}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
+  (87, 'procedure bij een klant: blijft klant', '{"id":"r","products":["Thyroid RFA"],"status":"green","stage":"customer","pipeline":{"Thyroid RFA":{"stage":"customer","status":"green","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA"],"status":"green","stage":"customer","pipeline":{"Thyroid RFA":{"stage":"customer","status":"green","owner":""}},"unit":{},"activities":[{"id":"n1","type":"procedure","products":["Thyroid RFA"],"rooms":2}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
+  (88, 'zonder product, geen enkele rij: het ziekenhuis zelf', '{"id":"r","products":[],"status":"red","stage":"prospect","pipeline":{},"unit":{},"activities":[]}', '{"id":"r","products":[],"status":"red","stage":"prospect","pipeline":{},"unit":{},"activities":[{"id":"n1","type":"call","products":[]}]}', '[]', 'save', '{"pipeline":{},"status":"orange","stage":"first_contact","roomsInstalled":null}'),
+  (89, 'zonder product, één rij: die rij', '{"id":"r","products":["Ainex"],"status":"red","stage":"prospect","pipeline":{"Ainex":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Ainex"],"status":"red","stage":"prospect","pipeline":{"Ainex":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"visit","products":[]}]}', '[]', 'save', '{"pipeline":{"Ainex":{"stage":"first_contact","status":"orange","owner":""}},"status":"orange","stage":"first_contact","roomsInstalled":null}'),
+  (90, 'zonder product, twee rijen: niet te raden, dus niets, ook niet bij een bestelling', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"unit":{},"activities":[{"id":"n1","type":"order","products":[]}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
+  (91, 'zonder product, enkel Ainex mag: Ainex beweegt, de rij van EndoQ niet', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"unit":{},"activities":[{"id":"n1","type":"demo","products":[]}]}', '["Ainex"]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"demo_installed","status":"orange","owner":"U2"}},"status":"orange","stage":"demo_installed","roomsInstalled":null}'),
   (92, 'een moment over twee producten: allebei', '{"id":"r","products":["Thyroid RFA","Fibroid RFA"],"status":"red","stage":"prospect","pipeline":{"Thyroid RFA":{"stage":"prospect","status":"red","owner":""},"Fibroid RFA":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA","Fibroid RFA"],"status":"red","stage":"prospect","pipeline":{"Thyroid RFA":{"stage":"prospect","status":"red","owner":""},"Fibroid RFA":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"demo","products":["Thyroid RFA","Fibroid RFA"]}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"evaluation","status":"orange","owner":""},"Fibroid RFA":{"stage":"evaluation","status":"orange","owner":""}},"status":"orange","stage":"evaluation","roomsInstalled":null}'),
-  (93, 'soort veranderd, van telefoon naar bestelling: klant', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"call","product":"EndoQ"}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"order","product":"EndoQ"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
-  (94, 'soort gelijk, nota aangepast: een fase met de hand blijft staan', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"order","product":"EndoQ","note":""}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"on_hold","pipeline":{"EndoQ":{"stage":"on_hold","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"order","product":"EndoQ","note":"aangepast"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"on_hold","status":"orange","owner":""}},"status":"orange","stage":"on_hold","roomsInstalled":null}'),
-  (95, 'afgevinkt gepland moment: nieuw als contactmoment', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"first_contact","pipeline":{"EndoQ":{"stage":"first_contact","status":"orange","owner":""}},"unit":{},"activities":[],"planned":[{"id":"p1","date":"2026-11-20","type":"demo","product":"EndoQ"}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"first_contact","pipeline":{"EndoQ":{"stage":"first_contact","status":"orange","owner":""}},"unit":{},"activities":[{"id":"p1","date":"2026-11-13","type":"demo","product":"EndoQ"}],"planned":[]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"demo_installed","status":"orange","owner":""}},"status":"orange","stage":"demo_installed","roomsInstalled":null}'),
+  (93, 'soort veranderd, van telefoon naar bestelling: klant', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"call","products":["EndoQ"]}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"order","products":["EndoQ"]}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
+  (94, 'soort gelijk, nota aangepast: een fase met de hand blijft staan', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"order","products":["EndoQ"],"note":""}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"on_hold","pipeline":{"EndoQ":{"stage":"on_hold","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"order","products":["EndoQ"],"note":"aangepast"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"on_hold","status":"orange","owner":""}},"status":"orange","stage":"on_hold","roomsInstalled":null}'),
+  (95, 'afgevinkt gepland moment: nieuw als contactmoment', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"first_contact","pipeline":{"EndoQ":{"stage":"first_contact","status":"orange","owner":""}},"unit":{},"activities":[],"planned":[{"id":"p1","date":"2026-11-20","type":"demo","products":["EndoQ"]}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"first_contact","pipeline":{"EndoQ":{"stage":"first_contact","status":"orange","owner":""}},"unit":{},"activities":[{"id":"p1","date":"2026-11-13","type":"demo","products":["EndoQ"]}],"planned":[]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"demo_installed","status":"orange","owner":""}},"status":"orange","stage":"demo_installed","roomsInstalled":null}'),
   (96, 'product aangevinkt zonder rij en zonder moment: prospect', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""},"Ainex":{"stage":"prospect","status":"red","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
-  (97, 'product aangevinkt met een moment erover: eerste contact', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"call","product":"Ainex"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""},"Ainex":{"stage":"first_contact","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
-  (98, 'stopzetting op een leeg aantal kamers: blijft leeg', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":null},"activities":[{"id":"a1","type":"installation","product":"EndoQ","rooms":2}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":null},"activities":[{"id":"a1","type":"installation","product":"EndoQ","rooms":2},{"id":"n1","type":"cancellation","product":"EndoQ","rooms":1}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
-  (99, 'stopzetting: kamers eraf', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":3},"activities":[{"id":"a1","type":"installation","product":"EndoQ","rooms":3}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":3},"activities":[{"id":"a1","type":"installation","product":"EndoQ","rooms":3},{"id":"n1","type":"cancellation","product":"EndoQ","rooms":1}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":2}'),
-  (100, 'installatie verwijderd: de kamers gaan eraf', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[{"id":"a1","type":"installation","product":"EndoQ","rooms":2}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":0}'),
-  (101, 'de browser telde de installatie al op: niet twee keer', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":5},"activities":[{"id":"n1","type":"installation","product":"EndoQ","rooms":3}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":5}'),
-  (102, 'kamers met de hand gezet, geen moment veranderd: het getal blijft', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[{"id":"a1","type":"installation","product":"EndoQ","rooms":2}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":4},"activities":[{"id":"a1","type":"installation","product":"EndoQ","rooms":2}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":4}'),
-  (103, 'import: niets wordt opnieuw beslist', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"installation","product":"EndoQ","rooms":2}]}', '[]', 'import', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
-  (104, 'nieuw ziekenhuis met meteen een bestelling', '{}', '{"id":"r","products":["Ainex"],"status":"red","stage":"prospect","pipeline":{"Ainex":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"order","product":"Ainex"}]}', '[]', 'save', '{"pipeline":{"Ainex":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
-  (105, 'installatie zonder product: telt kamers en zet de enige rij', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"evaluation","pipeline":{"EndoQ":{"stage":"evaluation","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"evaluation","pipeline":{"EndoQ":{"stage":"evaluation","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"installation","product":"","rooms":2}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":2}'),
-  (106, 'demo en installatie in één opslag: in volgorde', '{"id":"r","products":["EndoQ"],"status":"red","stage":"prospect","pipeline":{"EndoQ":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"red","stage":"prospect","pipeline":{"EndoQ":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"demo","product":"EndoQ"},{"id":"n2","type":"installation","product":"EndoQ","rooms":1}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":1}'),
-  (107, 'ziekenhuis van vóór de opvolging per product: eerst omzetten', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","unit":{},"activities":[{"id":"n1","type":"demo","product":"EndoQ"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"demo_installed","status":"orange","owner":""}},"status":"orange","stage":"demo_installed","roomsInstalled":null}'),
-  (108, 'de browser deed het al: verandert niets', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{},"activities":[{"id":"n1","type":"order","product":"EndoQ"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
-  (109, 'eerste product via een moment: neemt de fase van het ziekenhuis over', '{"id":"r","products":[],"status":"orange","stage":"meeting","pipeline":{},"unit":{},"activities":[{"id":"a1","type":"visit","product":""}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{},"unit":{},"activities":[{"id":"a1","type":"visit","product":""},{"id":"n1","type":"call","product":"EndoQ"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
-  (110, 'eerste product via een moment bij een klant: blijft klant', '{"id":"r","products":[],"status":"green","stage":"customer","pipeline":{},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA"],"status":"green","stage":"customer","pipeline":{},"unit":{},"activities":[{"id":"n1","type":"procedure","product":"Thyroid RFA","rooms":2}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
-  (111, 'eerste product per ingreep, ziekenhuis op demo geïnstalleerd: in evaluatie', '{"id":"r","products":[],"status":"orange","stage":"demo_installed","pipeline":{},"unit":{},"activities":[]}', '{"id":"r","products":["Fibroid RFA"],"status":"orange","stage":"demo_installed","pipeline":{},"unit":{},"activities":[{"id":"n1","type":"call","product":"Fibroid RFA"}]}', '[]', 'save', '{"pipeline":{"Fibroid RFA":{"stage":"evaluation","status":"orange","owner":""}},"status":"orange","stage":"evaluation","roomsInstalled":null}'),
-  (112, 'fase met de hand, geen moment: het ziekenhuis volgt de rij', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"call","product":"EndoQ"}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{},"activities":[{"id":"a1","type":"call","product":"EndoQ"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
+  (97, 'product aangevinkt met een moment erover: eerste contact', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"call","products":["Ainex"]}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""},"Ainex":{"stage":"first_contact","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
+  (98, 'stopzetting op een leeg aantal kamers: blijft leeg', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":null},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":2}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":null},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":2},{"id":"n1","type":"cancellation","products":["EndoQ"],"rooms":1}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
+  (99, 'stopzetting: kamers eraf', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":3},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":3}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":3},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":3},{"id":"n1","type":"cancellation","products":["EndoQ"],"rooms":1}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":2}'),
+  (100, 'installatie verwijderd: de kamers gaan eraf', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":2}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":0}'),
+  (101, 'de browser telde de installatie al op: niet twee keer', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":5},"activities":[{"id":"n1","type":"installation","products":["EndoQ"],"rooms":3}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":5}'),
+  (102, 'kamers met de hand gezet, geen moment veranderd: het getal blijft', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":2}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":4},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":2}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":4}'),
+  (103, 'import: niets wordt opnieuw beslist', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"installation","products":["EndoQ"],"rooms":2}]}', '[]', 'import', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
+  (104, 'nieuw ziekenhuis met meteen een bestelling', '{}', '{"id":"r","products":["Ainex"],"status":"red","stage":"prospect","pipeline":{"Ainex":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"order","products":["Ainex"]}]}', '[]', 'save', '{"pipeline":{"Ainex":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
+  (105, 'installatie zonder product: telt kamers en zet de enige rij', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"evaluation","pipeline":{"EndoQ":{"stage":"evaluation","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"evaluation","pipeline":{"EndoQ":{"stage":"evaluation","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"installation","products":[],"rooms":2}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":2}'),
+  (106, 'demo en installatie in één opslag: in volgorde', '{"id":"r","products":["EndoQ"],"status":"red","stage":"prospect","pipeline":{"EndoQ":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"red","stage":"prospect","pipeline":{"EndoQ":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"demo","products":["EndoQ"]},{"id":"n2","type":"installation","products":["EndoQ"],"rooms":1}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":1}'),
+  (107, 'ziekenhuis van vóór de opvolging per product: eerst omzetten', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","unit":{},"activities":[{"id":"n1","type":"demo","products":["EndoQ"]}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"demo_installed","status":"orange","owner":""}},"status":"orange","stage":"demo_installed","roomsInstalled":null}'),
+  (108, 'de browser deed het al: verandert niets', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{},"activities":[{"id":"n1","type":"order","products":["EndoQ"]}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
+  (109, 'eerste product via een moment: neemt de fase van het ziekenhuis over', '{"id":"r","products":[],"status":"orange","stage":"meeting","pipeline":{},"unit":{},"activities":[{"id":"a1","type":"visit","products":[]}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{},"unit":{},"activities":[{"id":"a1","type":"visit","products":[]},{"id":"n1","type":"call","products":["EndoQ"]}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
+  (110, 'eerste product via een moment bij een klant: blijft klant', '{"id":"r","products":[],"status":"green","stage":"customer","pipeline":{},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA"],"status":"green","stage":"customer","pipeline":{},"unit":{},"activities":[{"id":"n1","type":"procedure","products":["Thyroid RFA"],"rooms":2}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
+  (111, 'eerste product per ingreep, ziekenhuis op demo geïnstalleerd: in evaluatie', '{"id":"r","products":[],"status":"orange","stage":"demo_installed","pipeline":{},"unit":{},"activities":[]}', '{"id":"r","products":["Fibroid RFA"],"status":"orange","stage":"demo_installed","pipeline":{},"unit":{},"activities":[{"id":"n1","type":"call","products":["Fibroid RFA"]}]}', '[]', 'save', '{"pipeline":{"Fibroid RFA":{"stage":"evaluation","status":"orange","owner":""}},"status":"orange","stage":"evaluation","roomsInstalled":null}'),
+  (112, 'fase met de hand, geen moment: het ziekenhuis volgt de rij', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"call","products":["EndoQ"]}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{},"activities":[{"id":"a1","type":"call","products":["EndoQ"]}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
   (113, 'het verste van twee producten afgevinkt: het ziekenhuis volgt het andere', '{"id":"r","products":["EndoQ","Ainex"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""},"Ainex":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Ainex"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""},"Ainex":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""},"Ainex":{"stage":"meeting","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
   (114, 'product aangevinkt waarvan de rij al bestond: de rij blijft, het ziekenhuis volgt', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""},"Ainex":{"stage":"customer","status":"green","owner":"U2"}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""},"Ainex":{"stage":"customer","status":"green","owner":"U2"}},"unit":{},"activities":[]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""},"Ainex":{"stage":"customer","status":"green","owner":"U2"}},"status":"green","stage":"customer","roomsInstalled":null}'),
   (115, 'gedeeld plan afgevinkt door wie enkel Thyroid RFA mag: de rij van Fibroid blijft', '{"id":"r","products":["Thyroid RFA","Fibroid RFA"],"status":"red","stage":"prospect","pipeline":{"Thyroid RFA":{"stage":"prospect","status":"red","owner":""},"Fibroid RFA":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[],"planned":[{"id":"sp1","date":"2026-11-20","type":"visit","products":["Thyroid RFA","Fibroid RFA"]}]}', '{"id":"r","products":["Thyroid RFA","Fibroid RFA"],"status":"red","stage":"prospect","pipeline":{"Thyroid RFA":{"stage":"prospect","status":"red","owner":""},"Fibroid RFA":{"stage":"prospect","status":"red","owner":""}},"unit":{},"activities":[{"id":"sp1","date":"2026-11-13","type":"visit","products":["Thyroid RFA","Fibroid RFA"]}],"planned":[]}', '["Thyroid RFA"]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"first_contact","status":"orange","owner":""},"Fibroid RFA":{"stage":"prospect","status":"red","owner":""}},"status":"orange","stage":"first_contact","roomsInstalled":null}'),
-  (116, 'oude vorm: kamers als tekst, de app maakt er een getal van: niets verandert', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[{"id":"a1","type":"installation","product":"EndoQ","rooms":"2"}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[{"id":"a1","type":"installation","product":"EndoQ","rooms":2}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":2}'),
-  (117, 'oude vorm: kamers als tekst, en dan een stopzetting', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":"3"},"activities":[{"id":"a1","type":"installation","product":"EndoQ","rooms":"3"}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":3},"activities":[{"id":"a1","type":"installation","product":"EndoQ","rooms":3},{"id":"n1","type":"cancellation","product":"EndoQ","rooms":1}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":2}'),
-  (118, 'oude vorm: een onbekende of ontbrekende soort wordt other: geen andere soort', '{"id":"r","products":[],"status":"red","stage":"prospect","pipeline":{},"unit":{},"activities":[{"id":"a1","type":"lunch","product":""},{"id":"a2","product":""}]}', '{"id":"r","products":[],"status":"red","stage":"prospect","pipeline":{},"unit":{},"activities":[{"id":"a1","type":"other","product":""},{"id":"a2","type":"other","product":""}]}', '[]', 'save', '{"pipeline":{},"status":"red","stage":"prospect","roomsInstalled":null}'),
-  (119, 'oude vorm: een moment zonder id krijgt er een: niet nieuw', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"type":"order","product":"EndoQ","date":"2025-03-01"}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n9","type":"order","product":"EndoQ","date":"2025-03-01","note":"","contactId":""}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
+  (116, 'oude vorm: kamers als tekst, de app maakt er een getal van: niets verandert', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":"2"}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":2}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":2}'),
+  (117, 'oude vorm: kamers als tekst, en dan een stopzetting', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":"3"},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":"3"}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":3},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":3},{"id":"n1","type":"cancellation","products":["EndoQ"],"rooms":1}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":2}'),
+  (118, 'oude vorm: een onbekende of ontbrekende soort wordt other: geen andere soort', '{"id":"r","products":[],"status":"red","stage":"prospect","pipeline":{},"unit":{},"activities":[{"id":"a1","type":"lunch","products":[]},{"id":"a2","products":[]}]}', '{"id":"r","products":[],"status":"red","stage":"prospect","pipeline":{},"unit":{},"activities":[{"id":"a1","type":"other","products":[]},{"id":"a2","type":"other","products":[]}]}', '[]', 'save', '{"pipeline":{},"status":"red","stage":"prospect","roomsInstalled":null}'),
+  (119, 'oude vorm: een moment zonder id krijgt er een: niet nieuw', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"type":"order","products":["EndoQ"],"date":"2025-03-01"}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n9","type":"order","products":["EndoQ"],"date":"2025-03-01","note":"","contactId":""}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
   -- Enkel de databank: syncRooms() rekent per moment en laat de stopzetting
   -- op het lege veld vallen (dan 2); hier telt het netto verschil (1). De app
   -- en de koppeling bewaren nooit twee kamermomenten in één opslag.
-  (120, '[sql] stopzetting en installatie in één opslag: het netto verschil', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":null},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":null},"activities":[{"id":"n1","type":"cancellation","product":"EndoQ","rooms":1},{"id":"n2","type":"installation","product":"EndoQ","rooms":2}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":1}'),
-  (121, 'moment over enkel een product buiten het bereik: niets beweegt', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"unit":{},"activities":[{"id":"n1","type":"order","product":"EndoQ"}]}', '["Ainex"]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
-  (122, 'bestelling bij on hold: groen, de fase blijft', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"on_hold","pipeline":{"EndoQ":{"stage":"on_hold","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"on_hold","pipeline":{"EndoQ":{"stage":"on_hold","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"order","product":"EndoQ"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"on_hold","status":"green","owner":""}},"status":"green","stage":"on_hold","roomsInstalled":null}'),
-  (123, 'bestelling bij niet geïnteresseerd: groen, de fase blijft', '{"id":"r","products":["EndoQ"],"status":"red","stage":"not_interested","pipeline":{"EndoQ":{"stage":"not_interested","status":"red","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"red","stage":"not_interested","pipeline":{"EndoQ":{"stage":"not_interested","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"order","product":"EndoQ"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"not_interested","status":"green","owner":""}},"status":"green","stage":"not_interested","roomsInstalled":null}'),
-  (124, 'demo bij een geplande demo, EndoQ: demo geïnstalleerd', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"demo_planned","pipeline":{"EndoQ":{"stage":"demo_planned","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"demo_planned","pipeline":{"EndoQ":{"stage":"demo_planned","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"demo","product":"EndoQ"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"demo_installed","status":"orange","owner":""}},"status":"orange","stage":"demo_installed","roomsInstalled":null}'),
-  (125, 'demo bij een geplande demo, Thyroid RFA: in evaluatie', '{"id":"r","products":["Thyroid RFA"],"status":"orange","stage":"demo_planned","pipeline":{"Thyroid RFA":{"stage":"demo_planned","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA"],"status":"orange","stage":"demo_planned","pipeline":{"Thyroid RFA":{"stage":"demo_planned","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"demo","product":"Thyroid RFA"}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"evaluation","status":"orange","owner":""}},"status":"orange","stage":"evaluation","roomsInstalled":null}'),
-  (126, 'procedure met stents na een gesprek: in evaluatie', '{"id":"r","products":["Stents"],"status":"orange","stage":"meeting","pipeline":{"Stents":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Stents"],"status":"orange","stage":"meeting","pipeline":{"Stents":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"procedure","product":"Stents","rooms":4,"family":"colonic"}]}', '[]', 'save', '{"pipeline":{"Stents":{"stage":"evaluation","status":"orange","owner":""}},"status":"orange","stage":"evaluation","roomsInstalled":null}'),
-  (127, 'oude vorm: een onbekende soort wordt een bestelling: dat is een andere soort', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"lunch","product":"EndoQ"}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"order","product":"EndoQ"}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
-  (128, 'oude vorm: een installatie in de lijstvorm met een aantal: geen stopzetting', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":2}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":null}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":2}'),
-  (129, 'oude vorm: zonder id en met een datum die de app leegmaakt: niet nieuw', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"type":"order","product":"EndoQ","date":"13/11/2025"}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n9","type":"order","product":"EndoQ","date":"","note":"","contactId":""}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
+  (120, '[sql] stopzetting en installatie in één opslag: het netto verschil', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":null},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":null},"activities":[{"id":"n1","type":"cancellation","products":["EndoQ"],"rooms":1},{"id":"n2","type":"installation","products":["EndoQ"],"rooms":2}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":1}'),
+  (121, 'moment over enkel een product buiten het bereik: niets beweegt', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"unit":{},"activities":[{"id":"n1","type":"order","products":["EndoQ"]}]}', '["Ainex"]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":"U1"},"Ainex":{"stage":"prospect","status":"red","owner":"U2"}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
+  (122, 'bestelling bij on hold: groen, de fase blijft', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"on_hold","pipeline":{"EndoQ":{"stage":"on_hold","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"on_hold","pipeline":{"EndoQ":{"stage":"on_hold","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"order","products":["EndoQ"]}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"on_hold","status":"green","owner":""}},"status":"green","stage":"on_hold","roomsInstalled":null}'),
+  (123, 'bestelling bij niet geïnteresseerd: groen, de fase blijft', '{"id":"r","products":["EndoQ"],"status":"red","stage":"not_interested","pipeline":{"EndoQ":{"stage":"not_interested","status":"red","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"red","stage":"not_interested","pipeline":{"EndoQ":{"stage":"not_interested","status":"red","owner":""}},"unit":{},"activities":[{"id":"n1","type":"order","products":["EndoQ"]}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"not_interested","status":"green","owner":""}},"status":"green","stage":"not_interested","roomsInstalled":null}'),
+  (124, 'demo bij een geplande demo, EndoQ: demo geïnstalleerd', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"demo_planned","pipeline":{"EndoQ":{"stage":"demo_planned","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"demo_planned","pipeline":{"EndoQ":{"stage":"demo_planned","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"demo","products":["EndoQ"]}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"demo_installed","status":"orange","owner":""}},"status":"orange","stage":"demo_installed","roomsInstalled":null}'),
+  (125, 'demo bij een geplande demo, Thyroid RFA: in evaluatie', '{"id":"r","products":["Thyroid RFA"],"status":"orange","stage":"demo_planned","pipeline":{"Thyroid RFA":{"stage":"demo_planned","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Thyroid RFA"],"status":"orange","stage":"demo_planned","pipeline":{"Thyroid RFA":{"stage":"demo_planned","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"demo","products":["Thyroid RFA"]}]}', '[]', 'save', '{"pipeline":{"Thyroid RFA":{"stage":"evaluation","status":"orange","owner":""}},"status":"orange","stage":"evaluation","roomsInstalled":null}'),
+  (126, 'procedure met stents na een gesprek: in evaluatie', '{"id":"r","products":["Stents"],"status":"orange","stage":"meeting","pipeline":{"Stents":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["Stents"],"status":"orange","stage":"meeting","pipeline":{"Stents":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"procedure","products":["Stents"],"rooms":4,"family":"colonic"}]}', '[]', 'save', '{"pipeline":{"Stents":{"stage":"evaluation","status":"orange","owner":""}},"status":"orange","stage":"evaluation","roomsInstalled":null}'),
+  (127, 'oude vorm: een onbekende soort wordt een bestelling: dat is een andere soort', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"lunch","products":["EndoQ"]}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"a1","type":"order","products":["EndoQ"]}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":null}'),
+  (128, 'een lijst van één product is een gewoon moment: het aantal weghalen haalt de kamers eraf', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":2}]}', '{"id":"r","products":["EndoQ"],"status":"green","stage":"customer","pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"unit":{"roomsInstalled":2},"activities":[{"id":"a1","type":"installation","products":["EndoQ"],"rooms":null}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":0}'),
+  (129, 'oude vorm: zonder id en met een datum die de app leegmaakt: niet nieuw', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"type":"order","products":["EndoQ"],"date":"13/11/2025"}]}', '{"id":"r","products":["EndoQ"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n9","type":"order","products":["EndoQ"],"date":"","note":"","contactId":""}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
   -- Enkel de databank: de browser van wie enkel Ainex mag ziet het
   -- EndoQ-vinkje niet, dus domain.js kan dit niet nabootsen.
-  (130, '[sql] beperkt tot Ainex: geen rij voor het product van de collega', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"Ainex":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"Ainex":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"call","product":"Ainex"}]}', '["Ainex"]', 'save', '{"pipeline":{"Ainex":{"stage":"meeting","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}')
+  (130, '[sql] beperkt tot Ainex: geen rij voor het product van de collega', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"Ainex":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"Ainex":{"stage":"meeting","status":"orange","owner":""}},"unit":{},"activities":[{"id":"n1","type":"call","products":["Ainex"]}]}', '["Ainex"]', 'save', '{"pipeline":{"Ainex":{"stage":"meeting","status":"orange","owner":""}},"status":"orange","stage":"meeting","roomsInstalled":null}'),
+  (131, 'installatie over twee producten: allebei klant, maar een aantal telt niet', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""},"Ainex":{"stage":"meeting","status":"orange","owner":""}},"unit":{"roomsInstalled":1},"activities":[]}', '{"id":"r","products":["EndoQ","Ainex"],"status":"orange","stage":"meeting","pipeline":{"EndoQ":{"stage":"meeting","status":"orange","owner":""},"Ainex":{"stage":"meeting","status":"orange","owner":""}},"unit":{"roomsInstalled":1},"activities":[{"id":"n1","type":"installation","products":["EndoQ","Ainex"],"rooms":2}]}', '[]', 'save', '{"pipeline":{"EndoQ":{"stage":"customer","status":"green","owner":""},"Ainex":{"stage":"customer","status":"green","owner":""}},"status":"green","stage":"customer","roomsInstalled":1}')
 -- regels:end
 ),
--- Zoals write_state() het doet: beide kanten eerst omgezet naar de opvolging
--- per product, dan de regels.
+-- Zoals write_state() het doet: beide kanten eerst omgezet naar de lijstvorm
+-- en de opvolging per product, dan de regels.
 regelin as (
   select r.nr, r.naam, r.modus, followup.texts(r.bereik::jsonb) as bereik, r.verwacht::jsonb as verwacht,
-         followup.opvolging_aanvullen(jsonb_build_object('hospitals', jsonb_build_array(r.s::jsonb))) as sd,
-         followup.opvolging_aanvullen(jsonb_build_object('hospitals', jsonb_build_array(r.h::jsonb))) as hd
+         followup.opvolging_aanvullen(followup.lijstvorm(jsonb_build_object('hospitals', jsonb_build_array(r.s::jsonb)))) as sd,
+         followup.opvolging_aanvullen(followup.lijstvorm(jsonb_build_object('hospitals', jsonb_build_array(r.h::jsonb)))) as hd
     from regels r),
 regeluit as (
   select nr, naam, modus, bereik, verwacht, sd,
@@ -338,24 +435,99 @@ regelzicht as (
            -> 'hospitals' -> 0 as tweede
     from regeluit),
 -- Een ongewijzigde opslag van elk testdocument hierboven, zoals write_state
--- het ziet: al omgezet naar de opvolging per product.
+-- het ziet: al omgezet naar de lijstvorm en de opvolging per product.
 ongewijzigd as (
-  select v.naam, followup.opvolging_aanvullen(v.d) as m, b.sc
+  select v.naam, followup.opvolging_aanvullen(followup.lijstvorm(v.d)) as m, b.sc
     from (select 'doc' as naam, d from doc union all select 'opv', d from opv
           union all select 'meer', d from meer union all select 'oud', d from oud
-          union all select 'feed', d from feed union all select 'gedeeld', d from gedeeld) v
+          union all select 'feed', d from feed union all select 'gedeeld', d from gedeeld
+          union all select 'oudvorm', d from oudvorm) v
     cross join (values ('{}'::text[]), ('{Ainex}'::text[]), ('{Thyroid RFA}'::text[])) b(sc)),
 -- De hele weg van een beperkte opslag: Ainex voert in k1 (EndoQ en Ainex)
 -- een demo in zonder product, en laat zijn rij staan zoals een koppeling dat
 -- doet. Eerst het samenvoegen, dan de regels.
 regelsbeperkt as (
   select d, followup.opvolging_bijwerken_doc(d,
-           followup.merge_doc(d,
+           pg_temp.opslaan(d,
              jsonb_set(s, '{hospitals,0,activities}',
-               '[{"id": "kn1", "date": "2026-11-13", "type": "demo", "product": ""}]'::jsonb),
+               '[{"id": "kn1", "date": "2026-11-13", "type": "demo", "products": []}]'::jsonb),
              '{Ainex}'::text[], false),
            '{Ainex}'::text[], 'save') as n
-  from opvmijn)
+  from opvmijn),
+-- De hele weg van write_state(), behalve de tabel: lezen zoals read_state()
+-- (met de muur), terugsturen, omzetten, samenvoegen voor wie beperkt is, de
+-- regels en de stempel. Laden en ongewijzigd opslaan hoort niets te
+-- veranderen, met en zonder bereik. Twee documenten blijven erbuiten, omdat
+-- ze met opzet niet zijn zoals de app ze opslaat: feed staat niet in de
+-- volgorde van de agenda (controle 67), en oudvorm mist lijsten en afgeleide
+-- velden (controle 140 gaat over zijn omzetting).
+rondalles as (
+  select o.naam, o.sc, o.m,
+         followup.stamp_doc(o.m, followup.opvolging_bijwerken_doc(o.m,
+           followup.opvolging_aanvullen(case
+             when o.sc = '{}'::text[] then followup.lijstvorm(followup.scope_doc(o.m, o.sc))
+             else pg_temp.opslaan(o.m, followup.scope_doc(o.m, o.sc), o.sc, false) end),
+           o.sc, 'save'), 'U9', '2026-11-15') as n
+    from ongewijzigd o
+   where o.naam not in ('feed', 'oudvorm')),
+-- Een beperkte opslag op een gedeeld moment, de hele weg tot en met de
+-- regels en de kamers. m1 heeft één geïnstalleerde kamer; Ainex ziet ma1 en
+-- mp1 als ["Ainex"] met de vlag shared.
+--   weg:  hij haalt zijn product van ma1 en maakt er een installatie van 3
+--   wegtel: hij haalt zijn product van ma1 en maakt er een telefoon van
+--   eigen: een nieuwe installatie van 2, enkel over Ainex
+-- Afvinken zonder eigen product wordt geweigerd: zie afweiger hieronder.
+gedeeldbasis as (
+  select followup.opvolging_aanvullen(jsonb_set(d, '{hospitals,0,unit}', '{"roomsInstalled": 1}'::jsonb)) as m
+    from meer),
+gedeeldpad as (
+  select k, b.m, followup.opvolging_bijwerken_doc(b.m,
+           followup.opvolging_aanvullen(pg_temp.opslaan(b.m, v.payload, '{Ainex}'::text[], false)),
+           '{Ainex}'::text[], 'save') as n
+    from gedeeldbasis b
+    cross join lateral (select followup.scope_doc(b.m, '{Ainex}'::text[]) as s) z
+    cross join lateral (values
+      ('weg',   jsonb_set(z.s, '{hospitals,0,activities,0}', (z.s #> '{hospitals,0,activities,0}')
+                  || '{"products": [], "type": "installation", "rooms": 3, "note": "weg"}'::jsonb)),
+      ('wegtel', jsonb_set(z.s, '{hospitals,0,activities,0}', (z.s #> '{hospitals,0,activities,0}')
+                  || '{"products": [], "type": "call"}'::jsonb)),
+      -- Ainex houdt zijn product en maakt van het gedeelde gesprek een
+      -- installatie van 3; vinkt het gedeelde plan af als bestelling van 5;
+      -- maakt er een telefoon van (een soort die niet telt).
+      ('soort', jsonb_set(z.s, '{hospitals,0,activities,0}', (z.s #> '{hospitals,0,activities,0}')
+                  || '{"type": "installation", "rooms": 3}'::jsonb)),
+      ('afsoort', jsonb_set(jsonb_set(z.s, '{hospitals,0,planned}', '[]'::jsonb), '{hospitals,0,activities}',
+                  (z.s #> '{hospitals,0,activities}')
+                  || '[{"id": "mp1", "date": "2026-11-15", "type": "order", "products": ["Ainex"], "rooms": 5, "note": ""}]'::jsonb)),
+      ('andere', jsonb_set(z.s, '{hospitals,0,activities,0}', (z.s #> '{hospitals,0,activities,0}')
+                  || '{"type": "call"}'::jsonb)),
+      ('eigen', jsonb_set(z.s, '{hospitals,0,activities}', (z.s #> '{hospitals,0,activities}')
+                  || '[{"id": "eigen", "date": "2026-11-15", "type": "installation", "products": ["Ainex"], "rooms": 2}]'::jsonb))
+    ) v(k, payload)),
+-- Een gedeeld plan afvinken zonder een eigen product: write_state weigert
+-- het. af: Ainex vinkt mp1 (EndoQ en Ainex) af als installatie van 4 zonder
+-- product. bestel: iemand die alles mag, plant een bestelling voor Thyroid RFA
+-- en Fibroid RFA (dat mag: een plan draagt geen aantal), en wie enkel Thyroid
+-- RFA mag, vinkt ze af zonder zijn product — anders stond er een bestelling
+-- van Fibroid RFA die als verkocht stuk telt.
+afweiger as (
+  select 'af' as k, pg_temp.fout_bij(format(
+           'select pg_temp.opslaan(%L::jsonb, %L::jsonb, %L::text[], false)', b.m,
+           jsonb_set(jsonb_set(z.s, '{hospitals,0,planned}', '[]'::jsonb), '{hospitals,0,activities}',
+             (z.s #> '{hospitals,0,activities}')
+             || '[{"id": "mp1", "date": "2026-11-15", "type": "installation", "products": [], "rooms": 4, "note": ""}]'::jsonb),
+           '{Ainex}')) as fout
+    from gedeeldbasis b
+    cross join lateral (select followup.scope_doc(b.m, '{Ainex}'::text[]) as s) z
+  union all
+  select 'bestel', pg_temp.fout_bij(format(
+           'select pg_temp.opslaan(%L::jsonb, %L::jsonb, %L::text[], false)', o.m,
+           jsonb_set(jsonb_set(z.s, '{hospitals,0,planned}', '[]'::jsonb), '{hospitals,0,activities}',
+             (z.s #> '{hospitals,0,activities}')
+             || '[{"id": "sp1", "date": "2026-11-15", "type": "order", "products": [], "note": ""}]'::jsonb),
+           '{Thyroid RFA}'))
+    from (select followup.opvolging_aanvullen(jsonb_set(d, '{hospitals,0,planned,0,type}', '"order"')) as m from gedeeld) o
+    cross join lateral (select followup.scope_doc(o.m, '{Thyroid RFA}'::text[]) as s) z)
 
 select nr, controle,
        case when verwacht is not distinct from gekregen then 'OK' else '>>> FOUT' end as uitslag,
@@ -415,7 +587,7 @@ from (
   -- --- het andere product kan er niet af ----------------------------------
   union all select 18, 'Ainex kan zichzelf weghalen, EndoQ blijft staan',
          '["EndoQ"]'::jsonb,
-         followup.merge_doc(d, jsonb_set(s, '{hospitals,0,products}', '[]'::jsonb),
+         pg_temp.opslaan(d, jsonb_set(s, '{hospitals,0,products}', '[]'::jsonb),
                             '{Ainex}'::text[], false) #> '{hospitals,0,products}' from mijn
 
   -- --- de stempel ----------------------------------------------------------
@@ -455,18 +627,18 @@ from (
   -- opslag opnieuw uit, dan was een ingetypt getal elke keer weg.
   union all select 25, 'roomsDemo: een ingetypt getal blijft staan als geen demo veranderde',
          '9'::jsonb,
-         followup.merge_doc(d, jsonb_set(s, '{hospitals,0,unit,roomsDemo}', '9'::jsonb),
+         pg_temp.opslaan(d, jsonb_set(s, '{hospitals,0,unit,roomsDemo}', '9'::jsonb),
                             '{Ainex}'::text[], false) #> '{hospitals,0,unit,roomsDemo}' from mijn
   -- s heeft de contactmomenten a2, a3 en a5; nummer 2 is de Ainex-demo a5.
   union all select 26, 'roomsDemo: wie zijn eigen demo aanpast, overschrijft die van EndoQ niet',
          '3'::jsonb,
-         followup.merge_doc(d, jsonb_set(s, '{hospitals,0,activities,2,rooms}', '2'::jsonb),
+         pg_temp.opslaan(d, jsonb_set(s, '{hospitals,0,activities,2,rooms}', '2'::jsonb),
                             '{Ainex}'::text[], false) #> '{hospitals,0,unit,roomsDemo}' from mijn
 
   -- --- doelcijfers bij het opslaan ----------------------------------------
   union all select 27, 'doelcijfer: Ainex past het zijne aan, dat van EndoQ blijft',
          '{"2026": {"EndoQ": 10, "Ainex": 7}}'::jsonb,
-         followup.merge_doc(d, jsonb_set(s, '{targets,2026,Ainex}', '7'::jsonb),
+         pg_temp.opslaan(d, jsonb_set(s, '{targets,2026,Ainex}', '7'::jsonb),
                             '{Ainex}'::text[], false) -> 'targets' from mijn
 
   -- --- het ziekenhuis zonder vinkje ----------------------------------------
@@ -488,8 +660,12 @@ from (
   -- al helemaal niet te kunnen uitzetten.
   union all select 32, 'contactpersoon met beide producten: enkel het eigen vinkje komt door',
          '["Ainex"]'::jsonb, s #> '{hospitals,0,contacts,2,products}' from mijn
-  union all select 33, 'de oude vorm met één product wordt bij het lezen niet omgezet',
-         to_jsonb(true), to_jsonb((s #> '{hospitals,0,contacts,0}') ? 'product') from mijn
+  -- Sinds issue 22 andersom: de oude vorm wordt bij het lezen wél omgezet,
+  -- en dat is wat een contactpersoon met een los "product": "EndoQ" voor
+  -- Ainex verborgen houdt — products_of() leest enkel nog de lijst.
+  union all select 33, 'de oude vorm wordt bij het lezen omgezet, en de muur houdt',
+         '["vc2", "vc3", "vc4", "vc5"]'::jsonb,
+         (select jsonb_agg(c ->> 'id') from jsonb_array_elements(s #> '{hospitals,0,contacts}') c) from oudvormmijn
   union all select 34, 'rondgang: het EndoQ-vinkje van die contactpersoon blijft staan',
          '["EndoQ", "Ainex"]'::jsonb,
          (select c -> 'products' from jsonb_array_elements(n #> '{hospitals,0,contacts}') c
@@ -522,7 +698,7 @@ from (
          '["red", "prospect", {}]'::jsonb,
          jsonb_build_array(s #> '{hospitals,1,status}', s #> '{hospitals,1,stage}', s #> '{hospitals,1,pipeline}') from opvmijn
   union all select 41, 'opvolging: laden en opslaan verandert niets',
-         to_jsonb(true), to_jsonb(followup.merge_doc(d, s, '{Ainex}'::text[], false) = d) from opvmijn
+         to_jsonb(true), to_jsonb(pg_temp.opslaan(d, s, '{Ainex}'::text[], false) = d) from opvmijn
   union all select 42, 'opvolging: Ainex kan de rij van EndoQ niet overschrijven',
          '{"stage": "evaluation", "status": "orange", "owner": "U1"}'::jsonb,
          n #> '{hospitals,0,pipeline,EndoQ}' from opvwijzig
@@ -639,6 +815,169 @@ from (
   union all select 78, 'regels: het ziekenhuis is dan dat van het verste product',
          '["orange", "evaluation"]'::jsonb,
          jsonb_build_array(n #> '{hospitals,0,status}', n #> '{hospitals,0,stage}') from regelsbeperkt
+
+  -- --- één vorm: elk record draagt een lijst (issue 22) -------------------------
+  union all select 140, 'lijstvorm: elke oude vorm wordt een lijst, en niets anders verandert',
+         to_jsonb(true), to_jsonb(o.m = v.d) from oudvormom o, oudvormverwacht v
+  union all select 141, 'lijstvorm: een tweede keer verandert niets',
+         to_jsonb(true), to_jsonb(followup.lijstvorm(m) = m) from oudvormom
+  union all select 142, 'lijstvorm: een document dat al om is, blijft onaangeroerd',
+         '[]'::jsonb,
+         coalesce((select jsonb_agg(v.naam) from (
+             select 'doc' as naam, d from doc union all select 'opv', d from opv
+             union all select 'meer', d from meer union all select 'oud', d from oud
+             union all select 'feed', d from feed union all select 'gedeeld', d from gedeeld) v
+           where followup.lijstvorm(v.d) is distinct from v.d), '[]'::jsonb)
+  union all select 143, 'lijstvorm: een moment over twee producten verliest zijn aantal, ook onbeperkt',
+         '{"rooms": null, "family": false}'::jsonb,
+         (select jsonb_build_object('rooms', a -> 'rooms', 'family', a ? 'family')
+            from jsonb_array_elements(followup.lijstvorm(jsonb_set(d, '{hospitals,0,activities,0}',
+                   (d #> '{hospitals,0,activities,0}') || '{"type": "order", "rooms": 5, "family": "other"}'::jsonb))
+                   #> '{hospitals,0,activities}') a where a ->> 'id' = 'sa1') from gedeeld
+  union all select 144, 'lijstvorm: een lijst die naar één product gaat, mag weer een aantal dragen',
+         '{"rooms": 5, "family": "other"}'::jsonb,
+         (select jsonb_build_object('rooms', a -> 'rooms', 'family', a -> 'family')
+            from jsonb_array_elements(followup.lijstvorm(jsonb_set(d, '{hospitals,0,activities,0}',
+                   (d #> '{hospitals,0,activities,0}')
+                   || '{"type": "order", "products": ["Thyroid RFA"], "rooms": 5, "family": "other"}'::jsonb))
+                   #> '{hospitals,0,activities}') a where a ->> 'id' = 'sa1') from gedeeld
+  union all select 145, 'lijstvorm: een moment over twee producten zonder aantal blijft byte voor byte',
+         to_jsonb(true),
+         to_jsonb(followup.lijstvorm_record(d #> '{hospitals,0,activities,0}', true) = d #> '{hospitals,0,activities,0}')
+         from gedeeld
+  -- Wat read_state() een onbeperkte gebruiker stuurt, van het oude document
+  -- en van datzelfde document na de omzetting onderaan schema.sql: allebei
+  -- exact het verwachte omgezette document, en nergens de vlag.
+  union all select 146, 'lezen onbeperkt: exact het omgezette opgeslagen document, zonder vlag',
+         '[true, true, false]'::jsonb,
+         jsonb_build_array(
+           followup.scope_doc(followup.opvolging_aanvullen(followup.lijstvorm(o.d)), '{}'::text[])
+             = followup.opvolging_aanvullen(v.d),
+           followup.scope_doc(followup.opvolging_aanvullen(followup.lijstvorm(o.m)), '{}'::text[])
+             = followup.opvolging_aanvullen(v.d),
+           followup.scope_doc(followup.opvolging_aanvullen(followup.lijstvorm(o.d)), '{}'::text[])::text like '%"shared"%')
+         from oudvormom o, oudvormverwacht v
+  union all select 147, 'lezen: geen enkel record draagt nog een los "product"',
+         to_jsonb(false), to_jsonb(s::text like '%"product": %') from oudvormmijn
+  union all select 148, 'shared: enkel op de gesnoeide momenten',
+         '["ma1", "mp1"]'::jsonb,
+         (select jsonb_agg(e ->> 'id' order by e ->> 'id')
+            from (select jsonb_array_elements(s #> '{hospitals,0,activities}') e
+                  union all select jsonb_array_elements(s #> '{hospitals,0,planned}')
+                  union all select jsonb_array_elements(s #> '{hospitals,0,contacts}')) x
+           where e ? 'shared') from meermijn
+  union all select 149, 'shared: nooit op een contactpersoon, ook niet als die gesnoeid is',
+         to_jsonb(false), to_jsonb((s #> '{hospitals,0,contacts,2}') ? 'shared') from mijn
+  union all select 150, 'shared: wie alle producten van het moment mag, krijgt geen vlag',
+         to_jsonb(false), to_jsonb(followup.scope_doc(d, '{EndoQ,Ainex}'::text[])::text like '%"shared"%') from meer
+  union all select 151, 'shared: wat binnenkomt verliest de vlag, en de stempel blijft staan',
+         '{"shared": false, "updatedBy": "U1"}'::jsonb,
+         (select jsonb_build_object('shared', e ? 'shared', 'updatedBy', e -> 'updatedBy')
+            from jsonb_array_elements(followup.stamp_doc(d,
+                   followup.lijstvorm(jsonb_set(d, '{hospitals,0,activities,0,shared}', 'true'::jsonb)),
+                   'U9', '2026-11-15') #> '{hospitals,0,activities}') e
+           where e ->> 'id' = 'a1') from doc
+  union all select 152, 'shared: een beperkte rondgang over gedeelde momenten geeft het document terug',
+         to_jsonb(true), to_jsonb(n = d) from meerrond
+  union all select 153, 'rondgang: laden en opslaan verandert niets, met en zonder bereik, tot en met de stempel',
+         '[]'::jsonb,
+         coalesce((select jsonb_agg(naam || ' ' || sc::text) from rondalles where n is distinct from m), '[]'::jsonb)
+  union all select 156, 'gedeeld, beperkt: wie zich van een moment afhaalt, haalt enkel zijn vinkje weg',
+         '{"products": ["EndoQ"], "type": "visit", "note": "", "rooms": null, "kamers": 1}'::jsonb,
+         (select jsonb_build_object('products', a -> 'products', 'type', a -> 'type', 'note', a -> 'note',
+                                    'rooms', a -> 'rooms', 'kamers', n #> '{hospitals,0,unit,roomsInstalled}')
+            from jsonb_array_elements(n #> '{hospitals,0,activities}') a where a ->> 'id' = 'ma1')
+         from gedeeldpad where k = 'weg'
+  union all select 157, 'gedeeld, beperkt: een gedeeld plan afvinken zonder eigen product wordt geweigerd',
+         to_jsonb(true), to_jsonb(coalesce(fout, '') like 'followup:out_of_scope%') from afweiger where k = 'af'
+  union all select 158, 'gedeeld, beperkt: de rij van de collega beweegt niet als hij zich afhaalt',
+         '[true, true]'::jsonb,
+         (select jsonb_agg((n #> '{hospitals,0,pipeline,EndoQ}') = (m #> '{hospitals,0,pipeline,EndoQ}') order by k)
+            from gedeeldpad where k in ('weg', 'wegtel'))
+  union all select 161, 'gedeeld, beperkt: een geplande bestelling afvinken zonder eigen product wordt geweigerd',
+         to_jsonb(true), to_jsonb(coalesce(fout, '') like 'followup:out_of_scope%') from afweiger where k = 'bestel'
+  union all select 167, 'gedeeld, beperkt: wie zich afhaalt en de soort verandert, laat de soort staan',
+         '{"products": ["EndoQ"], "type": "visit"}'::jsonb,
+         (select jsonb_build_object('products', a -> 'products', 'type', a -> 'type')
+            from jsonb_array_elements(n #> '{hospitals,0,activities}') a where a ->> 'id' = 'ma1')
+         from gedeeldpad where k = 'wegtel'
+  union all select 168, 'abonnement op een oud document: een Ainex-account ziet niets van EndoQ',
+         '["x2", "x3"]'::jsonb,
+         (select coalesce(jsonb_agg(e -> 'id'), '[]'::jsonb) from jsonb_array_elements(followup.feed_events(
+            '{"hospitals": [{"id": "g", "planned": [
+               {"id": "x1", "date": "2026-12-01", "product": "EndoQ"},
+               {"id": "x2", "date": "2026-12-02", "product": "Ainex"},
+               {"id": "x3", "date": "2026-12-03", "products": ["EndoQ", "Ainex"]}]}]}'::jsonb,
+            '{Ainex}', '00000000-0000-0000-0000-0000000000a1', false, '{}', '2026-01-01')) e)
+  union all select 169, 'gedeelde contactpersoon, beperkt: vinkje eraf en een nieuw nummer — nummer blijft, EndoQ ook',
+         '{"phone": "+32 9 87 65", "products": ["EndoQ"]}'::jsonb,
+         (select jsonb_build_object('phone', c -> 'phone', 'products', c -> 'products')
+            from jsonb_array_elements(pg_temp.opslaan(d,
+                   jsonb_set(jsonb_set(s, '{hospitals,0,contacts,2,products}', '[]'::jsonb),
+                             '{hospitals,0,contacts,2,phone}', '"+32 9 87 65"'),
+                   '{Ainex}'::text[], false) #> '{hospitals,0,contacts}') c where c ->> 'id' = 'c6')
+         from mijn
+  union all select 162, 'gedeeld, beperkt: een gesprek wordt geen installatie, en geen kamers',
+         '{"type": "visit", "rooms": null, "kamers": 1}'::jsonb,
+         (select jsonb_build_object('type', a -> 'type', 'rooms', a -> 'rooms',
+                                    'kamers', n #> '{hospitals,0,unit,roomsInstalled}')
+            from jsonb_array_elements(n #> '{hospitals,0,activities}') a where a ->> 'id' = 'ma1')
+         from gedeeldpad where k = 'soort'
+  union all select 163, 'gedeeld, beperkt: een gedeeld plan afvinken als bestelling houdt de soort van het plan',
+         '{"type": "visit", "rooms": null, "products": ["EndoQ", "Ainex"]}'::jsonb,
+         (select jsonb_build_object('type', a -> 'type', 'rooms', a -> 'rooms', 'products', a -> 'products')
+            from jsonb_array_elements(n #> '{hospitals,0,activities}') a where a ->> 'id' = 'mp1')
+         from gedeeldpad where k = 'afsoort'
+  union all select 164, 'gedeeld, beperkt: een soort die niet telt, mag wel veranderen',
+         '"call"'::jsonb,
+         (select a -> 'type' from jsonb_array_elements(n #> '{hospitals,0,activities}') a where a ->> 'id' = 'ma1')
+         from gedeeldpad where k = 'andere'
+  -- Een zelfgemaakt contactmoment met het id van het gedeelde plan, terwijl
+  -- het plan blijft staan: geen afvinken (het product van de collega gaat
+  -- niet mee), en write_state() weigert het (plan_bezet). Echt afvinken
+  -- blijft kunnen.
+  union all select 165, 'id van een plan dat blijft: geen afvinken, en de opslag wordt geweigerd',
+         '[[], "m1:mp1", null]'::jsonb,
+         (select jsonb_build_array(
+                   followup.afgevinkt(b.m #> '{hospitals,0}', followup.lijstvorm(k.payload) #> '{hospitals,0}', '{Ainex}'::text[]),
+                   followup.plan_bezet(b.m, followup.opvolging_aanvullen(pg_temp.opslaan(b.m, k.payload, '{Ainex}'::text[], false))),
+                   followup.plan_bezet(b.m, followup.opvolging_aanvullen(pg_temp.opslaan(b.m, a.payload, '{Ainex}'::text[], false))))
+            from gedeeldbasis b
+            cross join lateral (select followup.scope_doc(b.m, '{Ainex}'::text[]) as s) z
+            cross join lateral (select jsonb_set(z.s, '{hospitals,0,activities}', (z.s #> '{hospitals,0,activities}')
+                  || '[{"id": "mp1", "date": "2026-11-15", "type": "call", "products": ["Ainex"], "note": ""}]'::jsonb) as payload) k
+            cross join lateral (select jsonb_set(jsonb_set(z.s, '{hospitals,0,planned}', '[]'::jsonb), '{hospitals,0,activities}',
+                  (z.s #> '{hospitals,0,activities}')
+                  || '[{"id": "mp1", "date": "2026-11-15", "type": "visit", "products": ["Ainex"], "note": ""}]'::jsonb) as payload) a)
+  union all select 166, 'write_state zonder modus (null) wordt geweigerd',
+         to_jsonb(true),
+         to_jsonb(coalesce(pg_temp.fout_bij($q$select public.write_state('{"hospitals": []}'::jsonb, null, null)$q$), '')
+                  like 'followup:invalid_payload%')
+  union all select 159, 'beperkt: een eigen moment over één product houdt zijn aantal, en de kamers tellen',
+         '{"rooms": 2, "kamers": 3}'::jsonb,
+         (select jsonb_build_object('rooms', a -> 'rooms', 'kamers', n #> '{hospitals,0,unit,roomsInstalled}')
+            from jsonb_array_elements(n #> '{hospitals,0,activities}') a where a ->> 'id' = 'eigen')
+         from gedeeldpad where k = 'eigen'
+  union all select 160, 'gedeeld, beperkt: wie zich afhaalt, wordt de laatste wijziger, de maker blijft',
+         '{"createdBy": "U1", "updatedBy": "U9"}'::jsonb,
+         (select jsonb_build_object('createdBy', a -> 'createdBy', 'updatedBy', a -> 'updatedBy')
+            from jsonb_array_elements(followup.stamp_doc(
+                   jsonb_set(m, '{hospitals,0,activities,0}', (m #> '{hospitals,0,activities,0}')
+                     || '{"createdBy": "U1", "createdAt": "2026-01-02", "updatedBy": "U1", "updatedAt": "2026-01-02"}'::jsonb),
+                   n, 'U9', '2026-11-15') #> '{hospitals,0,activities}') a where a ->> 'id' = 'ma1')
+         from gedeeldpad where k = 'weg'
+  union all select 154, 'kamers: een installatie als lijst van één product telt',
+         '[2, -1, 0, 0, 2]'::jsonb,
+         jsonb_build_array(
+           followup.geinstalleerd('{"type": "installation", "products": ["EndoQ"], "rooms": 2}'),
+           followup.geinstalleerd('{"type": "cancellation", "products": ["Ainex"], "rooms": "1"}'),
+           followup.geinstalleerd('{"type": "installation", "products": ["EndoQ", "Ainex"], "rooms": 2}'),
+           followup.geinstalleerd('{"type": "installation", "products": ["Stents"], "rooms": 2}'),
+           followup.geinstalleerd('{"type": "installation", "products": [], "rooms": 2}'))
+  union all select 155, 'sleutel zonder id: een oud moment en zijn omzetting geven dezelfde sleutel',
+         to_jsonb(true),
+         to_jsonb(followup.zonder_id_sleutel(followup.lijstvorm_record('{"type": "order", "product": "EndoQ", "date": "2025-03-01"}', true))
+                  = followup.zonder_id_sleutel('{"type": "order", "products": ["EndoQ"], "date": "2025-03-01"}'))
   -- En elk geval uit de tabel hierboven, onder zijn eigen nummer.
   union all select nr, 'regel: ' || naam, verwacht, gekregen from regelzicht
 ) q(nr, controle, verwacht, gekregen)
@@ -663,14 +1002,14 @@ order by nr;
 with x as (select $j$
     {"version": 1, "hospitals": [
       { "id": "h1", "name": "UZ Gedeeld", "products": ["EndoQ", "Ainex"], "unit": {},
-        "contacts": [ { "id": "c1", "name": "Dr EndoQ", "product": "EndoQ" },
-                      { "id": "c2", "name": "Dr Ainex", "product": "Ainex" } ],
-        "activities": [ { "id": "a1", "date": "2026-01-02", "type": "call",  "product": "EndoQ" },
-                        { "id": "a2", "date": "2026-01-03", "type": "visit", "product": "Ainex" } ],
+        "contacts": [ { "id": "c1", "name": "Dr EndoQ", "products": ["EndoQ"] },
+                      { "id": "c2", "name": "Dr Ainex", "products": ["Ainex"] } ],
+        "activities": [ { "id": "a1", "date": "2026-01-02", "type": "call",  "products": ["EndoQ"] },
+                        { "id": "a2", "date": "2026-01-03", "type": "visit", "products": ["Ainex"] } ],
         "planned": [] } ]}$j$::jsonb as d)
 select followup.merge_doc(d,
          jsonb_set(followup.scope_doc(d, '{Ainex}'::text[]),
-                   '{hospitals,0,activities,0,product}', '"EndoQ"'),
+                   '{hospitals,0,activities,0,products}', '["EndoQ"]'),
          '{Ainex}'::text[], false)
   from x;
 */
@@ -680,10 +1019,10 @@ select followup.merge_doc(d,
 with x as (select $j$
     {"version": 1, "hospitals": [
       { "id": "h1", "name": "UZ Gedeeld", "products": ["EndoQ", "Ainex"], "unit": {},
-        "contacts": [ { "id": "c1", "name": "Dr EndoQ", "product": "EndoQ" },
-                      { "id": "c2", "name": "Dr Ainex", "product": "Ainex" } ],
-        "activities": [ { "id": "a1", "date": "2026-01-02", "type": "call",  "product": "EndoQ" },
-                        { "id": "a2", "date": "2026-01-03", "type": "visit", "product": "Ainex" } ],
+        "contacts": [ { "id": "c1", "name": "Dr EndoQ", "products": ["EndoQ"] },
+                      { "id": "c2", "name": "Dr Ainex", "products": ["Ainex"] } ],
+        "activities": [ { "id": "a1", "date": "2026-01-02", "type": "call",  "products": ["EndoQ"] },
+                        { "id": "a2", "date": "2026-01-03", "type": "visit", "products": ["Ainex"] } ],
         "planned": [] } ]}$j$::jsonb as d)
 select followup.merge_doc(d,
          jsonb_set(followup.scope_doc(d, '{Ainex}'::text[]),
@@ -699,10 +1038,10 @@ select followup.merge_doc(d,
 with x as (select $j$
     {"version": 1, "hospitals": [
       { "id": "h1", "name": "UZ Gedeeld", "products": ["EndoQ", "Ainex"], "unit": {},
-        "contacts": [ { "id": "c1", "name": "Dr EndoQ", "product": "EndoQ" },
-                      { "id": "c2", "name": "Dr Ainex", "product": "Ainex" } ],
-        "activities": [ { "id": "a1", "date": "2026-01-02", "type": "call",  "product": "EndoQ" },
-                        { "id": "a2", "date": "2026-01-03", "type": "visit", "product": "Ainex" } ],
+        "contacts": [ { "id": "c1", "name": "Dr EndoQ", "products": ["EndoQ"] },
+                      { "id": "c2", "name": "Dr Ainex", "products": ["Ainex"] } ],
+        "activities": [ { "id": "a1", "date": "2026-01-02", "type": "call",  "products": ["EndoQ"] },
+                        { "id": "a2", "date": "2026-01-03", "type": "visit", "products": ["Ainex"] } ],
         "planned": [] } ]}$j$::jsonb as d)
 select followup.merge_doc(d,
          jsonb_set(followup.scope_doc(d, '{Ainex}'::text[]),
@@ -738,7 +1077,7 @@ with x as (select $j$
       { "id": "h4", "name": "ZH Zonder vinkje", "products": [], "unit": {},
         "contacts": [], "planned": [],
         "activities": [
-          { "id": "a6", "date": "2026-01-05", "type": "call", "product": "EndoQ" } ] } ]}$j$::jsonb as d)
+          { "id": "a6", "date": "2026-01-05", "type": "call", "products": ["EndoQ"] } ] } ]}$j$::jsonb as d)
 select followup.merge_doc(d,
          jsonb_set(followup.scope_doc(d, '{Ainex}'::text[]), '{hospitals}', '[]'::jsonb),
          '{Ainex}'::text[], true)

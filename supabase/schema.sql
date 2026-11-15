@@ -247,11 +247,14 @@ $$;
 -- De vaste volgorde uit domain.js. Die houden we aan zodat laden-en-opslaan
 -- zonder wijziging exact hetzelfde document teruggeeft; net dát maakt de
 -- belangrijkste controle mogelijk ("is er niets veranderd?"). Wat we niet
--- kennen komt achteraan in plaats van weg te vallen.
+-- kennen komt achteraan in plaats van weg te vallen, onderling op de bytes
+-- van de naam (collate "C": hoofdletters vóór kleine letters, zoals sort()
+-- in JavaScript), zodat de volgorde niet afhangt van de taal van de server.
+-- Dubbels vallen weg.
 create or replace function followup.product_sort(v text[]) returns text[]
 language sql immutable set search_path = public as $$
   select coalesce((
-    select array_agg(q.x order by coalesce(array_position(followup.producten(), q.x), 99), q.x)
+    select array_agg(q.x order by coalesce(array_position(followup.producten(), q.x), 99), q.x collate "C")
       from (select distinct unnest(v) as x) q
   ), '{}'::text[]);
 $$;
@@ -270,22 +273,22 @@ $$;
 -- meeste contactmomenten van vóór deze afscherming hebben geen product, en een
 -- geschiedenis met gaten erin is erger dan een regel te veel zien.
 --
--- Twee vormen. Een contactmoment en een gepland moment dragen meestal één
--- product in "product"; een contactpersoon draagt er meerdere in "products",
--- want dezelfde arts is vaak het aanspreekpunt voor allebei. Sinds een gesprek
--- over twee producten tegelijk kan gaan, mag ook een moment die lijst dragen.
--- Bij een lijst volstaat één overlapping: wie Ainex mag, ziet de arts die
--- EndoQ én Ainex doet, en het gesprek dat over allebei ging.
--- De producten van een record, welke vorm het ook heeft: de lijst "products",
--- of het ene "product". De tegenhanger van productsOf() in domain.js, zodat
--- de rest van dit bestand niet telkens op de vorm hoeft te vertakken.
+-- Eén vorm. Een contactpersoon, een contactmoment en een gepland moment
+-- dragen hun producten allemaal in de lijst "products", ook als het er één of
+-- geen is: dezelfde arts is vaak het aanspreekpunt voor twee producten, en een
+-- gesprek kan over twee producten tegelijk gaan. Eén overlapping volstaat:
+-- wie Ainex mag, ziet de arts die EndoQ én Ainex doet, en het gesprek dat
+-- over allebei ging.
+--
+-- Tot issue 22 droeg een moment meestal één "product", en enkel een lijst
+-- zodra er een tweede product bij kwam. lijstvorm() hieronder zet dat om, op
+-- elke weg naar binnen en naar buiten; wat hierna komt, kent enkel de lijst.
+-- De tegenhanger van productsOf() in domain.js.
 create or replace function followup.products_of(e jsonb) returns text[]
 language sql immutable set search_path = public as $$
-  select case
-    when e ? 'products' then followup.texts(e -> 'products')
-    when coalesce(e ->> 'product', '') = '' then '{}'::text[]
-    else array[e ->> 'product']
-  end;
+  -- Enkel de lijst: lijstvorm() zette het oude "product" al om. obj(): wat
+  -- geen object is, heeft geen producten.
+  select followup.texts(followup.obj(e) -> 'products');
 $$;
 
 create or replace function followup.in_scope(e jsonb, allowed text[]) returns boolean
@@ -304,6 +307,180 @@ language sql immutable set search_path = public as $$
   select to_jsonb(followup.product_sort(
            followup.only_in(followup.products_of(stored),   allowed)
         || followup.both_in(followup.products_of(incoming), allowed)));
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Eén vorm: de producten van een record staan altijd in een lijst (issue 22)
+-- ---------------------------------------------------------------------------
+-- LET OP: dit is niet terug te draaien door een oudere schema.sql uit te
+-- voeren. Twee redenen:
+--   - scope_entries() kreeg een derde argument. Een oudere versie maakt de
+--     variant met twee ernaast, en dan is elke oproep dubbelzinnig ("is not
+--     unique"): read_state() faalt voor elke beperkte gebruiker.
+--   - De oude zonder_aantal() haalt het aantal af van elk record dat een
+--     lijst "products" draagt, en na de omzetting onderaan is dat elk
+--     moment. Elke bestelling, installatie en procedure verloor bij de
+--     volgende beperkte opslag haar aantal.
+-- Terug kan enkel door eerst de nieuwe functies met de hand te verwijderen
+-- (scope_entries met drie argumenten, lijstvorm, lijstvorm_hospital,
+-- lijstvorm_record, een_lijst, aantal_eraf, zonder_aantal_beperkt met vier
+-- argumenten, tellende_soorten, plan_bezet) en het
+-- document terug te zetten uit app_state_backups van vóór de omzetting.
+-- Een moment droeg vroeger één "product", en pas een lijst "products" zodra
+-- iemand een tweede product aanvinkte. Elke lezer moest dus op de vorm
+-- vertakken, hier en in de app en in de koppeling. Nu zet de databank elk
+-- record om naar de lijst, op drie plaatsen: één keer op het opgeslagen
+-- document onderaan dit bestand, bij het lezen (read_state) en bij het
+-- schrijven (write_state, op wat er stond én op wat er binnenkomt). Net als
+-- opvolging_aanvullen(): een oude back-up of een browser met de vorige app
+-- komt zo toch in de nieuwe vorm binnen.
+--
+-- Dat de databank het doet en niet de app, is wat het veilig maakt: een
+-- omzetting door de app ging door write_state() en zijn stempel, en dan was
+-- de eerste die opsloeg de laatste wijziger van het hele logboek. Hier
+-- verandert geen stempel.
+
+-- Een moment over meer dan één product draagt geen aantal en geen soort
+-- stent: die horen bij één product. Een beperkte gebruiker ziet van een
+-- gesprek over Thyroid RFA en Fibroid RFA enkel het zijne, als een lijst van
+-- één, en kon er zo een bestelling met een aantal van maken; na het
+-- samenvoegen stond dat aantal op een moment over twee producten. De app en
+-- de koppeling bieden het niet aan (de vlag "shared", zie scope_entries); dit
+-- is het vangnet. Het telt de volledige lijst, zoals ze opgeslagen of
+-- samengevoegd is — niet de lengte die de browser zag. Enkel wat er staat
+-- wordt weggehaald, zodat een moment zonder aantal ongewijzigd blijft.
+--
+-- Een lijst die terug naar één product gaat, is weer een gewoon moment over
+-- één product en mag dan wél een aantal dragen.
+create or replace function followup.aantal_eraf(e jsonb) returns jsonb
+language sql immutable set search_path = public as $$
+  select (e - 'family')
+      || case when coalesce(jsonb_typeof(e -> 'rooms'), 'null') <> 'null'
+              then '{"rooms": null}'::jsonb else '{}'::jsonb end;
+$$;
+
+create or replace function followup.zonder_aantal(e jsonb) returns jsonb
+language sql immutable set search_path = public as $$
+  select case
+    when (select count(distinct x) from unnest(followup.products_of(e)) x) <= 1 then e
+    else followup.aantal_eraf(e)
+  end;
+$$;
+
+-- Hetzelfde na het samenvoegen van een beperkte opslag, met één regel erbij:
+-- wie beperkt is, zet nooit een aantal op een moment waar het product van een
+-- collega op staat. Ook niet als dat er na het samenvoegen het enige is. Een
+-- Ainex-gebruiker die zijn eigen product van een gesprek over EndoQ en Ainex
+-- haalt en er een installatie van drie kamers van maakt, hield anders een
+-- moment over enkel EndoQ over mét drie kamers — en die telden mee in de
+-- geïnstalleerde kamers van het ziekenhuis. Enkel bij momenten: een
+-- contactpersoon draagt geen aantal.
+--
+-- En om dezelfde reden geen soort die telt: een installatie, een
+-- stopzetting, een bestelling of een procedure. Een bestelling zonder aantal
+-- telt in de app als één verkocht stuk, een installatie zonder aantal zet het
+-- product van de collega op klant zodra hij zich er later van afhaalt. Wie
+-- beperkt is, maakt van een moment met het product van een collega dus geen
+-- tellende soort die er niet al stond: vorige is de soort die er stond (het
+-- opgeslagen moment, of het plan dat afgevinkt wordt), en die blijft dan.
+-- Stil, zoals het aantal: de app en de koppeling bieden het niet aan. Een
+-- andere soort die niet telt, mag wel.
+create or replace function followup.tellende_soorten() returns text[]
+language sql immutable set search_path = public as $$
+  select array['installation', 'cancellation', 'order', 'procedure'];
+$$;
+
+-- De vorige versie had drie argumenten; blijft die staan, dan zijn er twee.
+drop function if exists followup.zonder_aantal_beperkt(jsonb, text[], boolean);
+
+create or replace function followup.zonder_aantal_beperkt(e jsonb, vorige jsonb, allowed text[],
+                                                          moment boolean) returns jsonb
+language sql immutable set search_path = public as $$
+  select case
+    when moment and followup.only_in(followup.products_of(e), allowed) <> '{}'::text[]
+      then followup.aantal_eraf(case
+             when (e ->> 'type') = any(followup.tellende_soorten())
+                  and (e -> 'type') is distinct from vorige
+               then (e - 'type') || jsonb_strip_nulls(jsonb_build_object('type', vorige))
+             else e end)
+    else followup.zonder_aantal(e)
+  end;
+$$;
+
+-- De omzetting van één record. Staat er een lijst, dan blijft die en
+-- verdwijnt een los "product" ernaast. Anders wordt het ene "product" een
+-- lijst van één, of een lege lijst als er geen was. Dezelfde regel als
+-- normalize() in de app (toProductList), voor een back-up die rechtstreeks
+-- geïmporteerd wordt. Wat geen object is, blijft wat het was: dat keurt
+-- check_payload() of niet.
+--
+-- De lijst komt er altijd op één manier uit: enkel tekst die niet leeg is,
+-- zonder dubbels, in de volgorde van product_sort(). Zo telt "meer dan één
+-- product" overal hetzelfde (twee keer Ainex is één product), en verandert
+-- een lijst niet meer van volgorde zodra een beperkte gebruiker ze opslaat —
+-- wat anders een nieuwe laatste wijziger gaf voor een moment dat niemand
+-- aanraakte.
+create or replace function followup.een_lijst(e jsonb) returns jsonb
+language sql immutable set search_path = public as $$
+  select case
+    when jsonb_typeof(e) is distinct from 'object' then e
+    else (e - 'product') || jsonb_build_object('products', to_jsonb(followup.product_sort(array(
+           select x from unnest(case when jsonb_typeof(e -> 'products') = 'array'
+                                     then followup.texts(e -> 'products')
+                                     else followup.texts(jsonb_build_array(e -> 'product')) end) x
+            where x <> ''))))
+  end;
+$$;
+
+-- Een moment krijgt er twee dingen bij. "shared" gaat eraf: die vlag zet
+-- read_state() op wat het voor een beperkte gebruiker gesnoeid heeft (zie
+-- scope_entries), en ze is een mededeling aan de browser, geen gegeven. Bleef
+-- ze staan, dan veranderde een gedeeld moment bij elke opslag en kreeg het
+-- telkens een nieuwe laatste wijziger. En een moment over meer producten
+-- verliest zijn aantal (zonder_aantal). Een contactpersoon krijgt enkel de
+-- lijst: hij draagt geen aantal en geen vlag.
+create or replace function followup.lijstvorm_record(e jsonb, moment boolean) returns jsonb
+language sql immutable set search_path = public as $$
+  select case
+    when jsonb_typeof(e) is distinct from 'object' then e
+    when not moment then followup.een_lijst(e)
+    else followup.zonder_aantal(followup.een_lijst(e) - 'shared')
+  end;
+$$;
+
+create or replace function followup.lijstvorm_hospital(h jsonb) returns jsonb
+language sql immutable set search_path = public as $$
+  select case
+    when jsonb_typeof(h) is distinct from 'object' then h
+    -- Enkel de lijsten die er staan: seed.json heeft geen planned, en daar
+    -- mag er geen lege bij komen.
+    else h || coalesce((
+      select jsonb_object_agg(k.lijst, (
+               select coalesce(jsonb_agg(followup.lijstvorm_record(c.e, k.moment) order by c.i), '[]'::jsonb)
+                 from jsonb_array_elements(h -> k.lijst) with ordinality c(e, i)))
+        from (values ('contacts', false), ('activities', true), ('planned', true)) as k(lijst, moment)
+       where jsonb_typeof(h -> k.lijst) = 'array'), '{}'::jsonb)
+  end;
+$$;
+
+-- Het hele document. Staat alles al in de lijstvorm, dan komt het document
+-- ongewijzigd terug zonder dat er iets herbouwd wordt; dat is na de omzetting
+-- onderaan dit bestand bij bijna elke oproep zo. Een tweede keer verandert
+-- dus niets, en laden en opslaan blijft hetzelfde document teruggeven.
+create or replace function followup.lijstvorm(doc jsonb) returns jsonb
+language sql immutable set search_path = public as $$
+  select case
+    when jsonb_typeof(doc -> 'hospitals') is distinct from 'array' then doc
+    when not exists (
+      select 1
+        from jsonb_array_elements(doc -> 'hospitals') t(e)
+        cross join (values ('contacts', false), ('activities', true), ('planned', true)) as k(lijst, moment)
+        cross join lateral jsonb_array_elements(followup.arr(t.e -> k.lijst)) c(e)
+       where followup.lijstvorm_record(c.e, k.moment) is distinct from c.e) then doc
+    else doc || jsonb_build_object('hospitals', (
+      select jsonb_agg(followup.lijstvorm_hospital(t.e) order by t.i)
+        from jsonb_array_elements(doc -> 'hospitals') with ordinality t(e, i)))
+  end;
 $$;
 
 -- Zit er in dit ziekenhuis iets van een product dat jij niet mag? Sinds elk
@@ -490,27 +667,38 @@ $$;
 -- 4. Afschermen bij het lezen
 -- ---------------------------------------------------------------------------
 
--- Contactpersonen, contactmomenten en geplande momenten: één functie, want we
--- kijken naar de vorm van het record en niet naar welke lijst het is. Draagt
--- een record een productlijst (een arts voor twee producten, een gesprek over
--- twee producten tegelijk), dan gaat die gesnoeid mee: het record blijft
--- zichtbaar zodra er één product overlapt, maar het product van de collega
--- staat er niet bij. Een Ainex-gebruiker die het EndoQ-vinkje van een arts
--- ziet, leest daaruit af dat de collega met die arts bezig is, en kon het
--- uitzetten. De velden zelf zijn gedeeld.
+-- Contactpersonen, contactmomenten en geplande momenten: één functie. De
+-- productlijst van een record (een arts voor twee producten, een gesprek over
+-- twee producten tegelijk) gaat gesnoeid mee: het record blijft zichtbaar
+-- zodra er één product overlapt, maar het product van de collega staat er
+-- niet bij. Een Ainex-gebruiker die het EndoQ-vinkje van een arts ziet, leest
+-- daaruit af dat de collega met die arts bezig is, en kon het uitzetten. De
+-- velden zelf zijn gedeeld. Het document is hier al in de lijstvorm.
 --
--- Een record in de oude vorm, met één "product", gaat ongemoeid mee. Niet uit
--- beleefdheid: zou het hier omgezet worden, dan gaf laden-en-opslaan een
--- ander document terug dan er stond, en dat is wat controle 8 bewaakt.
-create or replace function followup.scope_entries(entries jsonb, allowed text[]) returns jsonb
+-- gedeeld: bij een moment (niet bij een contactpersoon) zetten we "shared":
+-- true op wat we gesnoeid hebben. Wie enkel Thyroid RFA mag, krijgt een
+-- gesprek over Thyroid én Fibroid als ["Thyroid RFA"], en uit die lengte kan
+-- zijn browser niet meer afleiden dat het moment gedeeld is en dus geen
+-- aantal mag dragen. De vlag zegt het hem. Wat niet gesnoeid werd, krijgt
+-- niets, zodat een onbeperkte lezer exact het opgeslagen document ziet;
+-- write_state() haalt de vlag er weer af (lijstvorm_record).
+-- Tot issue 22 had deze functie twee argumenten; die versie moet weg, anders
+-- is een oproep met twee argumenten dubbelzinnig.
+drop function if exists followup.scope_entries(jsonb, text[]);
+
+create or replace function followup.scope_entries(entries jsonb, allowed text[],
+                                                  gedeeld boolean default false) returns jsonb
 language sql immutable set search_path = public as $$
   select coalesce((
-    select jsonb_agg(case when t.e ? 'products'
-                          then t.e || jsonb_build_object('products',
-                                 to_jsonb(followup.product_sort(
-                                   followup.both_in(followup.texts(t.e -> 'products'), allowed))))
-                          else t.e end order by t.i)
+    select jsonb_agg(case when jsonb_typeof(t.e) is distinct from 'object' then t.e
+                          else t.e || jsonb_build_object('products', to_jsonb(g.lijst))
+                               || case when gedeeld
+                                            and cardinality(g.lijst) < cardinality(followup.product_sort(followup.products_of(t.e)))
+                                       then '{"shared": true}'::jsonb else '{}'::jsonb end
+                     end order by t.i)
       from jsonb_array_elements(followup.arr(entries)) with ordinality t(e, i)
+      cross join lateral (select followup.product_sort(
+                                   followup.both_in(followup.products_of(t.e), allowed)) as lijst) g
      where followup.in_scope(t.e, allowed)
   ), '[]'::jsonb);
 $$;
@@ -525,8 +713,8 @@ language sql immutable set search_path = public as $$
   select followup.fix_overall(followup.fix_planned(h || jsonb_build_object(
     'products',   to_jsonb(followup.product_sort(followup.both_in(followup.texts(h -> 'products'), allowed))),
     'contacts',   followup.scope_entries(h -> 'contacts', allowed),
-    'activities', followup.scope_entries(h -> 'activities', allowed),
-    'planned',    followup.scope_entries(h -> 'planned', allowed))
+    'activities', followup.scope_entries(h -> 'activities', allowed, true),
+    'planned',    followup.scope_entries(h -> 'planned', allowed, true))
     -- De opvolging van de andere producten gaat niet mee, en de kleur van het
     -- ziekenhuis wordt herrekend op wat overblijft.
     || case when h ? 'pipeline'
@@ -824,22 +1012,9 @@ $$;
 -- enkel de stukken die hij kón zien. Nooit andersom: een document dat van de
 -- payload vertrekt, mist alles wat hij niet mocht zien.
 
--- Een moment in de lijstvorm draagt geen aantal en geen soort stent: die
--- horen bij één product. Een beperkte gebruiker ziet van een gesprek over
--- twee producten enkel het zijne en kon er zo een bestelling met een aantal
--- van maken; na het samenvoegen stond dat aantal op een moment over twee
--- producten. De app en de koppeling bieden het niet meer aan; dit is het
--- vangnet. Enkel wat er staat wordt weggehaald, zodat een moment zonder
--- aantal ongewijzigd blijft (controle 8).
-create or replace function followup.zonder_aantal(e jsonb) returns jsonb
-language sql immutable set search_path = public as $$
-  select case
-    when not (e ? 'products') then e
-    else (e - 'family')
-      || case when coalesce(jsonb_typeof(e -> 'rooms'), 'null') <> 'null'
-              then '{"rooms": null}'::jsonb else '{}'::jsonb end
-  end;
-$$;
+-- zonder_aantal() staat bij lijstvorm() bovenaan: het draait ook bij het
+-- omzetten van een volledig document, en dan na het samenvoegen hieronder
+-- nog eens op de volledige lijst.
 
 -- Tot november 2026 had deze functie vier argumenten. Bleef die versie staan,
 -- dan waren er twee met dezelfde naam en was elke oproep met vier argumenten
@@ -854,7 +1029,10 @@ create or replace function followup.merge_entries(stored jsonb, incoming jsonb,
                                                   allowed text[], wat text,
                                                   afgevinkt jsonb default '[]'::jsonb) returns jsonb
 language plpgsql immutable set search_path = public as $$
-declare v_bad text;
+declare
+  v_bad    text;
+  -- Een contactmoment of een gepland moment, geen contactpersoon.
+  v_moment boolean := wat is distinct from 'contactpersoon';
 begin
   -- Een product opsturen dat je niet mag, kan niet. De app hoort het ook niet
   -- aan te bieden. Stil negeren zou de wijziging van de gebruiker opeten, stil
@@ -883,33 +1061,66 @@ begin
       using errcode = 'PT422', hint = 'duplicate_id';
   end if;
 
+  -- Een gedeeld gepland moment afvinken zonder een eigen product: wat er dan
+  -- overblijft, is een contactmoment dat enkel over het product van een
+  -- collega gaat, ingevoerd door iemand die dat product niet mag — met de
+  -- soort van het plan, en een geplande bestelling telt dan als verkocht.
+  -- Wie niet meer bij een gedeeld plan hoort, haalt zich van het plan af;
+  -- afvinken doet wie erbij blijft.
+  if afgevinkt <> '[]'::jsonb then
+    select p.e ->> 'id' into v_bad
+      from jsonb_array_elements(followup.arr(incoming)) p(e)
+      join jsonb_array_elements(followup.arr(afgevinkt)) x(e) on x.e ->> 'id' = p.e ->> 'id'
+     where followup.only_in(followup.products_of(x.e), allowed) <> '{}'::text[]
+       and followup.both_in(followup.products_of(p.e), allowed) = '{}'::text[]
+     limit 1;
+    if v_bad is not null then
+      raise exception 'followup:out_of_scope % % — een gedeeld gepland moment afvinken zonder een eigen product kan niet; haal je product van het geplande moment af', wat, v_bad
+        using errcode = 'PT403', hint = 'out_of_scope';
+    end if;
+  end if;
+
   -- Buiten het zicht: letterlijk uit de databank, op zijn oude plaats.
   -- Binnen het zicht en meegestuurd: de versie van de gebruiker, op dezelfde
   -- plaats. Nieuw: achteraan, zoals de app zelf ook toevoegt. Binnen het zicht
   -- en niet meegestuurd: verwijderd — write_state beslist of dat mocht.
   --
-  -- Draagt het record een productlijst — een contactpersoon, of een moment
-  -- over meer dan één product — dan gaat die door dezelfde formule als bij het ziekenhuis in plaats van
-  -- rechtstreeks uit de payload te komen. We kijken naar de vorm van het
-  -- record en niet naar welke lijst het is: zo klopt het ook als er later nog
-  -- een soort bijkomt.
+  -- De productlijst gaat door dezelfde formule als bij het ziekenhuis in
+  -- plaats van rechtstreeks uit de payload te komen: de browser zag enkel
+  -- zijn eigen deel ervan. Bij een contactpersoon en bij een moment, want
+  -- allebei dragen ze een lijst (lijstvorm). Daarna zonder_aantal_beperkt()
+  -- op de volledige lijst: wat de browser als een moment over één product
+  -- zag, kan er na het samenvoegen weer twee hebben, of enkel dat van de
+  -- collega.
   return coalesce((
     with s as (select t.e, t.i from jsonb_array_elements(followup.arr(stored))   with ordinality t(e, i)),
          p as (select t.e, t.i from jsonb_array_elements(followup.arr(incoming)) with ordinality t(e, i))
     select jsonb_agg(q.e order by q.groep, q.i) from (
       select s.e, 0 as groep, s.i from s where not followup.in_scope(s.e, allowed)
       union all
-      select case when s.e ? 'products' or p.e ? 'products'
-                  then followup.zonder_aantal((p.e - 'product')
-                         || jsonb_build_object('products', followup.merge_products(s.e, p.e, allowed)))
-                  else p.e end, 0, s.i
+      -- Wie zichzelf van een gedeeld moment afhaalt (het stond er met het
+      -- product van een collega, en van de zijne blijft er niets over),
+      -- haalt enkel zijn vinkje weg: de rest van het moment blijft zoals het
+      -- opgeslagen stond. Anders kon hij met dezelfde opslag de soort of de
+      -- nota veranderen van wat nu enkel over het product van de collega
+      -- gaat — een gesprek omzetten in een bestelling, bijvoorbeeld.
+      select followup.zonder_aantal_beperkt(
+               case when v_moment
+                         and followup.only_in(followup.products_of(s.e), allowed) <> '{}'::text[]
+                         and followup.both_in(followup.products_of(p.e), allowed) = '{}'::text[]
+                    then s.e else p.e end
+               || jsonb_build_object('products', followup.merge_products(s.e, p.e, allowed)),
+               s.e -> 'type', allowed, v_moment), 0, s.i
         from s join p on p.e ->> 'id' = s.e ->> 'id'
        where followup.in_scope(s.e, allowed)
       union all
-      select case when p.e ? 'products' or coalesce(x.e ? 'products', false)
-                  then followup.zonder_aantal((p.e - 'product')
-                         || jsonb_build_object('products', followup.merge_products(coalesce(x.e, '{}'::jsonb), p.e, allowed)))
-                  else p.e end, 1, p.i
+      -- Wat geen object is, gaat zoals het kwam: daar valt geen lijst aan te
+      -- hangen.
+      select case when jsonb_typeof(p.e) is distinct from 'object' then p.e
+                  else followup.zonder_aantal_beperkt(p.e
+                         || jsonb_build_object('products', followup.merge_products(coalesce(x.e, '{}'::jsonb), p.e, allowed)),
+                         x.e -> 'type', allowed, v_moment) end,
+             1, p.i
         from p
         left join lateral (select t.e from jsonb_array_elements(followup.arr(afgevinkt)) t(e)
                             where t.e ->> 'id' = p.e ->> 'id' limit 1) x on true
@@ -919,7 +1130,10 @@ begin
 end $$;
 
 -- De geplande momenten die in deze opslag afgevinkt worden: binnen het zicht,
--- en hun id duikt op als nieuw contactmoment.
+-- hun id duikt op als nieuw contactmoment, en het plan zelf is weg. Dat
+-- laatste telt: een zelfgemaakt contactmoment met het id van een gedeeld plan
+-- dat blijft staan, is geen afvinken, en kreeg anders het product van de
+-- collega mee. write_state() weigert zo'n opslag bovendien (plan_bezet).
 create or replace function followup.afgevinkt(stored jsonb, incoming jsonb, allowed text[]) returns jsonb
 language sql immutable set search_path = public as $$
   select coalesce(jsonb_agg(t.e), '[]'::jsonb)
@@ -927,8 +1141,33 @@ language sql immutable set search_path = public as $$
    where followup.in_scope(t.e, allowed)
      and exists (select 1 from jsonb_array_elements(followup.arr(incoming -> 'activities')) a(e)
                   where a.e ->> 'id' = t.e ->> 'id')
+     and not exists (select 1 from jsonb_array_elements(followup.arr(incoming -> 'planned')) p(e)
+                      where p.e ->> 'id' = t.e ->> 'id')
      and not exists (select 1 from jsonb_array_elements(followup.arr(stored -> 'activities')) a(e)
                       where a.e ->> 'id' = t.e ->> 'id');
+$$;
+
+-- Een nieuw contactmoment met het id van een opgeslagen plan dat blijft
+-- staan. Afvinken hergebruikt het id van het plan en haalt het plan weg;
+-- blijft het plan staan, dan is het id bezet, en loopt het echte afvinken
+-- later vast op een dubbel id. Voor een beperkte gebruiker staat het plan
+-- van de collega altijd nog in het samengevoegde document, dus ook dat geval
+-- valt hieronder. Geeft de eerste sleutel terug, of null.
+create or replace function followup.plan_bezet(stored jsonb, doc jsonb) returns text
+language sql immutable set search_path = public as $$
+  select t.e ->> 'id' || ':' || (a.e ->> 'id')
+    from jsonb_array_elements(followup.arr(doc -> 'hospitals')) t(e)
+    left join lateral (select x.e from jsonb_array_elements(followup.arr(stored -> 'hospitals')) x(e)
+                        where x.e ->> 'id' = t.e ->> 'id' limit 1) o on true
+    cross join lateral jsonb_array_elements(followup.arr(t.e -> 'activities')) a(e)
+   where coalesce(a.e ->> 'id', '') <> ''
+     and not exists (select 1 from jsonb_array_elements(followup.arr(o.e -> 'activities')) b(e)
+                      where b.e ->> 'id' = a.e ->> 'id')
+     and exists (select 1 from jsonb_array_elements(followup.arr(o.e -> 'planned')) b(e)
+                  where b.e ->> 'id' = a.e ->> 'id')
+     and exists (select 1 from jsonb_array_elements(followup.arr(t.e -> 'planned')) b(e)
+                  where b.e ->> 'id' = a.e ->> 'id')
+   limit 1;
 $$;
 
 -- Eén ziekenhuis. De gewone velden en unit komen uit de payload: dat is een
@@ -1166,12 +1405,14 @@ language sql immutable set search_path = public as $$
     -- Eerst de soort: bijna elk moment is geen installatie of stopzetting, en
     -- dit loopt over elk moment van een ziekenhuis bij elke opslag.
     when (a ->> 'type') is distinct from 'installation' and (a ->> 'type') is distinct from 'cancellation' then 0
-    -- Een moment in de lijstvorm draagt geen aantal: de app haalt het er bij
-    -- het laden af en zonder_aantal() bij het samenvoegen. Telden we een oud
-    -- aantal hier toch, dan leek de eerste opslag daarna een stopzetting.
-    when a ? 'products' then 0
-    when (case when cardinality(followup.products_of(a)) = 1
-               then (followup.products_of(a))[1] else '' end) = any(followup.per_ingreep()) then 0
+    -- Een moment over meer dan één product draagt geen aantal: zonder_aantal()
+    -- haalt het eraf. Telden we een oud aantal hier toch, dan leek de eerste
+    -- opslag daarna een stopzetting. Het aantal producten telt, niet de vorm:
+    -- sinds issue 22 is elk moment een lijst, en een lijst van één is een
+    -- gewoon moment over één product.
+    when (select count(distinct x) from unnest(followup.products_of(a)) x) > 1 then 0
+    -- Eén product per ingreep: stuks, geen kamers. Geen product telt wél.
+    when (followup.products_of(a))[1] = any(followup.per_ingreep()) then 0
     when a ->> 'type' = 'installation' then coalesce(followup.getal(a -> 'rooms'), 0)
     when a ->> 'type' = 'cancellation' then -coalesce(followup.getal(a -> 'rooms'), 0)
     else 0 end;
@@ -1228,7 +1469,9 @@ $$;
 -- zoals de app ze na het laden heeft. Staat er in de payload een moment met
 -- een id en dezelfde sleutel, dan is het dat moment — de app gaf het bij het
 -- laden een id — en niet een nieuw. Niet "gelijk op het id na": de app vult
--- bij het laden ook andere velden aan (contactId, note).
+-- bij het laden ook andere velden aan (contactId, note). Beide kanten zijn
+-- al in de lijstvorm, dus een oud "product": "EndoQ" en een nieuw
+-- "products": ["EndoQ"] geven dezelfde sleutel.
 create or replace function followup.zonder_id_sleutel(a jsonb) returns text
 language sql immutable set search_path = public as $$
   select followup.soort_van(a) || '|' || array_to_string(followup.products_of(a), ',')
@@ -1442,7 +1685,8 @@ end $$;
 -- opnieuw. Elke opslag gaat erdoor, ook een onbeperkte die nooit langs
 -- merge_hospital() komt — daarom over het hele document, zoals stamp_doc().
 --
--- Allebei al omgezet naar de opvolging per product (opvolging_aanvullen): stored
+-- Allebei al omgezet naar de opvolging per product (opvolging_aanvullen) en
+-- naar de lijstvorm (lijstvorm): stored
 -- is het opgeslagen document, doc wat er geschreven gaat worden. write_state()
 -- zet ze allebei om, zodat ze tegen dezelfde basis vergeleken worden als het
 -- samenvoegen van een beperkte opslag.
@@ -1473,10 +1717,14 @@ $$;
 -- role en products komen mee omdat de app ze nodig heeft (knoppen verbergen,
 -- keuzelijstjes beperken) én omdat ze zeggen met welke afscherming dit
 -- document is uitgelezen. Dat hoort bij elkaar.
+--
+-- Eerst de twee omzettingen (de lijstvorm en de opvolging per product), dan
+-- de muur. Een onbeperkte lezer krijgt zo exact het omgezette opgeslagen
+-- document; een beperkte krijgt "shared" op elk moment dat gesnoeid werd.
 create or replace function public.read_state() returns jsonb
 language sql stable security definer set search_path = public as $$
   select jsonb_build_object(
-           'data',       followup.scope_doc(followup.opvolging_aanvullen(s.data), p.products),
+           'data',       followup.scope_doc(followup.opvolging_aanvullen(followup.lijstvorm(s.data)), p.products),
            'updated_at', to_jsonb(s.updated_at),
            'role',       to_jsonb(followup.my_role()),
            'products',   to_jsonb(p.products))
@@ -1523,8 +1771,12 @@ declare
   v_weg_h      text[];
   v_weg_r      text[];
   v_at         timestamptz;
+  v_bad        text;
 begin
-  if mode not in ('save', 'import') then
+  -- Ook null: "not in" geeft dan null, en elke latere vraag naar de modus
+  -- ook. Dan viel het maximum aan verwijderingen weg, en de stempel en de
+  -- regels evengoed. Een oproep zonder modus is fout, geen gewone opslag.
+  if mode is null or mode not in ('save', 'import') then
     raise exception 'followup:invalid_payload onbekende mode %', mode
       using errcode = 'PT422', hint = 'invalid_payload';
   end if;
@@ -1552,6 +1804,12 @@ begin
   end if;
 
   perform followup.check_payload(payload);
+  -- Wat binnenkomt in de lijstvorm, in elke modus: een oude back-up, een
+  -- browser met de vorige app. Ook "shared" gaat er hier af, vóór de stempel
+  -- en het samenvoegen; anders gold elk gedeeld moment als gewijzigd. Na de
+  -- keuring, want die kijkt naar de vorm; de omzetting verandert geen id en
+  -- geen lijst in iets anders dan een lijst.
+  payload := followup.lijstvorm(payload);
 
   -- Eerst de rij vastzetten, dan pas vergelijken: tussen het vergelijken en het
   -- schrijven mag er niets gebeuren, anders is de hele controle theater.
@@ -1590,10 +1848,12 @@ begin
             detail = 'Herlaad en doe je wijziging opnieuw.';
   end if;
 
-  -- Het opgeslagen document, omgezet naar de opvolging per product: de basis
-  -- voor het samenvoegen én voor de regels hieronder, zodat die twee hetzelfde
-  -- vergelijken.
-  v_basis := followup.opvolging_aanvullen(v_stored);
+  -- Het opgeslagen document, omgezet naar de lijstvorm en de opvolging per
+  -- product: de basis voor het samenvoegen, voor de regels en voor de
+  -- stempel hieronder, zodat die drie hetzelfde vergelijken. Vergeleek de
+  -- stempel met het niet omgezette document, dan was elk moment dat nog een
+  -- los "product" droeg gewijzigd, en de opslagger zijn laatste wijziger.
+  v_basis := followup.opvolging_aanvullen(followup.lijstvorm(v_stored));
 
   if v_bereik = '{}'::text[] then
     -- Geen beperking: deze gebruiker zag alles, dus zijn document is het
@@ -1608,6 +1868,17 @@ begin
   -- product nog niet kent. Op een omgezet document verandert dit niets.
   v_nieuw := followup.opvolging_aanvullen(v_nieuw);
 
+  -- Een nieuw contactmoment op het id van een plan dat blijft staan: zie
+  -- plan_bezet(). Niet bij een import, die zet terug wat er was.
+  if mode = 'save' then
+    v_bad := followup.plan_bezet(v_basis, v_nieuw);
+    if v_bad is not null then
+      raise exception 'followup:duplicate_id contactmoment % heeft het id van een gepland moment dat blijft staan', v_bad
+        using errcode = 'PT422', hint = 'duplicate_id',
+              detail = 'Afvinken haalt het geplande moment weg; een nieuw contactmoment krijgt een eigen id.';
+    end if;
+  end if;
+
   -- Wat een nieuw contactmoment met de opvolging doet, beslist de databank:
   -- de kleur en de fase per product, en de geïnstalleerde kamers. Op het
   -- samengevoegde document, zodat de rij van een collega meetelt maar enkel
@@ -1618,7 +1889,7 @@ begin
   -- De stempel zet de databank, niet de browser. Bij een import niet: die zet
   -- een back-up terug zoals hij was, inclusief wie wat ooit invoerde.
   if mode <> 'import' then
-    v_nieuw := followup.stamp_doc(v_stored, v_nieuw, v_wie, v_dag);
+    v_nieuw := followup.stamp_doc(v_basis, v_nieuw, v_wie, v_dag);
   end if;
 
   -- Wat is er verdwenen? We vergelijken met wat er écht geschreven wordt, niet
@@ -1762,6 +2033,25 @@ update public.app_state
    set data = followup.opvolging_aanvullen(data)
  where id = 'main'
    and data is distinct from followup.opvolging_aanvullen(data);
+
+
+-- ---------------------------------------------------------------------------
+-- Eenmalig: elk moment en elke contactpersoon naar de lijstvorm (issue 22)
+-- ---------------------------------------------------------------------------
+-- Zie followup.lijstvorm() hierboven. Rechtstreeks in de tabel en niet via
+-- write_state(): zo verandert er geen enkele stempel, en wordt niemand de
+-- laatste wijziger van het hele logboek. Staat alles al om, dan raakt dit
+-- geen rij aan, dus het mag bij elke uitvoering opnieuw lopen. De trigger
+-- bewaart de toestand van vóór de omzetting in app_state_backups.
+--
+-- updated_at blijft staan, zoals hierboven. read_state() zet het document op
+-- weg naar buiten al om, dus wie de nieuwe app open heeft, heeft deze vorm al
+-- en hoeft niets op te halen; een oudere app stuurt de oude vorm, en die zet
+-- write_state() om. Niemand krijgt een conflict voor iets wat hij niet kan zien.
+update public.app_state
+   set data = followup.lijstvorm(data)
+ where id = 'main'
+   and data is distinct from followup.lijstvorm(data);
 
 
 -- ---------------------------------------------------------------------------
@@ -1935,7 +2225,7 @@ language sql immutable set search_path = public as $$
              'updated',  coalesce(nullif(p.e ->> 'updatedAt', ''), p.e ->> 'createdAt', ''))
            order by p.e ->> 'date', coalesce(p.e ->> 'time', ''), h.e ->> 'name')
       from jsonb_array_elements(followup.arr(
-             followup.scope_doc(followup.opvolging_aanvullen(doc), coalesce(scope, '{}')) -> 'hospitals')) h(e)
+             followup.scope_doc(followup.opvolging_aanvullen(followup.lijstvorm(doc)), coalesce(scope, '{}')) -> 'hospitals')) h(e)
       cross join lateral jsonb_array_elements(followup.arr(h.e -> 'planned')) p(e)
      where coalesce(p.e ->> 'date', '') >= since
        -- Voor wie: wie gekozen is, anders wie het invoerde (assigneeOf()).

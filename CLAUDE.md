@@ -61,13 +61,13 @@ node --experimental-strip-types tests/alles.mjs   # the flag can go from Node 23
 
 | File | Checks |
 |---|---|
-| `tests/lijsten.mjs` | Products, stages, types (and their names), kinds of stent and facts per product agree between `domain.js`, `i18n.js`, the connector, the calendar function and `schema.sql` |
+| `tests/lijsten.mjs` | Products, stages, types (and their names), the counting types, kinds of stent and facts per product agree between `domain.js`, `i18n.js`, the connector, the calendar function and `schema.sql` |
 | `tests/vertalingen.mjs` | Every key in both languages, and every key the code asks for exists |
 | `tests/databank.mjs` | What a contact moment does to the follow-up: the case table between `-- regels:begin` and `-- regels:end` in `controle.sql` (stored hospital, incoming hospital, scope, expected rows, colour, stage, rooms) run through `domain.js`. `controle.sql` runs the same table through the database, so one set of cases holds both copies to the same answer |
 | `tests/regels.mjs` | The connector's `add_contact_moment` / `update_moment` store the same record as the app and leave the follow-up alone, its replies report what `read_state()` gave back after the write, `stageStatus` / `zonderProduct` / a new row in `update_follow_up` agree with `domain.js`, and it accepts exactly the types `typesAmong()` offers, for no product, one, two, a shared moment and a restricted account |
 | `tests/planning.mjs` | Planned moments: planning without a date, the order (date, time, undated first) in the app, the connector and `fix_planned()`, ticking off (id reused, time dropped, kind of stent kept, date at the latest today) and "planned for" |
 | `tests/cijfers.mjs` | Units sold, per kind of stent, and active rooms: `domain.js`'s counting against the connector's `get_statistics`, with awkward quantities |
-| `tests/samenvoegen.mjs` | `merge3()`: both sides' edits survive, a real clash is a conflict, deletions, stamps, ticks, the list form; `momentsMoved()` fires only on what the database acts on, and after a save the database's follow-up wins while a field typed meanwhile survives |
+| `tests/samenvoegen.mjs` | `merge3()`: both sides' edits survive, a real clash is a conflict, deletions, stamps, ticks, a moment about several products; `momentsMoved()` fires only on what the database acts on, and after a save the database's follow-up wins while a field typed meanwhile survives |
 | `tests/agenda.mjs` | The download (`ics.js`) and the feed write the same events, and the feed answers 404 / 503 correctly |
 
 Each file runs in its own process (`alles.mjs`), and within a file every case is
@@ -337,50 +337,81 @@ records are not rewritten. One per moment: an order of two kinds is two moments.
 The statistics show units per kind, with "no kind chosen" as its own row so the
 sum matches the tile.
 
-**One product or several.** A contact moment and a planned moment usually carry
-one `product`; a contact carries `products[]`, because the same clinician is often
-the point of contact for both. A moment can be about several products too (one
-meeting about Thyroid RFA and Fibroid RFA): it then carries `products[]` instead,
-and `productsOf()` / `productOf()` in `domain.js` are how every screen reads
-either shape. Existing moments are **not** converted, or the first save would make
-one person the last editor of the whole logbook; the list appears when someone
-ticks a second product, and from then on that record stays a list even if one
-product is left. That last part is not tidiness: a restricted user holds only
-their own part of the list, and the database only adds the colleague's part back
-while the record is a list. Whatever carries a number belongs to one product. So a
+**One product or several.** A contact moment, a planned moment and a contact all
+carry `products[]`: usually one name, several when a meeting was about Thyroid RFA
+and Fibroid RFA at once, or when the same clinician is the point of contact for
+both. Until November 2026 a moment carried a single `product` until someone ticked
+a second one; that shape is converted in exactly two places and read nowhere else.
+The database converts with `followup.lijstvorm()`: once on the stored document at
+the foot of `schema.sql`, and on the way in and out in `read_state()`,
+`write_state()` and `feed_events()`, for an old app or an old backup that still
+sends it. A conversion in the database goes through no stamping, so nobody becomes
+the last editor of the whole logbook. The app converts in `normalize()`, for an
+imported backup and for `data/db.json`. `productsOf()` / `productOf()` in
+`domain.js`, `followup.products_of()` and the connector read only the list. The
+connector still accepts `product` (one name) as input on its tools, and stores a
+list. **The schema goes live first**: an older app or connector against this schema
+only refuses numbers it could have offered, but this app or connector against an
+older schema would have every number stripped, because that one treats every list
+as shared. **It cannot be rolled back by running an older `schema.sql`:** that
+one stops with "`scope_entries(jsonb, text[])` is not unique" and leaves
+`read_state()` broken for every restricted user, and its `zonder_aantal()` would
+then strip the number from every moment, since every moment now carries a list. A
+way back is a fix forward. Whatever carries a number belongs to one product. So a
 *new* contact moment about several products with a type that carries a number (an
 order for Fibroid RFA and Stents) asks for a number per product and is saved as one
 contact moment per product, each with its own number and kind of stent; the first
 keeps a ticked-off plan's id. A plan carries no number, so it may be any type all its
-products know (`typesInAll()`); the numbers come when it is ticked off. An existing
-moment in the list form, and a shared plan ticked off by someone who may not see all
-its products, offer only the types without a number (`typesAmong()`), with no
-quantity and no kind of stent: the colleague's product may be hidden in it. The
+products know (`typesInAll()`); the numbers come when it is ticked off. The
 connector does not split: it refuses a number on several products and says to log
 one moment per product. Such a moment
 moves the follow-up of each of its products, shows under each in the filters,
 and counts once as a contact moment. Its note is shared between the people who
 can see it, as a contact's fields are, and either of them can remove it.
 
-**A moment in the list form is shared, and never carries a number.** That holds
-even when only one product is left in the list, and even when someone who may see
-only one product looks at it: the database has trimmed the list for them, so it
-looks like a single-product moment but is not. `shared()` in `domain.js` is the
-test; `typesAmong(list, mine, gedeeld)` then offers no type with a number, the
-dialogs show no quantity and no kind of stent, `normalize()` drops them, and the
-connector refuses them. The database is the safety net: `followup.zonder_aantal()`
-strips `rooms` and `family` from any list-form record it merges. Ticking off a
-shared plan keeps the list form, and `followup.afgevinkt()` hands the merge the
-stored plan as the stored side of the new contact moment, so the colleague's
-product stays on it (`controle.sql` 71–74). `normalizeContact()` migrates the old single `product`
-and drops the field, the way `demoDate` was folded into `planned[]`. The database
-reads both shapes through `followup.products_of()`, the counterpart of `productsOf()`,
-and deliberately does **not** rewrite the old shape on the way out:
-that would make loading and saving return a different document and break the check
-that matters most. A contact is visible as soon as one product overlaps your scope,
+**A shared moment never carries a number.** A moment is shared when its stored list
+holds more than one product. Someone who may see only one of them gets a trimmed
+list that looks like an ordinary single-product moment, so the database says so:
+`scope_entries()` adds `"shared": true` to a moment (never a contact) whose list it
+trimmed, and `write_state()` strips the flag from whatever comes back, before the
+stamp is compared, so it never makes anyone a last editor. `shared()` in
+`domain.js` and in the connector is "the flag, or more than one product";
+`typesAmong(list, mine, gedeeld)` then offers no type with a number, the dialogs
+show no quantity and no kind of stent, `normalize()` drops them, and the connector
+refuses them. A dialog judges by the flag and by what is ticked now, so someone who
+unticks the second product of a moment may give it a number: a list down to one
+product is an ordinary moment again. The database is the authority:
+`followup.zonder_aantal()` strips `rooms` and `family` from any moment whose full
+stored list has more than one product, on every save including an unrestricted
+one, and `followup.geinstalleerd()` counts no rooms for such a moment. A restricted
+saver never puts a number on anything that carries a colleague's product
+(`followup.zonder_aantal_beperkt()`), and someone who unticks their own product
+from a shared moment only takes their tick away: the moment keeps everything else
+as it was, so it cannot become a colleague's order or installation (`controle.sql`
+156–160, 167). Ticking off a shared plan without one of your own products is
+refused (157, 161; the dialog says so first): take your product off the plan
+instead. Nor can a restricted saver change such a moment to a type that counts —
+`COUNTING_TYPES` in `domain.js`, `followup.tellende_soorten()` in the database,
+compared by `tests/lijsten.mjs`: the stored type, or the plan's on a tick-off,
+stays (162–164), and the planned-moment dialog does not offer one on a shared
+plan. A moment the database trimmed counts for no product in the statistics and
+in the connector's `get_statistics`, so a restricted account and an unrestricted
+one see the same figures.
+
+**Every list is canonical.** `toProductList()` in `domain.js` and
+`followup.een_lijst()` clean a list the same way, for moments and contacts: each
+name once, only non-empty text, in `PRODUCTS` order with an unknown product last
+and unknowns among themselves in byte order (`collate "C"`). A list in another
+order would otherwise be re-sorted by the next restricted save, which then counts
+as a change and restamps the record. `tests/databank.mjs` holds the app to the
+fixture `controle.sql` holds the database to (`oudvorm`). Ticking off
+a shared plan sends the trimmed list, and `followup.afgevinkt()` hands the merge
+the stored plan as the stored side of the new contact moment, so the colleague's
+product stays on it (`controle.sql` 71–74). A contact is visible as soon as one product overlaps your scope,
 and `products` is then trimmed to your scope and merged back with the same
 `(stored − yours) ∪ (payload ∩ yours)` rule as the hospital's own ticks, so you
-cannot take a colleague's product off someone. Only `products` is merged that way:
+cannot take a colleague's product off someone. A moment's list is merged the same
+way. Only `products` is merged that way:
 the contact's own fields — name, phone, e-mail, notes — are **shared**, exactly as
 the hospital's are. Two people looking after the same clinician edit the same
 record, and the last save wins.
@@ -631,7 +662,12 @@ the document disappeared — that is what makes `contributor`'s "no delete" real
 same inventory excuses the one legitimate disappearance: ticking a planned moment off
 removes it and adds a contact moment **with the same id**, so `activityDialog()`
 reuses `plan.id` instead of minting a new one. Change that and a `contributor` can no
-longer work through the agenda.
+longer work through the agenda. The plan must really go in that same save: a new
+contact moment with the id of a plan that stays is refused (`followup.plan_bezet()`),
+or anyone could copy a colleague's product onto a moment by borrowing a plan's id,
+or block the plan from ever being ticked off (`controle.sql` 165). `write_state()`
+also refuses a `mode` of null, which used to slip past the cap on deletions and the
+server-side stamp (166).
 
 ## The product wall
 

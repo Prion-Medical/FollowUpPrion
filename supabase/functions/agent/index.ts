@@ -97,17 +97,20 @@ const wantsQuantity = (type: string, product: string) =>
 const own = (o: Record<string, string[]>, k: string) => (Object.prototype.hasOwnProperty.call(o, k) ? o[k] : null);
 const familiesFor = (p: string) => own(FAMILIES, p) || [];
 const wantsFamily = (type: string, product: string) => familiesFor(product).length > 0 && wantsQuantity(type, product);
-// Een moment gaat meestal over één product ("product"), soms over meer
-// ("products", een lijst): productsOf() en productOf() in domain.js. Een
-// record dat de lijst draagt, houdt die vorm.
-const productsOf = (r: Any): string[] => (!r ? [] : Array.isArray(r.products) ? r.products.filter((p: unknown) => typeof p === "string" && p) : r.product ? [String(r.product)] : []);
+// Een moment draagt zijn producten altijd als lijst ("products", soms leeg):
+// productsOf() en productOf() in domain.js. De oude vorm met één "product"
+// zet de databank om voor ze het document afgeeft (read_state()), dus
+// die komt hier niet meer binnen en wordt hier ook nooit geschreven.
+const productsOf = (r: Any): string[] => (r && Array.isArray(r.products) ? r.products.filter((p: unknown) => typeof p === "string" && p) : []);
 const productOf = (r: Any): string => { const l = productsOf(r); return l.length === 1 ? l[0] : ""; };
-// Hoe een antwoord de producten van een moment noemt.
-const named = (r: Any) => (productsOf(r).length > 1 ? { products: productsOf(r) } : { product: productOf(r) });
+// Hoe een antwoord de producten van een moment noemt. Een moment dat de
+// databank voor dit account inkortte, draagt "shared": dat zegt de assistent
+// waarom er geen aantal bij kan.
+const named = (r: Any) => ({ products: productsOf(r), ...(r && r.shared === true ? { also_about_a_product_this_account_does_not_see: true } : {}) });
 const factsFor = (p: string) => (!isProcedure(p) ? [] : own(PRODUCT_FACTS, p) || FACTS);
 // typesFor(), typesOffered() en typesAmong() uit domain.js, letterlijk: welke
 // soorten bij een keuze van producten passen. tests/regels.mjs legt ze naast
-// die van de app. gedeeld: het moment staat in de lijstvorm (shared()).
+// die van de app. gedeeld: het moment is van meer dan één product (shared()).
 const RETIRED_TYPES = ["prospecting"];
 const typesFor = (p: string) => KNOWN_TYPES.filter((k) => !RETIRED_TYPES.includes(k)
   && !(isProcedure(p) ? ["installation", "cancellation"] : ["procedure"]).includes(k));
@@ -115,7 +118,11 @@ const typesOffered = (products: string[]) => KNOWN_TYPES.filter((k) => products.
 const typesAmong = (list: string[], mine: string[], gedeeld = false) => (!list.length ? typesOffered(mine)
   : list.length === 1 && !gedeeld ? typesFor(list[0])
   : KNOWN_TYPES.filter((k) => list.every((p) => typesFor(p).includes(k) && !wantsQuantity(k, p))));
-const shared = (r: Any) => !!r && Array.isArray(r.products);
+// Gedeeld: meer dan één product, of door de databank als gedeeld gemerkt.
+// Die weet het, want ze ziet de volledige lijst: een Thyroid + Fibroid moment
+// komt bij wie alleen Thyroid RFA mag als ["Thyroid RFA"] met "shared": true.
+// Zo'n moment draagt geen aantal en geen soort stent.
+const shared = (r: Any) => !!r && (r.shared === true || productsOf(r).length > 1);
 // De ene plaats waar een soort tegen de producten van het moment wordt
 // nagekeken: wat de app in die situatie aanbiedt, en niets anders.
 function checkTypes(type: string, list: string[], scope: string[], gedeeld = false) {
@@ -407,8 +414,9 @@ function hospitalIn(doc: Any, id: unknown) {
   if (!h.unit || typeof h.unit !== "object") h.unit = {};
   return h;
 }
-// De producten van een nieuw moment: "product" voor één, "products" voor een
-// gesprek over meer dan één. Bij meer dan één hoort geen aantal en geen soort,
+// De producten van een nieuw moment. De assistent geeft "product" voor één
+// of "products" voor een gesprek over meer dan één; bewaard wordt altijd de
+// lijst. Bij meer dan één hoort geen aantal en geen soort,
 // en de soort moment moet bij elk van die producten bestaan.
 function momentProducts(args: Any, type: string, scope: string[]): string[] {
   if (has(args, "products") && has(args, "product")) throw new ToolError("Give product or products, not both.");
@@ -417,12 +425,14 @@ function momentProducts(args: Any, type: string, scope: string[]): string[] {
   // laden, maar ze horen er van in het begin niet in.
   if (has(args, "products") && list.some((p) => !p.trim())) throw new ToolError("products holds an empty name. Name each product, or leave products out.");
   for (const p of list) checkProduct(p, scope);
+  // In de volgorde van PRODUCTS, zoals followup.product_sort() in de databank
+  // elke lijst opslaat: anders verschilt wat hier geschreven wordt van wat er
+  // na de opslag staat.
+  list.sort((a, b) => PRODUCTS.indexOf(a) - PRODUCTS.indexOf(b));
   checkTypes(type, list, scope);
   if (list.length > 1 && (has(args, "quantity") || has(args, "family"))) throw new ToolError("A moment about several products has no quantity and no family.");
   return list;
 }
-// In de vorm die erbij hoort: een lijst vanaf twee, anders de ene naam.
-const productFields = (list: string[]) => (list.length > 1 ? { products: list } : { product: list[0] || "" });
 function checkProduct(product: string, scope: string[], required = false) {
   if (!product) {
     if (required) throw new ToolError(`Give a product. One of: ${scope.join(", ")}.`);
@@ -542,7 +552,7 @@ async function addContactMoment(token: string, args: Any) {
     checkContact(h, contactId);
     // Geen stempel: die zet write_state() zelf, op wie er aangemeld is.
     return logActivity(h, {
-      id: uid(), date, type, ...productFields(list), contactId,
+      id: uid(), date, type, products: list, contactId,
       rooms: list.length <= 1 && wantsQuantity(type, product) ? qty : null, ...(fam ? { family: fam } : {}), note: String(args.note || "").trim(),
     });
   }, reportMoment);
@@ -564,7 +574,7 @@ async function addPlannedMoment(token: string, args: Any, user: Any) {
     const h = hospitalIn(doc, args.hospital_id);
     const contactId = String(args.contact_id || "");
     checkContact(h, contactId);
-    const rec: Any = { id: uid(), date, type, ...productFields(list), contactId, note: String(args.note || "").trim(), ...(fam ? { family: fam } : {}) };
+    const rec: Any = { id: uid(), date, type, products: list, contactId, note: String(args.note || "").trim(), ...(fam ? { family: fam } : {}) };
     if (to && !worksOnAny(to, rec)) throw new ToolError(`${to.name} does not work on ${list.join(" or ")} and would not see this moment.`);
     // Alleen als het voor iemand anders is: voor jezelf volgt het al uit de
     // stempel die de databank zet.
@@ -589,9 +599,9 @@ async function completePlannedMoment(token: string, args: Any) {
     if (!plan) throw new ToolError("No planned moment with that id at this hospital. Use get_hospital to see what is planned.");
     const type = has(args, "type") ? oneOf(args.type, ACT_TYPES, "type") : plan.type;
     const list = productsOf(plan);
-    // Een plan in de lijstvorm is van meer producten, ook als dit account er
-    // maar één van ziet: geen aantal, geen soort.
-    const gedeeld = shared(plan) || list.length > 1;
+    // Een plan van meer producten, ook als dit account er maar één van ziet:
+    // geen aantal, geen soort.
+    const gedeeld = shared(plan);
     const product = gedeeld ? "" : productOf(plan);
     for (const p of list) checkProduct(p, scope);
     if (has(args, "type") || gedeeld) checkTypes(type, list, scope, gedeeld);
@@ -608,7 +618,7 @@ async function completePlannedMoment(token: string, args: Any) {
     sortPlanned(h);
     // Het uur gaat niet mee: een contactmoment heeft een datum en geen uur.
     return logActivity(h, {
-      id: plan.id, date, type, ...(shared(plan) ? { products: list } : { product }), contactId: String(plan.contactId || ""),
+      id: plan.id, date, type, products: list, contactId: String(plan.contactId || ""),
       rooms: !gedeeld && wantsQuantity(type, product) ? qty : null, ...(fam ? { family: fam } : {}),
       note: has(args, "note") ? String(args.note).trim() : String(plan.note || ""),
     });
@@ -1147,15 +1157,14 @@ async function updateMoment(token: string, args: Any, user: Any) {
     const list = kind === "planned_moment" ? h.planned : h.activities;
     const rec = list.find((x: Any) => x.id === args.record_id);
     if (!rec) throw new ToolError(`No ${kind.replace("_", " ")} with that id at this hospital. Use get_hospital or list_moments to see the ids.`);
-    // Een moment over meer dan één product draagt een lijst, en wie
-    // afgeschermd is ziet daar maar een deel van. Het product wijzigen kan
-    // hier dus alleen bij een moment met één product.
-    const listed = Array.isArray(rec.products);
-    if (listed && has(args, "product")) throw new ToolError("This moment is about several products; change its products in the app.");
+    // Van een moment over meer dan één product ziet wie afgeschermd is maar
+    // een deel. Het product wijzigen kan hier dus alleen bij een moment met
+    // één product.
+    if (shared(rec) && has(args, "product")) throw new ToolError("This moment is about several products; change its products in the app.");
     const changed: string[] = [];
     if (has(args, "date")) { rec.date = String(args.date); changed.push("date"); }
     if (has(args, "type")) { rec.type = oneOf(args.type, ACT_TYPES, "type"); changed.push("type"); }
-    if (has(args, "product")) { const p = String(args.product); checkProduct(p, scope); rec.product = p; changed.push("product"); }
+    if (has(args, "product")) { const p = String(args.product); checkProduct(p, scope); rec.products = p ? [p] : []; changed.push("product"); }
     if (has(args, "contact_id")) { const c = String(args.contact_id); checkContact(h, c); rec.contactId = c; changed.push("contact"); }
     if (has(args, "note")) { rec.note = String(args.note).trim(); changed.push("note"); }
     if (time !== undefined) { if (time) rec.time = time; else delete rec.time; changed.push("time"); }
@@ -1163,7 +1172,7 @@ async function updateMoment(token: string, args: Any, user: Any) {
       if (has(args, "time")) throw new ToolError("A time needs a date. Give a date too, or leave the time out.");
       delete rec.time;
     }
-    const gedeeld = shared(rec) || productsOf(rec).length > 1;
+    const gedeeld = shared(rec);
     if (has(args, "type") || has(args, "product")) checkTypes(rec.type, productsOf(rec), scope, gedeeld);
     if (gedeeld && (qty !== undefined || has(args, "family"))) {
       throw new ToolError("This moment is about several products, and a number or a family belongs to one.");
@@ -1280,9 +1289,16 @@ async function getStatistics(token: string, args: Any) {
       contact_moments_in_period: now.length, contact_moments_by_type: byType,
     };
     const goal = Number(goals[p]) || 0;
-    const inYear = acts.filter((a) => String(a.date).startsWith(year));
+    // Een aantal hoort bij één product: kamers, stuks, bestellingen en demo's
+    // tellen enkel bij een moment over precies dit ene product, zoals in
+    // stats.js. Een gedeeld moment telt niet, ook niet wanneer de databank de
+    // lijst voor dit account tot één product inkortte (shared()). Een gesprek
+    // over twee producten telt hierboven wel mee als contactmoment.
+    const een = (a: Any) => !shared(a) && productOf(a) === p;
+    const inYear = acts.filter((a) => een(a) && String(a.date).startsWith(year));
+    const counted = now.filter(een);
     if (isProcedure(p)) {
-      const sold = now.filter((a) => SOLD_TYPES.includes(a.type));
+      const sold = counted.filter((a) => SOLD_TYPES.includes(a.type));
       const total = (list: Any[]) => list.reduce((s, a) => s + unitsOf(a), 0);
       const done = total(inYear.filter((a) => SOLD_TYPES.includes(a.type)));
       const fams = familiesFor(p);
@@ -1291,8 +1307,8 @@ async function getStatistics(token: string, args: Any) {
         units_sold_in_period: total(sold),
         of_which_on_orders: total(sold.filter((a) => a.type === "order")),
         of_which_used_during_procedures: total(sold.filter((a) => a.type === "procedure")),
-        orders_in_period: sold.filter((a) => a.type === "order").length,
-        procedures_in_period: now.filter((a) => a.type === "procedure").length,
+        orders_in_period: counted.filter((a) => a.type === "order").length,
+        procedures_in_period: counted.filter((a) => a.type === "procedure").length,
         ...(fams.length ? {
           units_sold_by_family: Object.fromEntries([...fams, ""].map((k) => [k || "no_family_given", total(sold.filter((a) => (a.family || "") === k))])),
         } : {}),
@@ -1300,8 +1316,8 @@ async function getStatistics(token: string, args: Any) {
         target: { year, goal_units: goal, units_sold_in_year: done },
       };
     }
-    const inst = now.filter((a) => a.type === "installation");
-    const canc = now.filter((a) => a.type === "cancellation");
+    const inst = counted.filter((a) => a.type === "installation");
+    const canc = counted.filter((a) => a.type === "cancellation");
     const signed = (list: Any[]) => list.reduce((s, a) => s + (a.type === "cancellation" ? -roomsOf(a) : a.type === "installation" ? roomsOf(a) : 0), 0);
     return {
       ...base,
@@ -1309,9 +1325,9 @@ async function getStatistics(token: string, args: Any) {
       installations_in_period: inst.length,
       rooms_cancelled_in_period: canc.reduce((s, a) => s + roomsOf(a), 0),
       rooms_installed_per_hospital: perHospital(inst, roomsOf),
-      orders_in_period: now.filter((a) => a.type === "order").length,
-      demos_in_period: now.filter((a) => a.type === "demo").length,
-      active_rooms_now: Math.max(0, signed(acts)),
+      orders_in_period: counted.filter((a) => a.type === "order").length,
+      demos_in_period: counted.filter((a) => a.type === "demo").length,
+      active_rooms_now: Math.max(0, signed(acts.filter(een))),
       target: { year, goal_rooms: goal, net_rooms_in_year: Math.max(0, signed(inYear)) },
     };
   });

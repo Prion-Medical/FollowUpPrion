@@ -49,6 +49,11 @@ await geval("soorten", () => {
   assert.ok(!letterlijk(agent, "ACT_TYPES").includes("prospecting"), "de koppeling biedt prospecting nog aan");
   assert.deepEqual(letterlijk(agent, "SOLD_TYPES"), D.SOLD_TYPES, "verkochte soorten: koppeling ≠ domain.js");
   assert.deepEqual(letterlijk(agent, "ROOM_TYPES"), D.ROOM_TYPES, "soorten met kamers: koppeling ≠ domain.js");
+  // De soorten die meetellen, ook zonder aantal (een installatie, een
+  // bestelling): wie beperkt is, maakt er geen van op een moment met het
+  // product van een collega. De databank houdt die regel, de app telt.
+  assert.deepEqual(sqlLijst("tellende_soorten"), D.COUNTING_TYPES,
+    "followup.tellende_soorten() ≠ COUNTING_TYPES in domain.js");
 });
 const namen = letterlijk(agenda, "TYPES");
 const V = vertalingen();
