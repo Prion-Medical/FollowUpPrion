@@ -90,8 +90,9 @@ into `main` leaves nothing to strip. Comment the two development lines out and
 quickest way to work on anything that is not about the database.
 
 The development project exists so that a schema change can be tried before it reaches
-anyone's work: run `schema.sql` there first, then `versie.sql`, `toegang.sql` and
-`controle.sql`, and only then the same against the live project — from disk, as ever.
+anyone's work: run `schema.sql` there first, then `versie.sql`, `toegang.sql`,
+`controle.sql` and `gebruiker.sql`, and only then the same against the live project —
+from disk, as ever.
 
 It holds **invented data only**: the forty hospitals from `data/seed.json` plus made-up
 clinicians on `example.com`. Never an export from the live database. That would put
@@ -108,11 +109,14 @@ identical blank rows.
 
 Two things that cost an evening to find out:
 
-- **Part C of `controle.sql` wants a uuid in five places.** It can look itself up
-  instead: `set_config('request.jwt.claims', …, true)` does what the `set local` line
-  there does and accepts a subquery. Look the uuid up *before* switching role, since
-  `authenticated` may not read `auth.users`. Run those blocks one at a time — the first
-  failure stops the whole transaction, and three of them are supposed to fail.
+- **The checks as a real user are one script.** `supabase/gebruiker.sql` (part C of
+  `controle.sql` until November 2026) takes the uuid once, at the top —
+  `sed 's/PLAK-HIER-HET-UUID/<uuid>/' supabase/gebruiker.sql | pbcopy` — and runs
+  every check in a sub-transaction of its own that is always rolled back, so the three
+  that are supposed to fail no longer stop the rest. Use the `contributor` limited to
+  Ainex: C1 and C2 work with anyone, C3 means something only with that account. A
+  moment without an id is put last on a restricted round trip, so C2b says FOUT on a
+  document holding one; the app and the connector never write one.
 - **Seeding by writing to `app_state` directly** leaves a document that never went
   through `write_state()`, and C2b then reports FOUT for no good reason:
   `merge_hospital()` always writes a `planned` key and `seed.json` has none, so the
