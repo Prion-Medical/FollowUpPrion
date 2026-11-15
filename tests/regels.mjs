@@ -6,8 +6,8 @@
 // tests/databank.mjs legt die regels naast domain.js. Deze controle kijkt de
 // koppeling na op wat zij nog doet:
 //
-//  - het moment zelf: de vorm (één product of de lijstvorm), het aantal, de
-//    soort stent, en welke soorten een keuze van producten toelaat — precies
+//  - het moment zelf: de producten (altijd als lijst bewaard, ook wanneer de
+//    assistent er één als "product" noemt), het aantal, de soort stent, en welke soorten een keuze van producten toelaat — precies
 //    wat de app bewaart en aanbiedt;
 //  - het product aanvinken op het ziekenhuis, en verder de opvolging, de kleur,
 //    de fase en de geïnstalleerde kamers níét aanraken;
@@ -54,6 +54,10 @@ async function roep(naam, args) {
   const r = await K.werktuig(naam, args);
   assert.ok(!r.fout, `de koppeling weigerde: ${r.tekst}`);
   assert.ok(geschreven, "er werd niets geschreven");
+  // Nooit de oude vorm: elk moment draagt "products" en geen "product".
+  for (const h of geschreven.hospitals) for (const m of [...(h.activities || []), ...(h.planned || [])]) {
+    assert.ok(Array.isArray(m.products) && !("product" in m), `${m.id}: niet in de lijstvorm bewaard`);
+  }
   return { uit: r.uit, h: geschreven.hospitals[0] };
 }
 
@@ -64,7 +68,7 @@ async function roep(naam, args) {
 function nieuwViaApp(zh, moment) {
   const h = kopie(zh);
   const rec = { id: "nieuw", date: "2026-10-01", type: moment.type, note: "", contactId: "" };
-  if (moment.products.length > 1) rec.products = moment.products; else rec.product = moment.products[0] || "";
+  rec.products = moment.products;
   rec.rooms = !D.shared(rec) && D.wantsQuantity(moment.type, D.productOf(rec)) ? moment.rooms ?? null : null;
   if (moment.family && D.wantsFamily(moment.type, D.productOf(rec))) rec.family = moment.family;
   h.activities.push(rec);
@@ -153,14 +157,15 @@ for (const [naam, start, moment] of NIEUW) {
 // de kamers volgen in de databank.
 const geinstalleerd = zh({ products: ["EndoQ"], status: "green", stage: "customer", pipeline: { EndoQ: rij("customer", "green") },
   unit: { roomsInstalled: 3 },
-  activities: [{ id: "i1", date: "2026-09-01", type: "installation", product: "EndoQ", rooms: 3, note: "", contactId: "" }] });
+  activities: [{ id: "i1", date: "2026-09-01", type: "installation", products: ["EndoQ"], rooms: 3, note: "", contactId: "" }] });
 const gesprek = zh({ products: ["EndoQ"], status: "orange", stage: "meeting", pipeline: { EndoQ: rij("meeting", "orange") },
-  activities: [{ id: "c1", date: "2026-09-01", type: "call", product: "EndoQ", rooms: null, note: "", contactId: "" }] });
+  activities: [{ id: "c1", date: "2026-09-01", type: "call", products: ["EndoQ"], rooms: null, note: "", contactId: "" }] });
 const AANPASSEN = [
   ["installatie van 3 naar 5 kamers", geinstalleerd, "i1", { rooms: 5 }, { quantity: 5 }],
   ["installatie wordt een stopzetting", geinstalleerd, "i1", { type: "cancellation" }, { type: "cancellation" }],
   ["een gesprek wordt een installatie", gesprek, "c1", { type: "installation", rooms: 2 }, { type: "installation", quantity: 2 }],
-  ["een gesprek wordt een gesprek over Ainex", gesprek, "c1", { product: "Ainex" }, { product: "Ainex" }],
+  // "product" als invoer van de assistent; bewaard als lijst.
+  ["een gesprek wordt een gesprek over Ainex", gesprek, "c1", { products: ["Ainex"] }, { product: "Ainex" }],
 ];
 for (const [naam, start, id, app, args] of AANPASSEN) {
   await geval(`aanpassen: ${naam}`, async () => {
@@ -177,12 +182,12 @@ for (const [naam, start, id, app, args] of AANPASSEN) {
 // ook daar blijven de opvolging en de kamers aan de databank.
 const metPlan = zh({ products: ["EndoQ"], status: "orange", stage: "demo_installed", pipeline: { EndoQ: rij("demo_installed", "orange") },
   unit: { roomsInstalled: null },
-  planned: [{ id: "p1", date: "2026-09-20", type: "installation", product: "EndoQ", note: "", contactId: "" }] });
+  planned: [{ id: "p1", date: "2026-09-20", type: "installation", products: ["EndoQ"], note: "", contactId: "" }] });
 await geval("afvinken: een geplande installatie", async () => {
   begin(metPlan);
   const { h } = await roep("complete_planned_moment", { hospital_id: "h", planned_id: "p1", quantity: 2, date: "2026-09-20" });
   const a = h.activities.find((x) => x.id === "p1");
-  assert.deepEqual({ type: a.type, product: a.product, rooms: a.rooms }, { type: "installation", product: "EndoQ", rooms: 2 });
+  assert.deepEqual({ type: a.type, products: a.products, rooms: a.rooms }, { type: "installation", products: ["EndoQ"], rooms: 2 });
   assert.equal(h.planned.length, 0, "het plan staat er nog");
   onaangeroerd(h, metPlan);
 });
@@ -302,7 +307,7 @@ for (const product of ["EndoQ", "Thyroid RFA"]) {
     const mis = [];
     for (const fase of D.stagesFor(product)) for (const kleur of KLEUREN) for (const gesproken of [false, true]) {
       const start = zh({ products: [product], status: kleur, stage: "meeting", pipeline: { [product]: rij("meeting", kleur) },
-        activities: gesproken ? [{ id: "a", date: "2026-09-01", type: "call", product, note: "", contactId: "" }] : [] });
+        activities: gesproken ? [{ id: "a", date: "2026-09-01", type: "call", products: [product], note: "", contactId: "" }] : [] });
       begin(start);
       const { h } = await roep("update_follow_up", { hospital_id: "h", product, stage: fase });
       const app = rij(fase, kleur);
@@ -316,7 +321,7 @@ await geval("stageStatus voor een ziekenhuis zonder product", async () => {
   const mis = [];
   for (const fase of D.stagesFor("")) for (const kleur of KLEUREN) for (const gesproken of [false, true]) {
     const start = zh({ status: kleur, stage: "meeting",
-      activities: gesproken ? [{ id: "a", date: "2026-09-01", type: "call", product: "", note: "", contactId: "" }] : [] });
+      activities: gesproken ? [{ id: "a", date: "2026-09-01", type: "call", products: [], note: "", contactId: "" }] : [] });
     begin(start);
     const { h } = await roep("update_hospital", { hospital_id: "h", stage: fase });
     const app = { stage: fase, status: kleur };
@@ -356,7 +361,7 @@ const RIJEN = [
   ["eerste product, een fase die het niet kent", zh({ status: "orange", stage: "purchasing" }), "Ainex"],
   ["tweede product, niet gesproken", zh({ products: ["EndoQ"], status: "green", stage: "customer", pipeline: { EndoQ: rij("customer", "green") } }), "Stents"],
   ["tweede product, al gesproken", zh({ products: ["EndoQ"], status: "green", stage: "customer", pipeline: { EndoQ: rij("customer", "green") },
-    activities: [{ id: "a", date: "2026-09-01", type: "call", product: "Stents", note: "", contactId: "" }] }), "Stents"],
+    activities: [{ id: "a", date: "2026-09-01", type: "call", products: ["Stents"], note: "", contactId: "" }] }), "Stents"],
 ];
 for (const [naam, start, product] of RIJEN) {
   await geval(`gaan volgen: ${naam}`, async () => {
@@ -398,14 +403,32 @@ for (const [lijst, bereik] of KEUZES) {
   });
 }
 
-// Een gedeeld moment (lijstvorm) zoals een account met één product het ziet:
-// de lijst is ingekort tot dat ene product. Het draagt toch geen aantal.
+// Een gedeeld moment zoals een account met één product het ziet: de databank
+// kortte de lijst in tot dat ene product en zette er "shared": true bij. Het
+// draagt toch geen aantal. Zonder die vlag is een lijst met één product een
+// gewoon moment, dat wel een aantal mag dragen.
 const gedeeld = zh({ products: ["Thyroid RFA"], status: "orange", stage: "meeting", pipeline: { "Thyroid RFA": rij("meeting", "orange") },
-  activities: [{ id: "g1", date: "2026-09-01", type: "visit", products: ["Thyroid RFA"], note: "", contactId: "" }],
-  planned: [{ id: "gp1", date: "2026-09-20", type: "visit", products: ["Thyroid RFA"], note: "", contactId: "" }] });
+  activities: [{ id: "g1", date: "2026-09-01", type: "visit", products: ["Thyroid RFA"], shared: true, note: "", contactId: "" },
+    { id: "e1", date: "2026-09-02", type: "visit", products: ["Thyroid RFA"], note: "", contactId: "" }],
+  planned: [{ id: "gp1", date: "2026-09-20", type: "visit", products: ["Thyroid RFA"], shared: true, note: "", contactId: "" },
+    { id: "ep1", date: "2026-09-21", type: "procedure", products: ["Thyroid RFA"], note: "", contactId: "" }] });
 await geval("gedeeld moment: soorten met een aantal vallen weg", () => {
   const app = D.typesAmong(["Thyroid RFA"], ["Thyroid RFA"], true);
   assert.ok(!app.includes("order") && !app.includes("procedure") && app.includes("visit"), `typesAmong gaf ${app}`);
+});
+// De app en de koppeling lezen de vlag allebei: wat de dialoog als aantal
+// aanbiedt (wantsNumber in app.js), aanvaardt de koppeling, en omgekeerd.
+await geval("gedeeld of niet: de app biedt een aantal aan waar de koppeling het aanvaardt", async () => {
+  for (const id of ["g1", "e1"]) {
+    const rec = gedeeld.activities.find((x) => x.id === id);
+    const app = !D.shared(rec) && D.wantsQuantity("order", D.productOf(rec));
+    begin(gedeeld, ["Thyroid RFA"]);
+    const r = await K.werktuig("update_moment", { kind: "contact_moment", hospital_id: "h", record_id: id, type: "order", quantity: 5 });
+    assert.equal(app, !r.fout, `${id}: app ${app ? "biedt een aantal aan" : "niet"}, koppeling ${r.fout ? "weigert" : "aanvaardt"}`);
+  }
+  assert.equal(D.shared({ products: ["Thyroid RFA"], shared: true }), true, "de vlag alleen maakt een moment gedeeld");
+  assert.equal(D.shared({ products: ["Thyroid RFA"] }), false, "een lijst van één zonder vlag is niet gedeeld");
+  assert.equal(D.shared({ products: ["Thyroid RFA", "Fibroid RFA"] }), true, "twee producten zijn gedeeld");
 });
 await geval("gedeeld moment: de koppeling maakt er geen bestelling van", async () => {
   begin(gedeeld, ["Thyroid RFA"]);
@@ -417,12 +440,59 @@ await geval("gedeeld plan: afvinken met een aantal wordt geweigerd", async () =>
   const r = await K.werktuig("complete_planned_moment", { hospital_id: "h", planned_id: "gp1", quantity: 3 });
   assert.ok(r.fout, "aanvaard: " + r.tekst);
 });
-await geval("gedeeld plan: afvinken houdt de lijstvorm", async () => {
+await geval("gedeeld plan: een bestelling afvinken zonder soort te geven wordt geweigerd", async () => {
+  // Het plan zelf is een bestelling; gedeeld draagt het geen aantal, dus moet
+  // ook de soort die het al had worden nagekeken.
+  const start = kopie(gedeeld);
+  start.planned[0].type = "order";
+  begin(start, ["Thyroid RFA"]);
+  const r = await K.werktuig("complete_planned_moment", { hospital_id: "h", planned_id: "gp1", date: "2026-09-20" });
+  assert.ok(r.fout, "aanvaard: " + r.tekst);
+});
+await geval("product leegmaken: een lege lijst", async () => {
+  begin(gesprek);
+  const { h } = await roep("update_moment", { kind: "contact_moment", hospital_id: "h", record_id: "c1", product: "" });
+  assert.deepEqual(h.activities.find((x) => x.id === "c1").products, []);
+});
+await geval("lijst in de volgorde van PRODUCTS, zoals de databank ze opslaat", async () => {
+  begin(zh());
+  const { h } = await roep("add_contact_moment", { hospital_id: "h", type: "visit", products: ["Fibroid RFA", "Thyroid RFA", "Fibroid RFA"] });
+  const lijst = h.activities[0].products;
+  assert.deepEqual(lijst, [...new Set(lijst)].sort((a, b) => D.PRODUCTS.indexOf(a) - D.PRODUCTS.indexOf(b)));
+  assert.equal(lijst.length, 2);
+});
+await geval("gedeeld plan: afvinken zonder aantal", async () => {
+  // De koppeling schrijft het deel dat ze ziet; het product van de collega
+  // zet de databank er weer bij (followup.afgevinkt()).
   begin(gedeeld, ["Thyroid RFA"]);
   const { h } = await roep("complete_planned_moment", { hospital_id: "h", planned_id: "gp1", date: "2026-09-20" });
   const a = h.activities.find((x) => x.id === "gp1");
-  assert.ok(D.shared(a), "het contactmoment staat niet meer in de lijstvorm");
+  assert.deepEqual({ products: a.products, rooms: a.rooms ?? null }, { products: ["Thyroid RFA"], rooms: null });
   onaangeroerd(h, gedeeld);
+});
+await geval("gedeeld moment: het product wijzigen wordt geweigerd", async () => {
+  begin(gedeeld, ["Thyroid RFA", "Fibroid RFA"]);
+  const r = await K.werktuig("update_moment", { kind: "contact_moment", hospital_id: "h", record_id: "g1", product: "Fibroid RFA" });
+  assert.ok(r.fout, "aanvaard: " + r.tekst);
+});
+await geval("lijst met één product, niet gedeeld: een aantal mag", async () => {
+  begin(gedeeld, ["Thyroid RFA"]);
+  const { h } = await roep("update_moment", { kind: "contact_moment", hospital_id: "h", record_id: "e1", type: "order", quantity: 5 });
+  assert.equal(h.activities.find((x) => x.id === "e1").rooms, 5);
+});
+await geval("plan met één product, niet gedeeld: afvinken met een aantal", async () => {
+  begin(gedeeld, ["Thyroid RFA"]);
+  const { h } = await roep("complete_planned_moment", { hospital_id: "h", planned_id: "ep1", quantity: 3, date: "2026-09-21" });
+  assert.equal(h.activities.find((x) => x.id === "ep1").rooms, 3);
+});
+await geval("antwoord: een gedeeld moment zegt dat het gedeeld is", async () => {
+  begin(gedeeld, ["Thyroid RFA"]);
+  const r = await K.werktuig("get_hospital", { hospital_id: "h" });
+  assert.ok(!r.fout, r.tekst);
+  const rij = (id) => r.uit.recent_contact_moments.find((x) => x.id === id);
+  assert.deepEqual(rij("g1").products, ["Thyroid RFA"]);
+  assert.equal(rij("g1").also_about_a_product_this_account_does_not_see, true);
+  assert.ok(!("also_about_a_product_this_account_does_not_see" in rij("e1")));
 });
 
 // Een nieuw moment of een plan over meer producten mag elke soort die al die
