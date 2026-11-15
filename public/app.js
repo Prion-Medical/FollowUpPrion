@@ -12,7 +12,7 @@
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
-    typesAmong, productsOf, productOf, familiesFor, wantsFamily, factsFor,
+    typesAmong, COUNTING_TYPES, productsOf, productOf, toProductList, familiesFor, wantsFamily, factsFor,
     esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual, setMain, mainContact,
     normalizeFacts, syncPipeline, zonderProduct, syncRooms, shared, byWhen, assigneeOf, tickOffDate, typesInAll, momentsMoved,
   } = window.FollowUpDomain;
@@ -569,23 +569,28 @@
     // vaak het aanspreekpunt voor allebei, en met een derde product erbij wordt
     // dat alleen maar vaker zo. Het oude veld wordt hier omgezet en verdwijnt,
     // zoals demoDate destijds in planned[] is opgegaan.
-    if (!Array.isArray(c.products)) c.products = str(c.product) ? [str(c.product)] : [];
-    delete c.product;
-    c.products = [...new Set(c.products.filter((p) => typeof p === "string" && p))];
+    // Dezelfde omzetting als bij een moment: toProductList() in domain.js.
+    toProductList(c);
     // De dienst is een vaste sleutel; de functie ernaast blijft vrije tekst.
     c.department = DEPARTMENTS.includes(c.department) ? c.department : "";
     c.language = LANGUAGES.includes(c.language) ? c.language : "";
     c.primary = !!c.primary;
     return c;
   }
-  // Eén product in "product", of meer in "products": zie productsOf() in
-  // domain.js. Wat er staat blijft in zijn vorm; hier wordt niets omgezet,
-  // anders gaf laden en opslaan een ander document terug.
+  // De producten van een moment staan altijd in "products", een lijst. De
+  // oude vorm, "product" met één naam, zet de databank om; hier gebeurt
+  // hetzelfde voor een oude back-up die terugkomt, of voor data/db.json bij
+  // server.py, met toProductList() uit domain.js: dezelfde regel als
+  // followup.een_lijst() in schema.sql, en tests/databank.mjs houdt ze gelijk.
+  //
+  // "shared" zet de databank erbij als ze de lijst voor deze gebruiker
+  // snoeide (zie shared() in domain.js). Ze haalt het er bij het bewaren zelf
+  // weer af. Bij server.py is er geen muur en dus niets gesnoeid: wat daar
+  // binnenkomt (een back-up van een afgeschermd account) gaat er hier af,
+  // anders zou het in data/db.json blijven staan.
   function productShape(r) {
-    if (Array.isArray(r.products)) {
-      r.products = [...new Set(r.products.filter((p) => typeof p === "string" && p))];
-      delete r.product;
-    } else r.product = str(r.product);
+    toProductList(r);
+    if (r.shared !== true || store.mode !== "supabase") delete r.shared;
   }
   // Een aantal hoort bij één product: gaat het moment over meer, dan is er
   // geen aantal.
@@ -1842,13 +1847,6 @@
     attrs: `data-mproduct="${esc(p)}"`, label: p, checked: chosen.includes(p),
   })), "—");
   const pickedProducts = (form) => [...form.querySelectorAll("[data-mproduct]:checked")].map((x) => x.dataset.mproduct);
-  // De keuze in het record zetten, in de vorm die erbij hoort: een lijst
-  // zodra het er meer dan één zijn of het record al een lijst droeg, anders
-  // gewoon de ene naam.
-  function setProducts(rec, list) {
-    if (list.length > 1 || Array.isArray(rec.products)) { rec.products = list; delete rec.product; }
-    else rec.product = list[0] || "";
-  }
   // Een ander product gekozen in de dialoog: de lijst volgt. Bestaat de
   // gekozen soort daar niet, dan valt de keuze terug op de eerste.
   // Geeft de soort terug die moest wijken, of niets. De dialoog zegt dat
@@ -1860,27 +1858,31 @@
   }
   // De regel onder de keuzes die zegt welke soort moest wijken. Kiest
   // iemand daarna zelf een soort, dan is de melding achterhaald.
-  function typeNote(form, e, weg) {
+  // key: de zin die het zegt; bij het afvinken van een plan een eigen.
+  function typeNote(form, e, weg, key = "dlg.typeChanged") {
     const note = $("#typeNote", form);
     if (weg) {
-      note.textContent = t("dlg.typeChanged", { was: t("act." + weg), now: t("act." + form.elements.type.value) });
+      note.textContent = t(key, { was: t("act." + weg), now: t("act." + form.elements.type.value) });
       note.hidden = false;
     } else if (e && (e.target.name === "type" || e.target.dataset.mproduct)) note.hidden = true;
   }
 
   // Wat beide momentdialogen samen hebben: de producten bepalen de soorten,
   // de soort en het product bepalen of er een soort stent bij hoort, en een
-  // moment over meer producten (of een in de lijstvorm, zie shared() in
-  // domain.js) draagt geen aantal en geen soort. Geeft een functie terug die
-  // de dialoog bij elke wijziging aanroept, met wat de dialoog daarna nog
-  // zelf nodig heeft.
+  // moment over meer producten draagt geen aantal en geen soort. Ook niet als
+  // de databank er het product van een collega uit snoeide ("shared", zie
+  // shared() in domain.js): dat blijft gedeeld, wat er ook aangevinkt wordt.
+  // Wie wél alles ziet en een tweede product weer afvinkt, heeft een gewoon
+  // moment over één product, en dat mag een aantal dragen. Geeft een functie
+  // terug die de dialoog bij elke wijziging aanroept, met wat de dialoog
+  // daarna nog zelf nodig heeft.
   // soortenVan(keuze) geeft de soorten die bij een keuze van producten passen.
   function momentFields(form, v, soortenVan) {
-    const lijst = shared(v);
+    const verborgen = v.shared === true;
     let familyFor = null;
     return (e) => {
       const keuze = pickedProducts(form);
-      const gedeeld = lijst || keuze.length > 1;
+      const gedeeld = verborgen || keuze.length > 1;
       const product = gedeeld ? "" : keuze[0] || "";
       const veranderd = !!(e && e.target.dataset.mproduct);
       typeNote(form, e, veranderd ? retype(form.elements.type, soortenVan(keuze)) : "");
@@ -1903,7 +1905,7 @@
     const v = a || (plan ? { ...plan, date: tickOffDate(plan, today()), rooms: "" } : {
       date: today(),
       type: "email",
-      product: defaultProduct(h),
+      products: defaultProduct(h) ? [defaultProduct(h)] : [],
       contactId: (mainContact(h, defaultProduct(h)) || {}).id || "",
       rooms: "", note: "",
     });
@@ -1911,18 +1913,22 @@
     // Een nieuw contactmoment (ook een afgevinkt plan) over meer producten
     // mag een soort met een aantal hebben: bij het bewaren wordt het één
     // contactmoment per product, elk met zijn eigen aantal. Niet bij een
-    // bestaand moment, en niet bij een gedeeld plan voor wie maar een deel van
-    // de producten mag: daar kan een product van een collega in zitten dat
-    // deze gebruiker niet ziet, en de databank houdt dat op één moment.
-    const beperkt = myProducts().length < PRODUCTS.length;
-    const splitsen = !a && !(plan && shared(plan) && beperkt);
-    const soortenVan = (keuze) => (splitsen ? typesInAll(keuze, myProducts()) : typesAmong(keuze, myProducts(), shared(v)));
+    // bestaand moment, en niet bij een plan waar de databank het product van
+    // een collega uit snoeide ("shared"): dat ziet deze gebruiker niet, en de
+    // databank houdt het op één moment.
+    const splitsen = !a && !(plan && plan.shared === true);
+    const soortenVan = (keuze) => (splitsen ? typesInAll(keuze, myProducts()) : typesAmong(keuze, myProducts(), v.shared === true));
+    // Een bestaand moment houdt zijn soort, ook als die niet meer aangeboden
+    // wordt (typeOptions). Een afgevinkt plan niet: een gedeeld plan voor een
+    // bestelling werd anders een bestelling zonder aantal, die voor wie maar
+    // één product ziet toch als verkocht telde. De koppeling weigert dat
+    // afvinken om dezelfde reden.
     const form = openDialog(`
       <h2>${esc(a ? t("dlg.actEdit") : t("dlg.actNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
         <label class="field">${esc(t("dlg.a.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
         <label class="field">${esc(t("dlg.a.type"))}
-          <select name="type">${typeOptions(soortenVan(had), v.type)}</select>
+          <select name="type">${typeOptions(soortenVan(had), a || soortenVan(had).includes(v.type) ? v.type : "")}</select>
         </label>
         <div class="field full">${esc(t("dlg.a.product"))}${productMany(had)}</div>
         <label class="field">${esc(t("dlg.a.contact"))}
@@ -1951,17 +1957,25 @@
         // plan. De databank ziet dan dat p:<id> verdwijnt en a:<id> opduikt, en
         // weet dat dit afvinken is en geen verwijderen. Niets verwijst naar een
         // id van een gepland moment, dus hergebruiken kan veilig.
-        // Was het plan een gesprek over meer producten, dan blijft het
-        // contactmoment in de lijstvorm: wie maar één product mag, ziet er
-        // maar één, en de databank zet dat van de collega er weer bij.
+        // Snoeide de databank het product van een collega uit het plan, dan
+        // gaat "shared" mee: ook het contactmoment draagt dan geen aantal, en
+        // de databank zet het product van de collega er weer bij (en haalt
+        // "shared" er zelf af).
         const keuze = pickedProducts(form);
+        // Een gedeeld plan afvinken zonder een van je eigen producten: dan
+        // blijft er voor jou niets van over, en de databank weigert het
+        // (buiten je bereik). Liever nu zeggen dan na een mislukte opslag.
+        if (plan && plan.shared === true && !keuze.length) {
+          tell(t("dlg.a.sharedNeedsMine"));
+          return KEEP_OPEN;
+        }
         if (splitsen && keuze.length > 1 && keuze.some((p) => wantsQuantity(data.type, p))) {
           // Eén contactmoment per product, elk met zijn eigen aantal (en soort
           // stent). Het eerste erft het id van het plan, zodat de databank ziet
           // dat dit afvinken is.
           keuze.forEach((p, i) => {
             const rec = {
-              id: i === 0 && plan ? plan.id : uid(), date: data.date, type: data.type, product: p,
+              id: i === 0 && plan ? plan.id : uid(), date: data.date, type: data.type, products: [p],
               contactId: data.contactId, note: data.note.trim(),
               rooms: wantsQuantity(data.type, p) ? num(data["q:" + p]) : null,
             };
@@ -1974,10 +1988,10 @@
             syncRooms(h, null, rec);
           });
         } else {
-          const rec = a || { id: plan ? plan.id : uid(), ...(plan && shared(plan) ? { products: [] } : {}) };
+          const rec = a || { id: plan ? plan.id : uid(), ...(plan && plan.shared === true ? { shared: true } : {}) };
           // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
-          const before = a ? { type: rec.type, rooms: rec.rooms, product: productOf(rec) } : null;
-          setProducts(rec, keuze);
+          const before = a ? { type: rec.type, rooms: rec.rooms, products: productsOf(rec) } : null;
+          rec.products = keuze;
           const product = shared(rec) ? "" : productOf(rec);
           Object.assign(rec, {
             date: data.date, type: data.type, contactId: data.contactId,
@@ -2047,6 +2061,10 @@
     };
     form.onchange = sync;
     sync();
+    // Een afgevinkt plan waarvan de soort hier niet aangeboden wordt: de
+    // keuzelijst viel op de eerste. Dat zeggen we, anders staat er bij het
+    // opslaan stil een andere soort dan gepland.
+    if (plan && !a && v.type && !soortenVan(had).includes(v.type)) typeNote(form, null, v.type, "dlg.a.planTypeChanged");
   }
 
   // Een moment plannen. Dezelfde soorten als een contactmoment, zodat een kleur
@@ -2056,7 +2074,7 @@
     const v = p || {
       date: today(),
       type: "visit",
-      product: defaultProduct(h),
+      products: defaultProduct(h) ? [defaultProduct(h)] : [],
       contactId: (mainContact(h, defaultProduct(h)) || {}).id || "",
       note: "",
     };
@@ -2064,6 +2082,13 @@
     // toont wie het nu opvolgt.
     const assignee = p ? assigneeOf(p) : store.me().id;
     const had = productsOf(v);
+    // Een plan draagt geen aantal: elke soort die bij alle gekozen producten
+    // bestaat, mag. Het aantal komt bij het afvinken, per product. Behalve
+    // bij een plan waar de databank het product van een collega uit snoeide
+    // ("shared"): daar geen soort die een aantal kan dragen, want die zet de
+    // databank stil terug. De soort die er al stond blijft (typeOptions).
+    const soortenVan = (keuze) => typesInAll(keuze, myProducts())
+      .filter((k) => !(v.shared === true && COUNTING_TYPES.includes(k)));
     // Lokaal zonder naam is er niemand om aan toe te wijzen: dan geen veld.
     const canAssign = owners().length > 0 || !!assignee;
     const form = openDialog(`
@@ -2074,7 +2099,7 @@
         <p class="muted full">${esc(t("dlg.p.when.hint"))}</p>
         <div class="field full">${esc(t("dlg.p.product"))}${productMany(had)}</div>
         <label class="field">${esc(t("dlg.p.type"))}
-          <select name="type">${typeOptions(typesInAll(had, myProducts()), v.type)}</select>
+          <select name="type">${typeOptions(soortenVan(had), v.type)}</select>
         </label>
         <label class="field">${esc(t("dlg.p.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
@@ -2103,7 +2128,7 @@
         // Zonder uur een hele dag in de agenda; met een uur een uur lang. Een
         // uur zonder dag zegt niets, dus dat valt weg.
         if (rec.date && timeOrEmpty(data.time)) rec.time = timeOrEmpty(data.time); else delete rec.time;
-        setProducts(rec, pickedProducts(form));
+        rec.products = pickedProducts(form);
         // De soort stent kan al bij het plannen: bij het afvinken gaat ze mee.
         const product = shared(rec) ? "" : productOf(rec);
         if (wantsFamily(data.type, product) && data.family) rec.family = data.family;
@@ -2127,9 +2152,8 @@
     // gekozen was blijft staan als hij dat product ook heeft.
     // onchange en geen luisteraar: #dialogForm wordt hergebruikt, en een
     // luisteraar per geopende dialoog zou zich opstapelen (zie openDialog).
-    // Een plan draagt geen aantal: elke soort die bij alle gekozen producten
-    // bestaat, mag. Het aantal komt bij het afvinken, per product.
-    const velden = momentFields(form, v, (keuze) => typesInAll(keuze, myProducts()));
+    // De soorten volgen de producten: soortenVan hierboven.
+    const velden = momentFields(form, v, soortenVan);
     velden();
     // Een uur zonder dag zegt niets: zonder datum staat het uur uit, en dat
     // ziet wie het invult, in plaats van dat het bij het opslaan stil wegvalt.

@@ -58,12 +58,22 @@ await geval("nummers van de gevallen", () => {
 // autoStatus, en elk veranderd moment door syncRooms. De kamers vertrekken
 // van het opgeslagen getal; doet geen enkel moment er iets aan, dan blijft
 // het getal staan dat binnenkwam — dat is een getal dat iemand met de hand zette.
+// De producten van een moment staan in een lijst. Een geval in de oude vorm
+// ("product" met één naam) zet de databank om bij het lezen en bij het
+// bewaren (lijstvorm in schema.sql), en normalize() in app.js doet hetzelfde;
+// hier dus ook, aan beide kanten. Een lijst met meer dan één product draagt
+// geen aantal.
+const lijstvorm = (a0) => {
+  const a = D.toProductList({ ...a0 });
+  if (a.products.length > 1) { delete a.rooms; delete a.family; }
+  return a;
+};
 function viaApp(s, h0, bereik, modus) {
   if (modus === "import") return kopie(h0);
   win.FollowUpStore = { can: { products: bereik } };
   const h = kopie(h0);
   h.products ||= [];
-  h.activities ||= [];
+  h.activities = (h.activities || []).map(lijstvorm);
   h.unit ||= {};
   // Het opgeslagen ziekenhuis zoals de app het na het laden heeft
   // (normalizeActivity in app.js): een onbekende soort wordt "other", kamers
@@ -71,11 +81,11 @@ function viaApp(s, h0, bereik, modus) {
   // dat we in de payload terugzien bij hetzelfde moment.
   const datum = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v ?? "")) ? v : "");
   const geladen = (s.activities || []).map((a0) => {
-    const a = { ...a0 };
+    const a = lijstvorm(a0);
     if (!D.ACT_TYPE_KEYS.includes(a.type)) a.type = "other";
     a.date = datum(a.date);
     if (typeof a.rooms === "string" && a.rooms.trim() !== "" && !Number.isNaN(Number(a.rooms))) a.rooms = Number(a.rooms);
-    // Een moment in de lijstvorm draagt geen aantal (shared() in domain.js).
+    // Een moment over meer producten draagt geen aantal (shared() in domain.js).
     if (D.shared(a)) a.rooms = null;
     if (!a.id) {
       const zelfde = h.activities.find((b) => b.type === a.type && datum(b.date) === a.date
@@ -98,7 +108,7 @@ function viaApp(s, h0, bereik, modus) {
     // Een moment enkel over producten buiten het bereik krijgt hij niet te zien.
     const zijne = D.productsOf(a).filter((p) => bereik.includes(p));
     if (bereik.length && D.productsOf(a).length && !zijne.length) continue;
-    D.autoStatus(h, bereik.length && Array.isArray(a.products) ? { ...a, products: zijne } : a);
+    D.autoStatus(h, bereik.length ? { ...a, products: zijne } : a);
   }
 
   const start = s.unit?.roomsInstalled == null ? null : Number(s.unit.roomsInstalled);
@@ -121,6 +131,31 @@ const zicht = (h) => ({
   status: h.status ?? null,
   stage: h.stage ?? null,
   roomsInstalled: h.unit?.roomsInstalled ?? null,
+});
+
+// --- de omzetting naar een lijst ---------------------------------------------
+// controle.sql houdt een document met elke oude vorm (oudvorm) en wat
+// followup.lijstvorm() ervan hoort te maken (oudvormverwacht). Dezelfde
+// records gaan hier door toProductList(), de omzetting van normalize() in
+// app.js. Enkel de producten worden vergeleken: het aantal en "shared" regelt
+// normalize() elk apart, de databank in zonder_aantal().
+const jsonNa = (naam) => {
+  const i = controle.indexOf(`\n${naam} as (select $j$`);
+  assert.ok(i > 0, `controle.sql: ${naam} niet gevonden`);
+  const van = controle.indexOf("$j$", i) + 3;
+  return JSON.parse(controle.slice(van, controle.indexOf("$j$", van)));
+};
+await geval("toProductList zet elke oude vorm om zoals followup.lijstvorm()", () => {
+  const records = (doc) => doc.hospitals.flatMap((h) => ["contacts", "activities", "planned"]
+    .flatMap((k) => (h[k] || []).map((r) => [`${h.id}/${k}/${r.id}`, r])));
+  const voor = records(jsonNa("oudvorm"));
+  const na = Object.fromEntries(records(jsonNa("oudvormverwacht")));
+  assert.ok(voor.length >= 10, `maar ${voor.length} records in oudvorm`);
+  for (const [sleutel, r] of voor) {
+    const uit = D.toProductList(kopie(r));
+    assert.deepEqual(uit.products, na[sleutel].products, sleutel);
+    assert.ok(!("product" in uit), `${sleutel}: "product" bleef staan`);
+  }
 });
 
 for (const g of gevallen) {

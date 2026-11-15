@@ -17,7 +17,7 @@ window.FollowUpStats = (() => {
   // Vaste waarden en esc() komen uit domain.js, samen met app.js.
   const { PRODUCTS, CMM_STATES, STAGES, STATUSES, COUNTRIES, regionOf, SCOPE_BRANDS, PROCESSOR_BRANDS,
           esc, pickBox, myProducts, productColor, productKind, pipelineView, emptyTargets,
-          SOLD_TYPES, familiesFor, factsFor, productsOf, productOf, rooms, signedRooms, units } = window.FollowUpDomain;
+          SOLD_TYPES, familiesFor, factsFor, productsOf, productOf, shared, rooms, signedRooms, units } = window.FollowUpDomain;
   const scopeLabel = (b) => (b === "other" ? t("scope.other") : b);
   // Een doelcijfer aanpassen is schrijven. Zonder dat recht staat het getal er
   // nog wel — het hoort bij de cijfers — maar op slot. storage.js is op dit
@@ -70,7 +70,10 @@ window.FollowUpStats = (() => {
         if (view.products.length && !productsOf(a).some((p) => view.products.includes(p))) continue;
         // Alles wat hier per product telt (kamers, stuks) hoort bij één
         // product; een moment over meer producten telt alleen als moment.
-        out.push({ ...a, product: productOf(a), hospital: h });
+        // Ook als de databank het voor dit account tot één product snoeide
+        // ("shared"): anders telde wie maar een deel ziet het mee en wie
+        // alles ziet niet, en gaven dezelfde gegevens twee cijfers.
+        out.push({ ...a, product: shared(a) ? "" : productOf(a), hospital: h });
       }
     }
     return out;
