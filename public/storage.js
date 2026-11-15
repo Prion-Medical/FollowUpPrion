@@ -188,10 +188,14 @@ window.FollowUpStore = (() => {
       if (error) throw new Error(melding(error));
       return data;
     },
+    // De abonnementen en het maximum per account. Het maximum beslist de
+    // databank (feed_max()); een oudere databank stuurt enkel de lijst, en dan
+    // is het onbekend (null) en weigert feed_create zelf.
     async feedList(everyone = false) {
       const { data, error } = await client.rpc("feed_list", { everyone });
       if (error) throw new Error(melding(error));
-      return Array.isArray(data) ? data : [];
+      if (Array.isArray(data)) return { feeds: data, max: null };
+      return { feeds: Array.isArray(data && data.feeds) ? data.feeds : [], max: Number.isInteger(data && data.max) ? data.max : null };
     },
     async feedRemove(id) {
       const { data, error } = await client.rpc("feed_remove", { p_id: id });

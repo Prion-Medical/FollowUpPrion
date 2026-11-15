@@ -2098,6 +2098,13 @@ language sql immutable set search_path = public as $$
   select encode(sha256(convert_to(secret, 'UTF8')), 'hex');
 $$;
 
+-- Het maximum aantal abonnementen per account. Eén plek: feed_create()
+-- handhaaft het, feed_list() geeft het mee zodat de app het formulier op tijd
+-- weglaat. Vroeger stond het getal ook in app.js, met de vraag het op twee
+-- plaatsen gelijk te houden.
+create or replace function followup.feed_max() returns int
+language sql immutable set search_path = public as $$ select 10 $$;
+
 -- Een abonnement aanmaken. Geeft het id en het geheim terug; dat laatste
 -- wordt nergens bewaard en is dus maar één keer te zien.
 --
@@ -2107,7 +2114,7 @@ create or replace function public.feed_create(p_label text, p_mine boolean,
                                               p_products text[], p_lang text) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare
-  c_max      constant int := 10;
+  c_max      constant int := followup.feed_max();
   v_mine     text[] := followup.my_products();
   v_products text[];
   v_secret   text;
@@ -2151,8 +2158,10 @@ begin
   return jsonb_build_object('id', v_id, 'secret', v_secret);
 end $$;
 
--- De eigen abonnementen, of met everyone die van iedereen voor een beheerder.
--- Het geheim en de hash gaan nooit mee.
+-- De eigen abonnementen, of met everyone die van iedereen voor een beheerder,
+-- samen met het maximum per account: {feeds: [...], max: 10}. Het geheim en
+-- de hash gaan nooit mee. Tot november 2026 was het antwoord enkel de lijst;
+-- storage.js leest allebei.
 create or replace function public.feed_list(everyone boolean default false) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 begin
@@ -2166,7 +2175,7 @@ begin
     raise exception 'followup:feed_denied enkel een beheerder ziet alle abonnementen'
       using errcode = 'PT403', hint = 'feed_denied';
   end if;
-  return coalesce((
+  return jsonb_build_object('max', followup.feed_max(), 'feeds', coalesce((
     select jsonb_agg(jsonb_build_object(
              'id', f.id, 'owner', f.owner, 'owner_name', coalesce(u.name, ''),
              'label', f.label, 'mine', f.mine, 'products', to_jsonb(f.products),
@@ -2175,7 +2184,7 @@ begin
       from public.calendar_feeds f
       join public.app_users u on u.id = f.owner
      where everyone or f.owner = auth.uid()
-  ), '[]'::jsonb);
+  ), '[]'::jsonb));
 end $$;
 
 -- Een abonnement stopzetten: door de eigenaar, of door een beheerder. Het

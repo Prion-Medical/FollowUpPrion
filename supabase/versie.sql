@@ -86,6 +86,10 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('feed_create',     'pg_advisory_xact_lock', 'het maximum aan abonnementen geldt ook bij gelijktijdige oproepen'),
   ('feed_list',       'via_assistant',  'een assistent ziet geen abonnementen'),
   ('feed_remove',     'via_assistant',  'een assistent zet geen abonnement stop'),
+  -- Issue 23: het maximum aan abonnementen staat op één plek.
+  ('feed_max',        'select 10',      'het maximum aan abonnementen per account'),
+  ('feed_create',     'followup.feed_max()', 'feed_create handhaaft het maximum uit feed_max'),
+  ('feed_list',       '''max''',        'feed_list geeft het maximum mee aan de app'),
   -- Uit de review van 2026-11-13: momenten over meer producten.
   ('in_scope',        'products_of',    'de producten van een record via één functie'),
   ('merge_products',  'products_of',    'de productlijst van een record via één functie'),
