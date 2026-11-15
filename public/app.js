@@ -14,7 +14,7 @@
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
     typesAmong, productsOf, productOf, familiesFor, wantsFamily, factsFor,
     esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual, setMain, mainContact,
-    normalizeFacts, syncPipeline, zonderProduct, syncRooms, shared, byWhen, assigneeOf, tickOffDate, typesInAll,
+    normalizeFacts, syncPipeline, zonderProduct, syncRooms, shared, byWhen, assigneeOf, tickOffDate, typesInAll, momentsMoved,
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
   const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
@@ -251,6 +251,9 @@
   // een tweede naast de eerste zou op een verouderde basis samenvoegen, en
   // "bezet, ga maar door" liet de opslag zonder samenvoegen opnieuw proberen.
   let pulling = null;
+  // Het tijdstip van een eigen opslag dat we bewust nog niet overnamen (zie
+  // momentsMoved): enkel een import heeft het nodig, zie save().
+  let heldAt = null;
   // Het samengevoegde document overnemen zonder de objecten te vervangen waar
   // een open dialoog of de fiche nog naar wijst: een ziekenhuis, een
   // contactpersoon of een moment dat al bestond blijft hetzelfde object en
@@ -292,6 +295,7 @@
     refill(state.db, clone(merged));
     base = clone(fresh.db);
     store.accept(fresh.at);
+    heldAt = null;
     // Wie in de fiche aan het typen is, houdt zijn veld: wat hij typt staat
     // nog niet in het document en zou bij een hertekening weg zijn.
     const a = document.activeElement;
@@ -300,21 +304,36 @@
     } else renderAll();
     return mineLeft ? "dirty" : "clean";
   }
+  // Wat een contactmoment met de opvolging doet (kleur, fase, geïnstalleerde
+  // zalen), beslist de databank bij elke opslag. Wat de app zelf uitrekende is
+  // maar een voorproefje: na zo'n opslag halen we op wat er werkelijk bewaard
+  // is en nemen dat over, met als basis precies wat we stuurden. Anders stuurt
+  // de volgende opslag ons eigen voorproefje terug, en dat wint.
+  // Daarvoor is geen eigen vlag nodig: na zo'n opslag nemen we het nieuwe
+  // tijdstip niet over (save() hieronder). Voor deze app is het document dan
+  // nog niet het hare, zoals na de opslag van een collega: refreshQuietly
+  // ziet het en haalt het op, en een opslag die eerder komt, botst en
+  // voegt samen langs de gewone weg. Meestal is het meteen na de opslag al
+  // opgehaald.
+  // Typt er iemand, staat er een lijstje open of versleept iemand een speld?
+  // Het scherm hertekenen zou dat dan onder zijn handen wegnemen. Een veld
+  // dat de focus nog heeft maar niet meer te zien is (in een dialoog die al
+  // dicht is) telt niet: daar typt niemand.
   // Stil bijwerken. Wanneer je naar het tabblad terugkeert, en af en toe
   // terwijl het openstaat, vragen we of er iets veranderd is; zo ja, dan komt
   // het erbij zonder dat je er iets van merkt. Niet terwijl er een dialoog
   // openstaat of een opslag onderweg is: die regelen het zelf.
+  function handsBusy() {
+    const a = document.activeElement;
+    return !!(a && a.matches && a.matches("input, textarea, select") && a.offsetParent !== null)
+      || !!(state.dragId || state.placing || document.querySelector("details.pick[open]"));
+  }
   async function refreshQuietly() {
     if (store.mode !== "supabase" || state.loading || document.hidden) return;
     if (saving || pulling || dirty || document.querySelector("dialog[open]")) return;
     // Ook niet terwijl je ergens typt, een lijstje openstaat of een speld
-    // versleept: het scherm hertekenen zou dat onder je handen wegnemen. Het
-    // komt een halve minuut later wel.
-    // Een veld dat de focus nog heeft maar niet meer te zien is (in een
-    // dialoog die al dicht is) telt niet: daar typt niemand.
-    const a = document.activeElement;
-    if (a && a.matches && a.matches("input, textarea, select") && a.offsetParent !== null) return;
-    if (state.dragId || state.placing || document.querySelector("details.pick[open]")) return;
+    // versleept (handsBusy): het komt een halve minuut later wel.
+    if (handsBusy()) return;
     try {
       if (!(await store.changed())) return;
       const result = await pull();
@@ -337,14 +356,30 @@
     saveMode = "save";
     saving = true;
     try {
+      // Een pull die al onderweg is eerst laten landen: hij leest base pas na
+      // het ophalen, en een opslag die intussen slaagt, zou hem tegen een
+      // nieuwere basis een ouder document laten samenvoegen.
+      if (pulling) await pulling.catch(() => {});
       // Iemand anders bewaarde ondertussen: ophalen, samenvoegen en opnieuw
       // proberen, zonder er de gebruiker mee lastig te vallen. Een paar keer,
       // want in de tijd van het ophalen kan er nog iemand bewaard hebben. Een
       // import voegen we niet samen: die zet bewust alles terug.
+      // Een import zet alles terug en voegt niet samen; wat hij overschrijft
+      // van het achtergehouden tijdstip is enkel wat de databank over onze
+      // eigen vorige opslag besliste. Zonder dit botste hij daarop, alsof
+      // iemand anders bewaard had.
+      if (mode === "import" && heldAt) { store.accept(heldAt); heldAt = null; }
+      let moved = false;
       for (let attempt = 0; ; attempt++) {
         const sent = clone(state.db);
         try {
-          await store.save(state.db, mode);
+          const at = await store.save(state.db, mode);
+          moved = mode === "save" && store.mode === "supabase" && !!base && momentsMoved(base, sent);
+          // Raakte de opslag een contactmoment, dan besliste de databank iets
+          // wat wij nog niet hebben: het tijdstip blijft dan het oude, zie
+          // momentsMoved hierboven.
+          if (moved) heldAt = at;
+          else { store.accept(at); heldAt = null; }
           base = sent;
           break;
         } catch (e) {
@@ -354,6 +389,16 @@
       }
       dirty = saveAgain;
       showSaveState("save.saved");
+      // De databank heeft over de opvolging beslist: meteen overnemen wat ze
+      // bewaarde. Ook onder een open dialoog, zoals de pull hierboven: refill()
+      // houdt de objecten waar die dialoog naar wijst. Niet onder iemands
+      // handen (handsBusy): dan doet refreshQuietly het straks, of botst de
+      // volgende opslag en voegt ze samen. Lukt het ophalen niet, idem.
+      if (moved && !handsBusy()) {
+        try {
+          if ((await pull()) === "conflict") showBanner(t("save.conflict"), true, "warn");
+        } catch (e) { /* zie hierboven */ }
+      }
     } catch (e) {
       // Een import die niet doorging mag later niet als gewone opslag worden
       // samengevoegd: dan zou de back-up half over de echte gegevens komen.

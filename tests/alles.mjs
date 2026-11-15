@@ -16,7 +16,7 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const DELEN = ["lijsten", "vertalingen", "regels", "planning", "cijfers", "samenvoegen", "agenda"];
+const DELEN = ["lijsten", "vertalingen", "regels", "planning", "cijfers", "samenvoegen", "agenda", "databank"];
 const mislukt = [];
 for (const deel of DELEN) {
   const pad = fileURLToPath(new URL(`./${deel}.mjs`, import.meta.url));

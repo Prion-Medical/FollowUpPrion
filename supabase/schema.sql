@@ -350,6 +350,47 @@ language sql immutable set search_path = public as $$
                'evaluation', 'purchasing', 'customer', 'on_hold', 'not_interested'];
 $$;
 
+-- De fases vóór de verkoop: wie daar staat en een bestelling of installatie
+-- krijgt, wordt klant. De kopie van PRE_SALE in public/domain.js;
+-- tests/lijsten.mjs legt ze naast elkaar.
+create or replace function followup.voor_verkoop() returns text[]
+language sql immutable set search_path = public as $$
+  select array['prospect', 'first_contact', 'meeting', 'demo_planned', 'demo_installed', 'evaluation', 'purchasing'];
+$$;
+
+-- De soorten contactmoment die bestaan: de sleutels van ACT_TYPES in
+-- public/domain.js, in dezelfde volgorde; tests/lijsten.mjs legt ze naast
+-- elkaar. Een soort die hier niet in staat, maakt de app bij het laden
+-- "other" — daarom telt zo'n verandering niet als een andere soort.
+create or replace function followup.soorten() returns text[]
+language sql immutable set search_path = public as $$
+  select array['prospecting', 'email', 'call', 'visit', 'congress', 'demo', 'procedure',
+               'installation', 'training', 'quote', 'order', 'cancellation', 'other'];
+$$;
+
+-- De producten die per ingreep verkocht worden in plaats van per abonnement:
+-- de kopie van productKind() in public/domain.js. Wat hier niet in staat is
+-- een abonnement, net als daar, zodat een product dat de databank nog niet
+-- kent zich gedraagt zoals alles zich tot nu toe gedroeg. Het verschil telt
+-- twee keer: na een demo of procedure staat zo'n product "in evaluatie" in
+-- plaats van "demo geïnstalleerd", en zijn aantal zijn stuks en geen kamers.
+create or replace function followup.per_ingreep() returns text[]
+language sql immutable set search_path = public as $$
+  select array['Thyroid RFA', 'Fibroid RFA', 'Stents'];
+$$;
+
+-- Kent dit product deze fase? De regel achter stagesFor() in public/domain.js
+-- (niet de hele functie: een fase die in geen enkele lijst staat, keurt dit
+-- niet af, waar stagesFor() ze niet kent):
+-- één lijst van fases voor alle producten, maar een product per ingreep wordt
+-- niet geïnstalleerd (geen "demo_installed") en een abonnement wordt niet
+-- aangekocht langs het Comité Medisch Materiaal (geen "purchasing").
+create or replace function followup.kent_fase(p text, stage text) returns boolean
+language sql immutable set search_path = public as $$
+  select stage is distinct from
+         case when p = any(followup.per_ingreep()) then 'demo_installed' else 'purchasing' end;
+$$;
+
 create or replace function followup.scope_pipeline(p jsonb, allowed text[]) returns jsonb
 language sql immutable set search_path = public as $$
   select coalesce((
@@ -643,7 +684,9 @@ end $$;
 --
 -- unit.roomsInstalled hoort hier niet bij: syncRooms() in de app past een
 -- vérschil toe en geen som, dus een Ainex-gebruiker telt zijn eigen installatie
--- op bij het gedeelde getal en raakt dat van EndoQ niet.
+-- op bij het gedeelde getal en raakt dat van EndoQ niet. Sinds issue 21 telt
+-- de databank dat verschil zelf, bij het opgeslagen getal: zie
+-- opvolging_bijwerken() in deel 9b.
 
 -- roomsDemo is wél een herberekening in de app: het aantal van de laatste demo
 -- met een aantal. Uit een gesnoeide lijst kwam dat van de laatste Ainex-demo,
@@ -1048,13 +1091,376 @@ language sql immutable set search_path = public as $$
                     and cardinality(followup.texts(t.e -> 'products')) > 0
                then t.e || jsonb_build_object('pipeline', (
                       select jsonb_object_agg(p.x, jsonb_build_object(
-                               'stage',  coalesce(t.e ->> 'stage',  'prospect'),
+                               -- Een fase die dit product niet kent, schuift naar
+                               -- de dichtste die het wel kent, zoals in
+                               -- syncPipeline() in de app.
+                               'stage',  case
+                                 when followup.kent_fase(p.x, coalesce(t.e ->> 'stage', 'prospect'))
+                                   then coalesce(t.e ->> 'stage', 'prospect')
+                                 else 'evaluation' end,
                                'status', coalesce(t.e ->> 'status', 'red'),
                                'owner',  ''))
                         from unnest(followup.texts(t.e -> 'products')) p(x)))
                else t.e end order by t.i)
         from jsonb_array_elements(doc -> 'hospitals') with ordinality t(e, i)
     ), '[]'::jsonb))
+  end;
+$$;
+
+
+-- ---------------------------------------------------------------------------
+-- 9b. Wat een contactmoment met de opvolging doet
+-- ---------------------------------------------------------------------------
+-- Een bestelling maakt een product groen en klant, een eerste gesprek zet
+-- rood op oranje, een demo zet de fase op "demo geïnstalleerd", een
+-- installatie telt kamers bij. Dat stond in de app (autoStatus, syncPipeline,
+-- syncRooms in public/domain.js) en als volledige kopie in de koppeling voor
+-- een assistent. Liepen die twee uit elkaar, dan zette hetzelfde bezoek een
+-- ziekenhuis anders naargelang wie het invoerde, en dat verschil werd
+-- opgeslagen (issue 21).
+--
+-- Nu beslist de databank, bij elke gewone opslag. De app houdt haar kopie,
+-- zodat de kleur meteen verandert en server.py blijft werken, en neemt daarna
+-- over wat hier opgeslagen werd — zoals bij de stempel. De koppeling schrijft
+-- enkel het moment en laat de rest aan dit stuk over.
+--
+-- Twee dingen moeten blijven kunnen, en daarom kijkt dit enkel naar wat
+-- nieuw is:
+--   - de fase met de hand zetten. De regels lopen alleen voor een
+--     contactmoment dat er nog niet stond, of waarvan de soort veranderde —
+--     nooit bij elke opslag, anders draaiden ze een fase terug die iemand zelf
+--     koos.
+--   - het aantal kamers met de hand zetten. We tellen enkel het verschil dat
+--     de contactmomenten maken; is er geen verschil, dan blijft het getal uit
+--     de payload staan.
+-- De prijs, bewust: wie in dezelfde opslag een nieuw moment invoert én de
+-- fase met de hand verzet, ziet die fase door het moment overschreven; en een
+-- met de hand getypt aantal kamers in dezelfde opslag als een installatie
+-- gaat verloren. De app bewaart die twee nooit samen.
+--
+-- Niet hier: stageStatus() (een fase met de hand → een kleur) en
+-- zonderProduct() (het laatste product afgevinkt). Die gaan niet over een
+-- contactmoment, en blijven in de app en de koppeling.
+
+-- Hoeveel kamers dit contactmoment installeert: + bij een installatie, − bij
+-- een stopzetting, anders niets. Enkel bij een product per abonnement: een
+-- bestelling van stents telt stuks, geen kamers. Een moment zonder product
+-- telt wél mee, zoals in syncRooms(): productKind("") is een abonnement, en
+-- de installaties van vóór er producten waren hebben geen product.
+--
+-- Een getal lezen zoals Number() in de app het doet: een getal, of tekst die
+-- er een is ("2"). Oudere data heeft er zo een paar, en de app maakt er bij
+-- het laden een getal van; lazen we hier enkel echte getallen, dan leek de
+-- eerste opslag daarna op een installatie van twee kamers.
+create or replace function followup.getal(v jsonb) returns numeric
+language sql immutable set search_path = public as $$
+  select case
+    when jsonb_typeof(v) = 'number' then (v #>> '{}')::numeric
+    when jsonb_typeof(v) = 'string' and (v #>> '{}') ~ '^\s*-?\d+(\.\d+)?\s*$' then (v #>> '{}')::numeric
+    else null end;
+$$;
+
+create or replace function followup.geinstalleerd(a jsonb) returns numeric
+language sql immutable set search_path = public as $$
+  select case
+    -- Eerst de soort: bijna elk moment is geen installatie of stopzetting, en
+    -- dit loopt over elk moment van een ziekenhuis bij elke opslag.
+    when (a ->> 'type') is distinct from 'installation' and (a ->> 'type') is distinct from 'cancellation' then 0
+    -- Een moment in de lijstvorm draagt geen aantal: de app haalt het er bij
+    -- het laden af en zonder_aantal() bij het samenvoegen. Telden we een oud
+    -- aantal hier toch, dan leek de eerste opslag daarna een stopzetting.
+    when a ? 'products' then 0
+    when (case when cardinality(followup.products_of(a)) = 1
+               then (followup.products_of(a))[1] else '' end) = any(followup.per_ingreep()) then 0
+    when a ->> 'type' = 'installation' then coalesce(followup.getal(a -> 'rooms'), 0)
+    when a ->> 'type' = 'cancellation' then -coalesce(followup.getal(a -> 'rooms'), 0)
+    else 0 end;
+$$;
+
+-- Eén contactmoment op één opvolging: de rij van een product, of het
+-- ziekenhuis zelf zolang daar geen product aan hangt. Dezelfde regel als in
+-- autoStatus(), in dezelfde volgorde: eerst de kleur (en de fase die daarbij
+-- hoort), dan wat een demo of procedure aan de fase doet. Een tweede keer
+-- verandert niets — groen blijft groen, oranje wordt niet nog eens oranje —
+-- en daarom maakt het niet uit dat de browser het al gedaan had.
+create or replace function followup.na_moment(x jsonb, soort text, ingreep boolean) returns jsonb
+language sql immutable set search_path = public as $$
+  with k as (
+    select case
+      when soort in ('installation', 'order') and (x ->> 'status') is distinct from 'green'
+        then x || '{"status": "green"}'::jsonb
+               || case when x ->> 'stage' = any(followup.voor_verkoop())
+                       then '{"stage": "customer"}'::jsonb else '{}'::jsonb end
+      when x ->> 'status' = 'red'
+        then x || '{"status": "orange"}'::jsonb
+               || case when x ->> 'stage' = 'prospect'
+                       then '{"stage": "first_contact"}'::jsonb else '{}'::jsonb end
+      else x end as y
+  )
+  -- Na een demo: geïnstalleerd bij een product per abonnement, in evaluatie
+  -- bij een product per ingreep. Een procedure waar een van ons bij stond is
+  -- daar hetzelfde. Een klant blijft klant.
+  select case
+    when soort in ('demo', 'procedure')
+         and k.y ->> 'stage' in ('prospect', 'first_contact', 'meeting', 'demo_planned')
+      then k.y || jsonb_build_object('stage', case when ingreep then 'evaluation' else 'demo_installed' end)
+    else k.y end
+  from k;
+$$;
+
+-- Wat de app bij het laden van een contactmoment maakt (normalizeActivity in
+-- app.js), voor zover het hier telt: een soort die niet bestaat wordt
+-- "other", een datum die geen JJJJ-MM-DD is wordt leeg. Wie de opgeslagen
+-- versie zo leest, ziet een oud record niet als gewijzigd alleen omdat de app
+-- het rechtzette.
+create or replace function followup.soort_van(a jsonb) returns text
+language sql immutable set search_path = public as $$
+  select case when a ->> 'type' = any(followup.soorten()) then a ->> 'type' else 'other' end;
+$$;
+
+create or replace function followup.datum_van(a jsonb) returns text
+language sql immutable set search_path = public as $$
+  select case when jsonb_typeof(a -> 'date') = 'string' and a ->> 'date' ~ '^\d{4}-\d{2}-\d{2}$'
+              then a ->> 'date' else '' end;
+$$;
+
+-- De sleutel van een opgeslagen moment zonder id: soort, producten en datum,
+-- zoals de app ze na het laden heeft. Staat er in de payload een moment met
+-- een id en dezelfde sleutel, dan is het dat moment — de app gaf het bij het
+-- laden een id — en niet een nieuw. Niet "gelijk op het id na": de app vult
+-- bij het laden ook andere velden aan (contactId, note).
+create or replace function followup.zonder_id_sleutel(a jsonb) returns text
+language sql immutable set search_path = public as $$
+  select followup.soort_van(a) || '|' || array_to_string(followup.products_of(a), ',')
+         || '|' || followup.datum_van(a);
+$$;
+
+-- Stap 1 en 2: de rijen en wat de nieuwe contactmomenten ermee doen. stored
+-- is het opgeslagen ziekenhuis (al omgezet, '{}' voor een nieuw), h het
+-- ziekenhuis dat geschreven gaat worden, allowed het bereik ('{}' is
+-- onbeperkt). Geeft h terug met de bijgewerkte pipeline en, als een moment op
+-- het ziekenhuis zelf sloeg, zijn status en stage. De kleur van het geheel
+-- (fix_overall) rekent de aanroeper.
+--
+-- Dit draait terwijl de rij in app_state vastgezet is, dus het moet lineair
+-- blijven in de grootte van de opslag: de opvolging en de kleur van het
+-- ziekenhuis gaan als kleine variabelen door de lus en komen pas op het eind
+-- één keer terug in h, en de opgeslagen momenten worden één keer opgezocht.
+-- Met een jsonb_set op h per moment duurde een opslag van 8.000 nieuwe
+-- momenten een halve minuut.
+create or replace function followup.fix_pipeline(stored jsonb, h jsonb, allowed text[]) returns jsonb
+language plpgsql immutable set search_path = public as $$
+declare
+  v_beperkt boolean := not (allowed is null or allowed = '{}'::text[]);
+  -- Wat deze gebruiker kan kiezen, zoals myProducts() in de app: zijn bereik,
+  -- of elk product als hij onbeperkt is.
+  v_bereik  text[] := case when v_beperkt then allowed else followup.producten() end;
+  v_pijp    jsonb := followup.obj(h -> 'pipeline');   -- bijgewerkt in de lus
+  v_vinkjes text[] := followup.texts(h -> 'products');
+  v_zh_in   jsonb;            -- status en stage van het ziekenhuis zelf
+  v_zh      jsonb;
+  v_genoemd text[];
+  v_oud     jsonb;            -- opgeslagen momenten met een id, op id
+  v_zonder  jsonb;            -- opgeslagen momenten zonder id, op zonder_id_sleutel()
+  v_p       text;
+  v_a       jsonb;
+  v_naam    text[];
+  v_doel    text[];
+  v_rijen   text[];
+begin
+  v_zh_in := coalesce((select jsonb_object_agg(k, h -> k) from unnest(array['status', 'stage']) k
+                        where h ? k), '{}'::jsonb);
+  v_zh := v_zh_in;
+  v_oud := coalesce((select jsonb_object_agg(t.e ->> 'id', t.e)
+                       from jsonb_array_elements(followup.arr(stored -> 'activities')) t(e)
+                      where coalesce(t.e ->> 'id', '') <> ''), '{}'::jsonb);
+  v_zonder := coalesce((select jsonb_object_agg(followup.zonder_id_sleutel(t.e), true)
+                          from jsonb_array_elements(followup.arr(stored -> 'activities')) t(e)
+                         where coalesce(t.e ->> 'id', '') = ''), '{}'::jsonb);
+
+  -- 1. Elk aangevinkt product heeft een rij, zoals syncPipeline() die maakt
+  --    voor een product dat er later bijkomt: eerste contact als er al een
+  --    contactmoment over gaat, anders prospect. Een ziekenhuis zonder enige
+  --    rij is hier al omgezet (opvolging_aanvullen), dus dit is altijd "later".
+  --    Wie beperkt is, maakt enkel rijen binnen zijn bereik: de rij van een
+  --    collega is niet de zijne om aan te maken.
+  v_genoemd := coalesce((select array_agg(distinct x)
+                           from jsonb_array_elements(followup.arr(h -> 'activities')) t(e),
+                                unnest(followup.products_of(t.e)) x), '{}'::text[]);
+  for v_p in select distinct x from unnest(v_vinkjes) x
+              where x = any(followup.producten())
+                and (not v_beperkt or x = any(allowed))
+                and jsonb_typeof(v_pijp -> x) is distinct from 'object'
+  loop
+    v_pijp := v_pijp || jsonb_build_object(v_p,
+                case when v_p = any(v_genoemd)
+                     then '{"stage": "first_contact", "status": "orange", "owner": ""}'::jsonb
+                     else '{"stage": "prospect", "status": "red", "owner": ""}'::jsonb end);
+  end loop;
+
+  -- 2. De contactmomenten die iets doen: nieuw, of met een andere soort dan
+  --    er opgeslagen stond. Een afgevinkt gepland moment is hier nieuw: zijn
+  --    id stond in planned, niet in activities. Een moment zonder id volgen we
+  --    niet — de app geeft het bij het laden een id, en anders deed het bij
+  --    elke opslag opnieuw iets.
+  --
+  --    De opgeslagen versie lezen we zoals de app ze na het laden heeft
+  --    (soort_van, zonder_id_sleutel): een soort die niet bestaat is "other",
+  --    dus "other" opslaan verandert niets, maar er een bestelling van maken
+  --    wel; en een opgeslagen moment zonder id dat de app een id gaf, is niet
+  --    nieuw.
+  for v_a in select t.e
+               from jsonb_array_elements(followup.arr(h -> 'activities')) with ordinality t(e, i)
+              where coalesce(t.e ->> 'id', '') <> ''
+                and case
+                      when v_oud ? (t.e ->> 'id') then
+                        followup.soort_van(v_oud -> (t.e ->> 'id')) <> followup.soort_van(t.e)
+                      -- Zonder opgeslagen momenten zonder id hoeft er geen
+                      -- sleutel berekend te worden: dat is bijna altijd zo.
+                      when v_zonder = '{}'::jsonb then true
+                      else not v_zonder ? followup.zonder_id_sleutel(t.e)
+                    end
+              order by t.i
+  loop
+    v_naam := followup.products_of(v_a);
+    if v_beperkt and cardinality(v_naam) > 0 and not (v_naam && allowed) then
+      -- Een moment over enkel producten buiten het bereik: niet van deze
+      -- gebruiker, dus niets beweegt. merge_entries() laat zo'n moment al
+      -- niet binnen; dit houdt de functie ook op zichzelf veilig.
+      continue;
+    end if;
+    -- Wat het moment noemt, binnen het bereik, en een rij heeft, beweegt
+    -- mee. Het bereik telt ook hier: wie enkel Thyroid RFA mag en een gepland
+    -- gesprek over Thyroid én Fibroid afvinkt, verzet de rij van zijn collega
+    -- niet. Dat is de muur, en zo toont zijn browser het ook.
+    v_doel := coalesce((select array_agg(q.x order by q.i)
+                          from unnest(v_naam) with ordinality q(x, i)
+                         where (not v_beperkt or q.x = any(allowed))
+                           and jsonb_typeof(v_pijp -> q.x) = 'object'), '{}'::text[]);
+    if cardinality(v_doel) = 0 then
+      -- Geen product genoemd: hangt er binnen het bereik precies één aan het
+      -- ziekenhuis, dan is het dat. Meer, dan valt niet te raden welk en
+      -- blijft alles staan. Geen, dan is het het ziekenhuis zelf. Het bereik
+      -- telt: wie enkel Ainex mag en een moment zonder product invoert, heeft
+      -- het over Ainex, ook al hangt EndoQ er ook aan.
+      v_rijen := coalesce((select array_agg(distinct x) from unnest(v_bereik) x
+                            where x = any(v_vinkjes)
+                              and jsonb_typeof(v_pijp -> x) = 'object'), '{}'::text[]);
+      if cardinality(v_rijen) = 1 then
+        v_doel := v_rijen;
+      elsif cardinality(v_rijen) = 0 then
+        v_zh := followup.na_moment(v_zh, v_a ->> 'type', false);
+      end if;
+    end if;
+    foreach v_p in array v_doel loop
+      v_pijp := v_pijp || jsonb_build_object(v_p,
+                  followup.na_moment(v_pijp -> v_p, v_a ->> 'type', v_p = any(followup.per_ingreep())));
+    end loop;
+  end loop;
+
+  -- Eén keer terug in h, en enkel wat veranderde: een ziekenhuis zonder
+  -- pipeline krijgt er geen lege bij.
+  if v_pijp is distinct from followup.obj(h -> 'pipeline') then
+    h := h || jsonb_build_object('pipeline', v_pijp);
+  end if;
+  if v_zh is distinct from v_zh_in then
+    h := h || v_zh;
+  end if;
+  return h;
+end $$;
+
+-- Stap 3: de geïnstalleerde kamers, de tegenhanger van fix_rooms_demo().
+-- Wat er opgeslagen stond plus het verschil dat de contactmomenten maken.
+-- Niet wat de browser stuurde plus dat verschil: die telde het al op, en dan
+-- stond het er twee keer bij. Zonder verschil blijft het getal uit de payload:
+-- dat is een getal dat iemand met de hand zette. Een stopzetting op een leeg
+-- veld laat het leeg, zoals syncRooms(): niemand wist hoeveel er stonden.
+--
+-- Bewust anders dan de app bij meer dan één kamermoment in één opslag:
+-- syncRooms() rekent per moment (en laat een stopzetting op een leeg veld
+-- vallen vóór een installatie erbij komt), hier telt het netto verschil. De
+-- app en de koppeling bewaren één moment per opslag, dus het verschil toont
+-- zich enkel bij een import-achtige opslag of een zelfgebouwde payload.
+create or replace function followup.fix_rooms_installed(stored jsonb, h jsonb) returns jsonb
+language sql immutable set search_path = public as $$
+  select case
+    when q.delta > 0 or (q.delta < 0 and coalesce(jsonb_typeof(q.kamers), 'null') <> 'null')
+      then h || jsonb_build_object('unit', followup.obj(h -> 'unit') || jsonb_build_object('roomsInstalled',
+             greatest(0, coalesce(followup.getal(q.kamers), 0) + q.delta)))
+    else h end
+  from (select coalesce((select sum(followup.geinstalleerd(t.e))
+                           from jsonb_array_elements(followup.arr(h -> 'activities')) t(e)), 0)
+             - coalesce((select sum(followup.geinstalleerd(t.e))
+                           from jsonb_array_elements(followup.arr(stored -> 'activities')) t(e)), 0) as delta,
+               stored -> 'unit' -> 'roomsInstalled' as kamers) q;
+$$;
+
+-- Eén ziekenhuis: de rijen en de nieuwe momenten (fix_pipeline), de kamers
+-- (fix_rooms_installed), en dan de kleur van het geheel. stored is het
+-- ziekenhuis zoals het opgeslagen stond, al omgezet naar de opvolging per
+-- product ('{}' voor een nieuw), h zoals het na het samenvoegen geschreven
+-- zal worden. allowed is het bereik van wie opslaat; leeg is onbeperkt.
+--
+-- De kleur en de fase van het ziekenhuis worden herrekend zodra er iets aan
+-- de opvolging veranderde: een regel hieronder, of een wijziging die mee
+-- binnenkwam — een fase met de hand verzet, het verste product afgevinkt, een
+-- product aangevinkt waarvan de rij al bestond. Een onbeperkte opslag komt
+-- nooit langs merge_hospital(), dat het anders deed, en de koppeling rekent
+-- het niet meer zelf uit. Is er niets veranderd, dan komt h ongewijzigd
+-- terug: zo geeft laden en ongewijzigd opslaan hetzelfde document terug, ook
+-- als er in de opgeslagen kleur iets niet klopt.
+create or replace function followup.opvolging_bijwerken(stored jsonb, h jsonb,
+                                                        allowed text[]) returns jsonb
+language plpgsql immutable set search_path = public as $$
+declare
+  v_in jsonb := h;
+begin
+  if jsonb_typeof(h) is distinct from 'object' then
+    return h;
+  end if;
+  stored := followup.obj(stored);
+  -- Niets veranderd aan dit ziekenhuis: niets te beslissen. Dat is bijna
+  -- elk ziekenhuis bij elke opslag, dus ook de snelste weg.
+  if h = stored then
+    return h;
+  end if;
+
+  h := followup.fix_rooms_installed(stored, followup.fix_pipeline(stored, h, allowed));
+
+  -- De kleur en de fase van het ziekenhuis: die van het product dat het
+  -- verst staat. Zonder aangevinkt product blijft de eigen kleur staan.
+  if h is distinct from v_in
+     or (v_in -> 'products') is distinct from (stored -> 'products')
+     or (v_in -> 'pipeline') is distinct from (stored -> 'pipeline') then
+    h := followup.fix_overall(h, false);
+  end if;
+  return h;
+end $$;
+
+-- Het hele document, voor write_state(). Enkel bij een gewone opslag: een
+-- import zet een back-up terug zoals hij was, en daar beslist niemand iets
+-- opnieuw. Elke opslag gaat erdoor, ook een onbeperkte die nooit langs
+-- merge_hospital() komt — daarom over het hele document, zoals stamp_doc().
+--
+-- Allebei al omgezet naar de opvolging per product (opvolging_aanvullen): stored
+-- is het opgeslagen document, doc wat er geschreven gaat worden. write_state()
+-- zet ze allebei om, zodat ze tegen dezelfde basis vergeleken worden als het
+-- samenvoegen van een beperkte opslag.
+create or replace function followup.opvolging_bijwerken_doc(stored jsonb, doc jsonb,
+                                                            allowed text[], mode text) returns jsonb
+language sql immutable set search_path = public as $$
+  select case
+    when mode is distinct from 'save' or jsonb_typeof(doc -> 'hospitals') is distinct from 'array' then doc
+    else doc || jsonb_build_object('hospitals', coalesce((
+            -- De opgeslagen ziekenhuizen één keer op id gezet, in plaats van
+            -- per ziekenhuis de hele lijst door te lopen.
+            select jsonb_agg(followup.opvolging_bijwerken(coalesce(op.m -> (t.e ->> 'id'), '{}'::jsonb),
+                                                          t.e, allowed) order by t.i)
+              from jsonb_array_elements(doc -> 'hospitals') with ordinality t(e, i),
+                   (select coalesce(jsonb_object_agg(x.e ->> 'id', x.e), '{}'::jsonb) as m
+                      from jsonb_array_elements(followup.arr(stored -> 'hospitals')) x(e)
+                     where coalesce(x.e ->> 'id', '') <> '') op
+          ), '[]'::jsonb))
   end;
 $$;
 
@@ -1109,6 +1515,7 @@ declare
   -- de datum van gisteren te zien.
   v_dag        text := to_char((now() at time zone 'Europe/Brussels')::date, 'YYYY-MM-DD');
   v_stored     jsonb;
+  v_basis      jsonb;
   v_huidig     timestamptz;
   v_nieuw      jsonb;
   v_sleutels   text[];
@@ -1183,6 +1590,11 @@ begin
             detail = 'Herlaad en doe je wijziging opnieuw.';
   end if;
 
+  -- Het opgeslagen document, omgezet naar de opvolging per product: de basis
+  -- voor het samenvoegen én voor de regels hieronder, zodat die twee hetzelfde
+  -- vergelijken.
+  v_basis := followup.opvolging_aanvullen(v_stored);
+
   if v_bereik = '{}'::text[] then
     -- Geen beperking: deze gebruiker zag alles, dus zijn document is het
     -- document. De controles hieronder blijven wél gelden.
@@ -1190,11 +1602,18 @@ begin
   else
     -- Samenvoegen met het omgezette document: zo staat de rij van de collega
     -- er al vóór deze gebruiker de zijne erbij zet.
-    v_nieuw := followup.merge_doc(followup.opvolging_aanvullen(v_stored), payload, v_bereik, v_rol in ('admin', 'editor'));
+    v_nieuw := followup.merge_doc(v_basis, payload, v_bereik, v_rol in ('admin', 'editor'));
   end if;
   -- En wat een onbeperkte gebruiker stuurt vanuit een app die de opvolging per
   -- product nog niet kent. Op een omgezet document verandert dit niets.
   v_nieuw := followup.opvolging_aanvullen(v_nieuw);
+
+  -- Wat een nieuw contactmoment met de opvolging doet, beslist de databank:
+  -- de kleur en de fase per product, en de geïnstalleerde kamers. Op het
+  -- samengevoegde document, zodat de rij van een collega meetelt maar enkel
+  -- beweegt als het moment over zijn product gaat. Bij een import niet: zie
+  -- opvolging_bijwerken_doc().
+  v_nieuw := followup.opvolging_bijwerken_doc(v_basis, v_nieuw, v_bereik, mode);
 
   -- De stempel zet de databank, niet de browser. Bij een import niet: die zet
   -- een back-up terug zoals hij was, inclusief wie wat ooit invoerde.

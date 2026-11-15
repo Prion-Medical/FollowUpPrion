@@ -18,11 +18,15 @@
 //     service key. Die sleutel gaat ongewijzigd door naar read_state() en
 //     write_state(), dus de rol, de productmuur, de stempel en de grens op
 //     verwijderen gelden hier precies zoals in de app.
-//  3. Wat een contactmoment met de kleur en de fase doet staat nu ook hier, en
-//     dat is één keer te veel: app.js (autoStatus, stageStatus, syncPipeline,
-//     syncRooms, syncNextAction) is het origineel. Voor een proef is dat
-//     aanvaardbaar. Blijft dit, dan horen die regels in de databank, zodat de
-//     app en de assistent dezelfde volgen en controle.sql ze kan nakijken.
+//  3. Wat een contactmoment met de opvolging doet — de kleur, de fase per
+//     product, de geïnstalleerde kamers — beslist de databank, bij elke
+//     opslag (write_state(), issue #21). Hier wordt alleen het moment zelf
+//     geschreven en het product aangevinkt; wat de databank ervan maakte,
+//     wordt na het schrijven teruggelezen en dát staat in het antwoord. Wat
+//     hier nog wel staat gaat niet over een contactmoment: de kleur die bij
+//     een met de hand gekozen fase hoort (stageStatus()) en wat een
+//     ziekenhuis zonder product wordt (withoutProducts()), allebei uit
+//     domain.js, en tests/regels.mjs legt ze ernaast.
 //
 // Instellen in het dashboard: "Verify JWT" moet UIT staan voor deze functie.
 // Een assistent die nog geen sleutel heeft moet hier een 401 krijgen die zegt
@@ -58,7 +62,6 @@ const STAGES = [
   "prospect", "first_contact", "meeting", "demo_planned", "demo_installed",
   "evaluation", "purchasing", "customer", "on_hold", "not_interested",
 ];
-const PRE_SALE = ["prospect", "first_contact", "meeting", "demo_planned", "demo_installed", "evaluation", "purchasing"];
 // Wat gekozen kan worden. "prospecting" hoort daar niet meer bij, maar staat
 // nog op oudere momenten: zoeken kan er dus nog op (KNOWN_TYPES).
 const ACT_TYPES = [
@@ -137,11 +140,8 @@ function family(args: Any, type: string, product: string) {
 }
 const stagesFor = (p: string) =>
   STAGES.filter((s) => s !== (isProcedure(p) ? "demo_installed" : "purchasing"));
-const stageRank = (s: string) => (s === "on_hold" || s === "not_interested" ? -1 : STAGES.indexOf(s));
 // deno-lint-ignore no-explicit-any
 type Any = any;
-const furthest = (rows: Any[]) => rows.reduce((best, e) =>
-  ((STATUS_RANK[e.status] - STATUS_RANK[best.status]) || (stageRank(e.stage) - stageRank(best.stage))) > 0 ? e : best);
 
 const uid = () => Array.from(crypto.getRandomValues(new Uint8Array(5)), (b) => b.toString(16).padStart(2, "0")).join("");
 // Onze eigen dag, niet die van de server (die staat op UTC).
@@ -244,7 +244,7 @@ const worksOn = (x: Person, product: string) => !product || !x.products.length |
 // Voor een moment: wie minstens één van zijn producten heeft, ziet het.
 const worksOnAny = (x: Person, r: Any) => !productsOf(r).length || !x.products.length || productsOf(r).some((p) => x.products.includes(p));
 // Voor wie een gepland moment is: wie eraan is toegewezen, en anders wie het
-// invoerde. Dezelfde regel als assigneeOf() in app.js.
+// invoerde. Dezelfde regel als assigneeOf() in domain.js.
 const assigneeOf = (p: Any) => p.assignee || p.createdBy || "";
 // Welke velden moeten leeg? Onbekende namen weigeren we, anders denkt de
 // assistent dat iets gewist is wat er nog staat.
@@ -358,8 +358,16 @@ async function mustWrite(token: string) {
 // Eén weg voor elke wijziging: lezen, nakijken wie dit is, de wijziging op het
 // verse document zetten en het terugschrijven met de tijdstempel die we lazen.
 // Sloeg iemand net op hetzelfde moment op, dan één keer opnieuw.
+//
+// after: voor een antwoord over wat de databank zelf beslist (de opvolging na
+// een contactmoment, de kleur van het ziekenhuis). Na een geslaagde opslag
+// wordt het document opnieuw gelezen, met dezelfde sleutel en dus dezelfde
+// muur, en after() maakt het antwoord uit wat er werkelijk staat. Lukt dat
+// lezen niet, dan krijgt after() null: er is toch opgeslagen, en dat moet het
+// antwoord zeggen, niet "mislukt", want dan zou de assistent het moment een
+// tweede keer invoeren.
 type State = { doc: Any; role: string; scope: string[]; updatedAt: string };
-async function change<T>(token: string, fn: (s: State) => T | Promise<T>): Promise<T> {
+async function change<T>(token: string, fn: (s: State) => T | Promise<T>, after?: (stored: Any, out: T) => Any): Promise<Any> {
   for (let attempt = 0; ; attempt++) {
     const { doc, updatedAt, role, scope } = await loadState(token);
     if (!["admin", "editor", "contributor"].includes(role)) {
@@ -372,8 +380,24 @@ async function change<T>(token: string, fn: (s: State) => T | Promise<T>): Promi
       if ((e as { hint?: string }).hint === "conflict" && attempt === 0) continue;
       throw e;
     }
-    return out;
+    if (!after) return out;
+    let stored: Any = null;
+    try { stored = (await loadState(token)).doc; } catch { /* opgeslagen, maar niet teruggelezen */ }
+    // Ook een fout in after() zelf mag niet als mislukte opslag terugkomen: de
+    // assistent zou het moment dan een tweede keer invoeren.
+    try { return after(stored, out); } catch { return after(null, out); }
   }
+}
+const UNREAD = "Saved, but what the database settled on could not be read back. get_hospital shows it.";
+// Het ziekenhuis zoals de databank het na de opslag teruggaf, of niets.
+const storedHospital = (stored: Any, id: unknown) => (Array.isArray(stored?.hospitals) ? stored.hospitals.find((x: Any) => x && x.id === id) : null) || null;
+// De opvolging die een moment raakt, zoals ze opgeslagen is: per product van
+// het moment, en zonder product die van het ziekenhuis zelf. Een product dat
+// dit account niet ziet, staat er niet in: de databank stuurde die rij niet.
+function followUpOf(h: Any, rec: Any) {
+  const rows = productsOf(rec).filter((p) => rowOf(h, p)).map((p) => ({ product: p, stage: rowOf(h, p).stage, status: rowOf(h, p).status }));
+  if (productsOf(rec).length > 1) return rows;
+  return rows.length ? rows[0] : { stage: h.stage, status: h.status };
 }
 
 function hospitalIn(doc: Any, id: unknown) {
@@ -425,15 +449,17 @@ const rowOf = (h: Any, p: string) => (isPlain(h.pipeline) && Object.hasOwn(h.pip
 const isPlain = (v: unknown) => !!v && typeof v === "object" && !Array.isArray(v);
 const addLine = (text: unknown, line: string) => [String(text || "").trim(), line.trim()].filter(Boolean).join("\n");
 
-// De opvolging van één product, zoals syncPipeline() in app.js ze aanmaakt.
-// first: had het ziekenhuis nog geen enkele rij? Dat stelt settle() één keer
-// vast voor alle producten samen, zoals syncPipeline() in app.js: komen er
-// twee tegelijk bij, dan erven ze allebei de fase van het ziekenhuis, niet
-// alleen het eerste.
-function ensureRow(h: Any, p: string, first: boolean) {
-  if (rowOf(h, p)) return;
+// Een rij voor een product dat er nog geen heeft, alleen voor update_follow_up:
+// wat daar met de hand gezet wordt (fase, kleur, toewijzing, gegevens) moet in
+// dezelfde opslag ergens op landen. Gemaakt zoals de databank het anders zelf
+// zou doen: zonder enige rij erft ze de kleur en de fase van het ziekenhuis
+// (followup.opvolging_aanvullen()), anders begint ze als prospect, of als
+// eerste contact wanneer er al een moment over dit product is. Bij een
+// contactmoment maakt de databank de rij; dan gebeurt hier niets.
+function newRow(h: Any, p: string) {
+  if (!isPlain(h.pipeline)) h.pipeline = {};
   const contacted = h.activities.some((a: Any) => productsOf(a).includes(p));
-  const e: Any = first ? { stage: h.stage, status: h.status, owner: "" }
+  const e: Any = !Object.keys(h.pipeline).length ? { stage: h.stage, status: h.status, owner: "" }
     : { stage: contacted ? "first_contact" : "prospect", status: contacted ? "orange" : "red", owner: "" };
   if (!STAGES.includes(e.stage)) e.stage = "prospect";
   if (!(e.status in STATUS_RANK)) e.status = "red";
@@ -441,21 +467,12 @@ function ensureRow(h: Any, p: string, first: boolean) {
   const blank: Any = { cmm: "", prio: null, doesAlready: "", currentSystem: "", notes: "" };
   for (const k of factsFor(p)) e[k] = blank[k];
   h.pipeline[p] = e;
+  return e;
 }
-// Elk aangevinkt product een rij, en op het ziekenhuis het product dat het
-// verst staat. Zonder product houdt het ziekenhuis zijn eigen kleur en fase.
-function settle(h: Any) {
-  if (!isPlain(h.pipeline)) h.pipeline = {};
-  const first = !Object.keys(h.pipeline).length;
-  // Een product dat we niet kennen krijgt geen rij: het staat in de gegevens,
-  // maar niet in dit bestand, en raden hoe het zich gedraagt doen we niet.
-  for (const p of h.products) if (PRODUCTS.includes(p)) ensureRow(h, p, first);
-  const rows = h.products.map((p: string) => rowOf(h, p)).filter(Boolean);
-  if (rows.length) { const f = furthest(rows); h.status = f.status; h.stage = f.stage; }
-}
-function useProduct(h: Any, product: string) {
+// Het product aanvinken op het ziekenhuis. De rij en de kleur van het
+// ziekenhuis volgen in de databank.
+function tick(h: Any, product: string) {
   if (product && !h.products.includes(product)) h.products.push(product);
-  settle(h);
 }
 // syncNextAction() uit app.js; de databank rekent dit zelf ook na.
 // Op datum, met wat geen datum heeft vooraan, zoals fix_planned() in de
@@ -471,63 +488,38 @@ function sortPlanned(h: Any) {
   h.nextAction = p ? p.note : "";
 }
 
-// autoStatus() uit app.js: het contactmoment beweegt de opvolging van zijn
-// eigen product. Zonder product: de enige rij die er is, en niets als er
-// meerdere zijn — liever dat dan het verkeerde product groen maken.
-function autoStatus(h: Any, act: Any, scope: string[]) {
-  const rows = scope.filter((p) => h.products.includes(p) && rowOf(h, p));
-  // Gaat het over meer dan één product, dan beweegt elk van die rijen mee.
-  const about = productsOf(act).filter((p) => rowOf(h, p));
-  const targets: [Any, string][] = about.length ? about.map((p) => [rowOf(h, p), p])
-    : rows.length === 1 ? [[rowOf(h, rows[0]), rows[0]]] : rows.length ? [] : [[h, ""]];
-  for (const [x, p] of targets) {
-    if ((act.type === "installation" || act.type === "order") && x.status !== "green") {
-      x.status = "green";
-      if (PRE_SALE.includes(x.stage)) x.stage = "customer";
-    } else if (x.status === "red") {
-      x.status = "orange";
-      if (x.stage === "prospect") x.stage = "first_contact";
-    }
-    // Een procedure waar een van ons bij stond telt hier als een demo: het
-    // product is gebruikt en wordt dus geëvalueerd. Een klant blijft klant.
-    if ((act.type === "demo" || act.type === "procedure") && ["prospect", "first_contact", "meeting", "demo_planned"].includes(x.stage)) {
-      x.stage = isProcedure(p) ? "evaluation" : "demo_installed";
-    }
-  }
-}
-// stageStatus() uit app.js: de fase bepaalt mee de kleur.
+// stageStatus() uit domain.js: de kleur die bij een met de hand gekozen fase
+// hoort. Gaat niet over een contactmoment en blijft dus hier.
 function stageStatus(x: Any, contacted: boolean) {
   if (x.stage === "customer") x.status = "green";
   else if (x.stage === "prospect") x.status = contacted ? x.status : "red";
   else if (x.stage !== "not_interested" && x.status !== "green") x.status = "orange";
 }
 
-// Een contactmoment in het logboek zetten, met alles wat daaruit volgt.
-function logActivity(h: Any, rec: Any, scope: string[]) {
+// Een contactmoment in het logboek zetten en zijn producten aanvinken. Wat
+// het met de kleur, de fase en de geïnstalleerde kamers doet, beslist de
+// databank bij het opslaan; reportMoment() leest dat daarna terug.
+function logActivity(h: Any, rec: Any) {
   const before = { status: h.status, stage: h.stage };
   h.activities.push(rec);
-  for (const p of productsOf(rec)) useProduct(h, p);
-  if (!productsOf(rec).length) settle(h);
-  autoStatus(h, rec, scope);
-  settle(h);
-  // syncRooms(): een installatie telt kamers op, een stopzetting af, en alleen
-  // bij een product per abonnement. Het aantal demokamers rekent de databank
-  // zelf na.
-  if (productsOf(rec).length <= 1 && !isProcedure(productOf(rec)) && rec.rooms) {
-    const delta = rec.type === "installation" ? rec.rooms : rec.type === "cancellation" ? -rec.rooms : 0;
-    if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
-      h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);
-    }
-  }
-  const row = productOf(rec) ? h.pipeline[productOf(rec)] : null;
-  const several = productsOf(rec).length > 1;
+  for (const p of productsOf(rec)) tick(h, p);
   return {
-    saved: true,
-    hospital: h.name,
-    contact_moment: { id: rec.id, date: rec.date, type: rec.type, ...named(rec), quantity: rec.rooms, ...(rec.family ? { family: rec.family } : {}), note: rec.note },
-    follow_up: several ? productsOf(rec).map((p) => ({ product: p, stage: h.pipeline[p].stage, status: h.pipeline[p].status }))
-      : row ? { product: productOf(rec), stage: row.stage, status: row.status } : { stage: h.stage, status: h.status },
-    changed_hospital_status: before.status !== h.status || before.stage !== h.stage,
+    hospitalId: h.id, before, rec,
+    reply: {
+      saved: true,
+      hospital: h.name,
+      contact_moment: { id: rec.id, date: rec.date, type: rec.type, ...named(rec), quantity: rec.rooms, ...(rec.family ? { family: rec.family } : {}), note: rec.note },
+    },
+  };
+}
+// Het antwoord bij een nieuw contactmoment, uit wat er opgeslagen is.
+function reportMoment(stored: Any, out: ReturnType<typeof logActivity>) {
+  const h = storedHospital(stored, out.hospitalId);
+  if (!h) return { ...out.reply, follow_up: UNREAD };
+  return {
+    ...out.reply,
+    follow_up: followUpOf(h, out.rec),
+    changed_hospital_status: out.before.status !== h.status || out.before.stage !== h.stage,
   };
 }
 function quantity(args: Any) {
@@ -552,8 +544,8 @@ async function addContactMoment(token: string, args: Any) {
     return logActivity(h, {
       id: uid(), date, type, ...productFields(list), contactId,
       rooms: list.length <= 1 && wantsQuantity(type, product) ? qty : null, ...(fam ? { family: fam } : {}), note: String(args.note || "").trim(),
-    }, scope);
-  });
+    });
+  }, reportMoment);
 }
 
 async function addPlannedMoment(token: string, args: Any, user: Any) {
@@ -619,8 +611,8 @@ async function completePlannedMoment(token: string, args: Any) {
       id: plan.id, date, type, ...(shared(plan) ? { products: list } : { product }), contactId: String(plan.contactId || ""),
       rooms: !gedeeld && wantsQuantity(type, product) ? qty : null, ...(fam ? { family: fam } : {}),
       note: has(args, "note") ? String(args.note).trim() : String(plan.note || ""),
-    }, scope);
-  });
+    });
+  }, reportMoment);
 }
 
 async function addContact(token: string, args: Any) {
@@ -642,7 +634,6 @@ async function addContact(token: string, args: Any) {
     h.contacts.push(rec);
     if (rec.primary) setMain(h, rec);
     for (const p of products) if (!h.products.includes(p)) h.products.push(p);
-    settle(h);
     return { saved: true, hospital: h.name, contact: { id: rec.id, name, department, role: rec.role, products } };
   });
 }
@@ -688,7 +679,6 @@ async function updateContact(token: string, args: Any) {
       c.products = [...new Set([...had.filter((p) => !scope.includes(p)), ...given])];
       for (const p of c.products) if (!h.products.includes(p)) h.products.push(p);
       dropUnused(h, had.filter((p) => !c.products.includes(p)));
-      settle(h);
       changed.push("products");
     }
     // Na de producten: wie in de weg staat hangt af van welke producten hij deelt.
@@ -809,12 +799,14 @@ async function updateFollowUp(token: string, args: Any, user: Any) {
       if (!h.products.includes(product)) throw new ToolError(`${product} is not followed at this hospital.`);
       h.products = h.products.filter((p: string) => p !== product);
       withoutProducts(h);
-      settle(h);
       return { saved: true, hospital: h.name, product, followed: false, hospital_status: { stage: h.stage, status: h.status } };
     }
     const wasFollowed = h.products.includes(product);
-    useProduct(h, product);
-    const x = h.pipeline[product];
+    tick(h, product);
+    // Een product dat hier nog nooit gevolgd werd heeft nog geen rij. Die
+    // maken we hier en niet de databank, omdat wat hieronder met de hand
+    // wordt gezet in deze zelfde opslag op een rij moet landen (newRow()).
+    const x = rowOf(h, product) || newRow(h, product);
     const changed: string[] = wasFollowed ? [] : ["now followed"];
     if (has(args, "stage")) {
       x.stage = oneOf(args.stage, stagesFor(product), "stage for this product");
@@ -850,11 +842,17 @@ async function updateFollowUp(token: string, args: Any, user: Any) {
       changed.push(`${k} cleared`);
     }
     if (!changed.length) throw new ToolError("Nothing to change: give at least one field.");
-    settle(h);
     return {
       saved: true, hospital: h.name, product, follow_up: { stage: x.stage, status: x.status }, changed,
       ...(to !== undefined ? { assigned_to: to ? (to.id === user.id ? "you" : to.name) : "nobody" } : {}),
     };
+  }, (stored, out: Any) => {
+    // Wat de databank bewaarde: de rij zoals ze nu staat, en zonder product
+    // de kleur en de fase die het ziekenhuis daarna kreeg.
+    const h = storedHospital(stored, args.hospital_id);
+    if (out.followed === false) return { ...out, hospital_status: h ? { stage: h.stage, status: h.status } : UNREAD };
+    const x = h && rowOf(h, product);
+    return { ...out, follow_up: x ? { stage: x.stage, status: x.status } : UNREAD };
   });
 }
 
@@ -968,8 +966,10 @@ function describe(kind: string, h: Any, rec: Any) {
   };
 }
 
-// syncProducts() en zonderProduct() uit app.js: een product dat door niets
-// meer gebruikt wordt, gaat van het ziekenhuis af.
+// syncProducts() uit app.js en zonderProduct() uit domain.js: een product dat
+// door niets meer gebruikt wordt, gaat van het ziekenhuis af. Een vinkje
+// weghalen gaat niet over een contactmoment, dus dit blijft hier; de
+// databank rekent daarna alleen de kleur van het ziekenhuis na.
 function dropUnused(h: Any, dropped: string[]) {
   const had = h.products.length;
   for (const p of dropped) {
@@ -983,8 +983,8 @@ function dropUnused(h: Any, dropped: string[]) {
   }
   if (had) withoutProducts(h);
 }
-// zonderProduct() uit app.js: viel het laatste product weg, dan terug naar wat
-// de contactmomenten zeggen.
+// zonderProduct() uit domain.js: viel het laatste product weg, dan terug naar
+// wat de contactmomenten zeggen. tests/regels.mjs legt ze naast elkaar.
 function withoutProducts(h: Any) {
   if (h.products.length) return;
   const contacted = h.activities.length > 0;
@@ -1002,16 +1002,9 @@ function removeFrom(doc: Any, kind: string, h: Any, rec: Any) {
   if (kind === "contact") {
     h.activities.forEach((a: Any) => { if (a.contactId === rec.id) a.contactId = ""; });
     dropUnused(h, rec.products || []);
-    settle(h);
   }
-  if (kind === "contact_moment" && !isProcedure(productOf(rec)) && rec.rooms) {
-    // syncRooms() in de andere richting: wat deze installatie optelde gaat er
-    // weer af, wat deze stopzetting aftrok komt er weer bij.
-    const delta = rec.type === "installation" ? -rec.rooms : rec.type === "cancellation" ? rec.rooms : 0;
-    if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
-      h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);
-    }
-  }
+  // Een contactmoment met kamers: wat het optelde of aftrok, zet de databank
+  // bij het opslaan terug. Hier niets.
 }
 
 function target(doc: Any, kind: string, args: Any) {
@@ -1132,7 +1125,7 @@ async function listMoments(token: string, args: Any, user: Any) {
 
 // Een contactmoment of een gepland moment verbeteren. Wat is meegegeven
 // vervangt wat er stond, ook de notitie: dit is een rechtzetting, geen
-// aanvulling. Voor een contactmoment volgt de rest zoals in de app: een ander
+// aanvulling. Voor een contactmoment volgt de rest in de databank: een ander
 // soort moment beweegt de opvolging mee, en kamers worden bijgeteld of
 // afgetrokken met het verschil.
 async function updateMoment(token: string, args: Any, user: Any) {
@@ -1159,7 +1152,6 @@ async function updateMoment(token: string, args: Any, user: Any) {
     // hier dus alleen bij een moment met één product.
     const listed = Array.isArray(rec.products);
     if (listed && has(args, "product")) throw new ToolError("This moment is about several products; change its products in the app.");
-    const before = { type: rec.type, rooms: rec.rooms, product: productOf(rec) };
     const changed: string[] = [];
     if (has(args, "date")) { rec.date = String(args.date); changed.push("date"); }
     if (has(args, "type")) { rec.type = oneOf(args.type, ACT_TYPES, "type"); changed.push("type"); }
@@ -1214,21 +1206,19 @@ async function updateMoment(token: string, args: Any, user: Any) {
     // Een ander product of een andere soort moment: wat er niet meer bij
     // hoort gaat weg, zoals normalize() in de app het ook zou doen.
     if (rec.family && !(wantsFamily(rec.type, one) && familiesFor(one).includes(rec.family))) delete rec.family;
-    for (const p of productsOf(rec)) useProduct(h, p);
-    if (before.type !== rec.type) autoStatus(h, rec, scope);
-    settle(h);
-    const installed = (a: Any) => (isProcedure(productOf(a)) || !a.rooms ? 0
-      : a.type === "installation" ? a.rooms : a.type === "cancellation" ? -a.rooms : 0);
-    const delta = installed(rec) - installed(before);
-    if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
-      h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);
-    }
-    const row = one ? h.pipeline[one] : null;
+    // Het product aanvinken; een andere soort moment beweegt de opvolging en
+    // een ander aantal de geïnstalleerde kamers, maar dat doet de databank
+    // bij het opslaan. Het antwoord leest terug wat ze ervan maakte.
+    for (const p of productsOf(rec)) tick(h, p);
     return {
       saved: true, hospital: h.name, changed,
       contact_moment: { id: rec.id, date: rec.date, type: rec.type, ...named(rec), quantity: rec.rooms ?? null, ...(rec.family ? { family: rec.family } : {}), note: rec.note || "" },
-      follow_up: row ? { product: one, stage: row.stage, status: row.status } : { stage: h.stage, status: h.status },
     };
+  }, kind === "planned_moment" ? undefined : (stored, out: Any) => {
+    // Een gepland moment raakt de opvolging niet: dan wordt er niet teruggelezen.
+    const h = storedHospital(stored, args.hospital_id);
+    const rec = h && h.activities.find((x: Any) => x && x.id === args.record_id);
+    return { ...out, follow_up: h && rec ? followUpOf(h, rec) : UNREAD };
   });
 }
 

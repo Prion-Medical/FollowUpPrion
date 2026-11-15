@@ -63,10 +63,11 @@ node --experimental-strip-types tests/alles.mjs   # the flag can go from Node 23
 |---|---|
 | `tests/lijsten.mjs` | Products, stages, types (and their names), kinds of stent and facts per product agree between `domain.js`, `i18n.js`, the connector, the calendar function and `schema.sql` |
 | `tests/vertalingen.mjs` | Every key in both languages, and every key the code asks for exists |
-| `tests/regels.mjs` | The same contact moments, new and edited, through `domain.js` and the connector's `add_contact_moment` / `update_moment` give the same colour, stage, follow-up, rooms and stored record; the connector accepts exactly the types `typesAmong()` offers, for no product, one, two, a shared moment and a restricted account |
+| `tests/databank.mjs` | What a contact moment does to the follow-up: the case table between `-- regels:begin` and `-- regels:end` in `controle.sql` (stored hospital, incoming hospital, scope, expected rows, colour, stage, rooms) run through `domain.js`. `controle.sql` runs the same table through the database, so one set of cases holds both copies to the same answer |
+| `tests/regels.mjs` | The connector's `add_contact_moment` / `update_moment` store the same record as the app and leave the follow-up alone, its replies report what `read_state()` gave back after the write, `stageStatus` / `zonderProduct` / a new row in `update_follow_up` agree with `domain.js`, and it accepts exactly the types `typesAmong()` offers, for no product, one, two, a shared moment and a restricted account |
 | `tests/planning.mjs` | Planned moments: planning without a date, the order (date, time, undated first) in the app, the connector and `fix_planned()`, ticking off (id reused, time dropped, kind of stent kept, date at the latest today) and "planned for" |
 | `tests/cijfers.mjs` | Units sold, per kind of stent, and active rooms: `domain.js`'s counting against the connector's `get_statistics`, with awkward quantities |
-| `tests/samenvoegen.mjs` | `merge3()`: both sides' edits survive, a real clash is a conflict, deletions, stamps, ticks, the list form |
+| `tests/samenvoegen.mjs` | `merge3()`: both sides' edits survive, a real clash is a conflict, deletions, stamps, ticks, the list form; `momentsMoved()` fires only on what the database acts on, and after a save the database's follow-up wins while a field typed meanwhile survives |
 | `tests/agenda.mjs` | The download (`ics.js`) and the feed write the same events, and the feed answers 404 / 503 correctly |
 
 Each file runs in its own process (`alles.mjs`), and within a file every case is
@@ -89,8 +90,9 @@ into `main` leaves nothing to strip. Comment the two development lines out and
 quickest way to work on anything that is not about the database.
 
 The development project exists so that a schema change can be tried before it reaches
-anyone's work: run `schema.sql` there first, then `versie.sql`, `toegang.sql` and
-`controle.sql`, and only then the same against the live project — from disk, as ever.
+anyone's work: run `schema.sql` there first, then `versie.sql`, `toegang.sql`,
+`controle.sql` and `gebruiker.sql`, and only then the same against the live project —
+from disk, as ever.
 
 It holds **invented data only**: the forty hospitals from `data/seed.json` plus made-up
 clinicians on `example.com`. Never an export from the live database. That would put
@@ -107,11 +109,14 @@ identical blank rows.
 
 Two things that cost an evening to find out:
 
-- **Part C of `controle.sql` wants a uuid in five places.** It can look itself up
-  instead: `set_config('request.jwt.claims', …, true)` does what the `set local` line
-  there does and accepts a subquery. Look the uuid up *before* switching role, since
-  `authenticated` may not read `auth.users`. Run those blocks one at a time — the first
-  failure stops the whole transaction, and three of them are supposed to fail.
+- **The checks as a real user are one script.** `supabase/gebruiker.sql` (part C of
+  `controle.sql` until November 2026) takes the uuid once, at the top —
+  `sed 's/PLAK-HIER-HET-UUID/<uuid>/' supabase/gebruiker.sql | pbcopy` — and runs
+  every check in a sub-transaction of its own that is always rolled back, so the three
+  that are supposed to fail no longer stop the rest. Use the `contributor` limited to
+  Ainex: C1 and C2 work with anyone, C3 means something only with that account. A
+  moment without an id is put last on a restricted round trip, so C2b says FOUT on a
+  document holding one; the app and the connector never write one.
 - **Seeding by writing to `app_state` directly** leaves a document that never went
   through `write_state()`, and C2b then reports FOUT for no good reason:
   `merge_hospital()` always writes a `planned` key and `seed.json` has none, so the
@@ -261,7 +266,11 @@ needs its own copy, since it cannot read that file: `followup.producten()` in
 `supabase/schema.sql`. That one only fixes the sort order — an unknown product
 sorts last rather than being refused, so an app that already knows a new product
 does not break against a database that has not been updated yet. So: two lines,
-one per side, and a seventh product also wants a `--series-7`.
+one per side, and a seventh product also wants a `--series-7`. A product sold per
+piece needs a third: `followup.per_ingreep()`, the database's copy of
+`productKind()`, or the database counts its quantities as installed rooms.
+`tests/lijsten.mjs` compares all three, and the connector's `PRODUCTS` and
+`PROCEDURE`.
 
 **Regions.** `REGIONS` in `public/domain.js` says which countries make up a
 region and which piece of map belongs to it; `COUNTRIES` is derived from it. A
@@ -475,6 +484,39 @@ instead. Derived like `isOverdue()`, so nothing is stored and nothing migrates.
 `autoStatus()` and `stageStatus()` hold the rules. Manual override must always remain
 possible.
 
+**The database decides what a contact moment does.** `write_state()` runs
+`followup.opvolging_bijwerken_doc()` on every ordinary save (never on an import):
+per hospital it compares with what was stored and applies the rules only to contact
+moments that are **new** or whose **type changed** — so a stage set by hand stays —
+and only to rows within the saver's scope, so a restricted user never moves a
+colleague's row, not even through a shared moment. It also gives every ticked product
+a row, sets `unit.roomsInstalled` to the stored count plus the change the moments
+make (`followup.geinstalleerd()`), and recomputes the hospital's colour and stage
+when a rule fired or the products or rows changed. An unchanged save changes
+nothing. `autoStatus()`, `syncPipeline()` and `syncRooms()` in `domain.js` are still
+run by the app, as a preview that shows the colour at once and that `server.py`
+mode depends on; after a save that added, removed or changed a contact moment the
+app does not adopt the timestamp that save returned (`store.save()` returns it,
+`store.accept()` adopts it), so to the app the document is not yet its own, exactly
+as after a colleague's save. It fetches and merges at once through `pull()`, or,
+while someone is typing, dragging a pin or has a dropdown open (`handsBusy()`), the
+quiet refresh does it later, and a save that comes first meets a conflict and merges
+along the ordinary path. An import, which never merges, first adopts the withheld
+timestamp (`heldAt`): all it overwrites is what the database decided about our own
+previous save. No flag of its own: one conflict mechanism, so the
+database's answer is what stays. If someone changed by hand, in those few hundred
+milliseconds, the very field the database just moved, that is an ordinary clash:
+the banner, and a reload. The connector
+keeps no copy at all: it writes the moment and the product tick and reads the
+result back. Two costs, accepted: a stage set by hand and a room count typed by hand
+in the same save as a new moment are overruled, and when one save holds several
+room moments the database clamps the net change once where `syncRooms()` clamps per
+moment (`controle.sql` case 120, checked on the database side only). Older stored
+shapes — `rooms` as text, an unknown type, a moment without an id — are read the
+way the app's `normalize()` reads them, so a save that changes nothing still moves
+nothing. `stageStatus()` and `zonderProduct()`
+are not about a contact moment and stay in the app and the connector.
+
 **Follow-up per product.** `h.pipeline` holds one row per product:
 `{ stage, status, owner }`, where `owner` is a uuid from `app_users`. A hospital can
 be an EndoQ customer and a Thyroid RFA prospect at once. `h.status` and `h.stage` on
@@ -636,8 +678,10 @@ and that moment may be the other product's — sending it unrecomputed would han
 restricted browser the text of a record the wall had just removed. `roomsDemo` only
 when the demo activities themselves changed: the field is also typed by hand in the
 record, and recomputing on every save would wipe what someone put there.
-`unit.roomsInstalled` is not: `syncRooms()` applies a *difference*, not a sum, so it is
-already safe.
+`unit.roomsInstalled` is recomputed as the stored count plus the difference the
+saved contact moments make — not the browser's number plus that difference, which
+would count an installation twice — and left alone when no moment changed it, so a
+count typed by hand stays.
 
 `pipeline` sits inside the wall like a contact moment. `scope_hospital()` passes only
 the rows within scope and recomputes the hospital's status and stage on what is left
@@ -696,14 +740,19 @@ Three rules it rests on:
   to `read_state()` and `write_state()`, so the role, the product wall, the stamp and
   the cap on deletions apply exactly as in the app. `controle.sql` therefore still
   says everything there is to say about what an assistant can reach.
-- **The rules now exist in a third place.** What a contact moment does to the colour
-  and the stage (`autoStatus`, `stageStatus`, `syncPipeline`, `syncRooms`), the
-  order of planned moments (`byWhen`, `tickOffDate`), the fixed lists and the type
-  rules (`typesFor`, `typesAmong`, `shared`) and the counting rules (`units`,
-  `rooms`, `signedRooms`) live in `domain.js` and are copied into the function.
-  Change one in `domain.js` and it must change there too. `tests/` runs the same
-  moments, plans and figures through both and fails when they disagree. If the connector stays, these belong in the database, where the app and the
-  assistant would share them and `controle.sql` could check them (issue #21).
+- **The database moves the follow-up, not the connector.** What a contact moment
+  does to the colour, the stage and the rooms is decided in `write_state()` (see
+  "The database decides what a contact moment does"); the connector writes the
+  moment, ticks its products and reports what `read_state()` gives back after the
+  write. If that read fails, the reply still says it was saved, so the assistant does
+  not log the moment twice. What it still copies from `domain.js` — `stageStatus`
+  and `zonderProduct` for hand edits, a new row in `update_follow_up`, the order of
+  planned moments (`byWhen`, `tickOffDate`), the fixed lists, the type rules
+  (`typesFor`, `typesAmong`, `shared`) and the counting rules (`units`, `rooms`,
+  `signedRooms`) — `tests/` compares with the original. **Deploy order:** the schema
+  first, then the connector. The old connector against the new schema is harmless,
+  since the rules give the same answer twice; the new connector against an old schema
+  logs moments that move nothing.
 
 Signing in goes through Supabase Auth acting as an OAuth server. In the dashboard:
 OAuth Server on, authorization path `/consent.html`, dynamic client registration off,
