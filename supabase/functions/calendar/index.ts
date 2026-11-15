@@ -15,8 +15,9 @@
 // dashboard plakken, met "Verify JWT" UIT: een agenda-app stuurt geen sleutel
 // mee.
 //
-// De vorm van een afspraak is een kopie van public/ics.js (de download van één
-// moment in de app). Verander je de ene, verander dan ook de andere.
+// Hoe een afspraak eruitziet, houdt tests/agenda.mjs vast, regel voor regel.
+// Tot november 2026 stond dezelfde vorm ook in public/ics.js, voor de
+// download van één moment; die download is weg, dit is de enige plek.
 
 const SUPABASE_URL = (Deno.env.get("SUPABASE_URL") || "").replace(/\/$/, "");
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
@@ -36,7 +37,7 @@ const TYPES: Record<string, Record<string, string>> = {
   },
 };
 
-// ---------- iCalendar: kopie van public/ics.js ----------
+// ---------- iCalendar ----------
 
 const ZONES: Record<string, string> = { BE: "Europe/Brussels", NL: "Europe/Brussels", LU: "Europe/Brussels" };
 const VTIMEZONE: Record<string, string[]> = {
@@ -50,7 +51,7 @@ const VTIMEZONE: Record<string, string[]> = {
   ],
 };
 
-// Zie public/ics.js: het id staat onontsnapt in UID, dus enkel veilige tekens;
+// Het id staat onontsnapt in UID, dus enkel veilige tekens;
 // een land of soort opzoeken zonder via het prototype te gaan.
 const uidOf = (id: unknown) => String(id ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64) || "x";
 const zoneOf = (country: string) => (Object.hasOwn(ZONES, country) ? ZONES[country] : "");

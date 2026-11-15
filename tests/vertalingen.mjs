@@ -14,7 +14,7 @@ await geval("beide talen", () => {
 
 // Sleutels die letterlijk in de code staan.
 await geval("gevraagde sleutels", () => {
-  const code = ["public/app.js", "public/stats.js", "public/domain.js", "public/ui.js", "public/storage.js", "public/consent.js"]
+  const code = ["public/app.js", "public/feeds.js", "public/stats.js", "public/domain.js", "public/ui.js", "public/storage.js", "public/consent.js"]
     .map(lees).join("\n");
   const html = ["public/index.html", "public/consent.html"].map(lees).join("\n");
   const gevraagd = new Set([

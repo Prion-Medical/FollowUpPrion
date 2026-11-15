@@ -243,8 +243,6 @@ p.muted { margin: 0 0 8px; }
 }
 .icon-btn:hover { background: var(--hover); color: var(--ink); }
 .icon-btn:active { background: var(--press); transform: scale(0.94); }
-/* De lege plaats van een knop die er bij deze regel niet is: zie ICON_SLOT. */
-.icon-btn.icon-slot { visibility: hidden; }
 .icon-btn[aria-pressed="true"] { color: var(--accent); }
 
 /* ---------- topbalk ---------- */
@@ -1051,7 +1049,7 @@ body[data-rights~="no-write"] #addHospitalBtn,
 body[data-rights~="no-write"] .tabbar [data-action="add"],
 body[data-rights~="no-write"] .status-pick,
 body[data-rights~="no-write"] .c-actions,
-body[data-rights~="no-write"] .fiche [data-act]:not([data-act="close"]):not([data-act="show-map"]):not([data-act="ics-planned"]),
+body[data-rights~="no-write"] .fiche [data-act]:not([data-act="close"]):not([data-act="show-map"]),
 body[data-rights~="no-write"] .agenda-view [data-ag="done"],
 body[data-rights~="no-write"] .agenda-view [data-ag="edit"],
 body[data-rights~="no-delete"] [data-act="delete"],

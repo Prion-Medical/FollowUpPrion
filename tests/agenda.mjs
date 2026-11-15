@@ -1,12 +1,11 @@
-// Een afspraak ziet er op twee plaatsen hetzelfde uit: als download in de app
-// (public/ics.js) en in een agenda-abonnement (supabase/functions/calendar).
-// De functie kan ics.js niet inlezen en houdt een kopie. Deze controle maakt
-// dezelfde afspraken langs beide wegen en vergelijkt de tekst, regel voor
-// regel, op het tijdstip van aanmaken na.
+// Wat een agenda-abonnement (supabase/functions/calendar) van de geplande
+// momenten maakt. Tot november 2026 was er ook een download van één moment
+// (public/ics.js) en vergeleek dit bestand die twee; die download is weg, dus
+// staat hier wat het abonnement moet schrijven, regel voor regel, op het
+// tijdstip van aanmaken na.
 import assert from "node:assert/strict";
-import { browserbestand, edgeFunctie, vertalingen } from "./laad.mjs";
+import { edgeFunctie, vertalingen } from "./laad.mjs";
 
-const Ics = browserbestand("public/ics.js", { TextEncoder }).FollowUpIcs;
 const V = vertalingen();
 
 // Verzonnen momenten, met wat het moeilijk maakt: een uur dat over
@@ -28,21 +27,41 @@ const handler = await edgeFunctie("supabase/functions/calendar/index.ts", async 
 });
 const vraag = async (geheim) => handler(new Request(`https://test.supabase.co/functions/v1/calendar/${geheim}.ics`));
 
+// Wat er per moment in het abonnement hoort, zonder DTSTAMP (het tijdstip van
+// aanmaken). Een uur in de Benelux staat in de zone van Brussel en loopt een
+// uur, ook over middernacht en jaareinde; zonder uur is het een hele dag die
+// niet als bezet telt; een land zonder zone krijgt een zwevend uur. Leestekens
+// zijn ontsnapt en een lange regel is gevouwen.
+const AFSPRAKEN = (soort) => [
+  "BEGIN:VEVENT", "UID:p1@followup.prionmedical.be",
+  "DTSTART;TZID=Europe/Brussels:20261231T233000", "DTEND;TZID=Europe/Brussels:20270101T003000",
+  `SUMMARY:${soort("demo")} · EndoQ · AZ Proef – Campus Écluse`,
+  "LOCATION:AZ Proef – Campus Écluse\\, Proefstraat 1\\, 8800 Roeselare",
+  "DESCRIPTION:Uitleg\\; tweede punt\\, derde\\nnieuwe regel " + "é".repeat(60),
+  "END:VEVENT",
+  "BEGIN:VEVENT", "UID:p2@followup.prionmedical.be",
+  "DTSTART;VALUE=DATE:20260228", "DTEND;VALUE=DATE:20260301", "TRANSP:TRANSPARENT",
+  `SUMMARY:${soort("procedure")} · Stents · UZ Verzonnen`, "LOCATION:UZ Verzonnen",
+  "END:VEVENT",
+  "BEGIN:VEVENT", "UID:p3@followup.prionmedical.be",
+  "DTSTART:20260301T090000", "DTEND:20260301T100000",
+  `SUMMARY:${soort("visit")} · Thyroid RFA\\, Fibroid RFA · Proefziekenhuis`, "LOCATION:Proefziekenhuis\\, Laan 2",
+  "END:VEVENT",
+];
 for (const taal of ["nl", "en"]) {
   antwoord = [200, { label: "Proef", lang: taal, events: MOMENTEN }];
   const res = await vraag("a".repeat(64));
   assert.equal(res.status, 200);
   assert.match(res.headers.get("Content-Type"), /^text\/calendar/);
-  // Wat enkel een abonnement heeft (hoe vaak opnieuw ophalen) en het tijdstip
-  // van aanmaken laten we weg; de rest moet gelijk zijn.
-  const zonder = (tekst) => tekst.replace(/\r\n /g, "").split("\r\n")
-    .filter((r) => !/^(DTSTAMP|REFRESH-INTERVAL|X-PUBLISHED-TTL):/.test(r.split(";")[0] + ":"));
-  const verwacht = Ics.calendar(MOMENTEN.map((m) => ({
-    id: m.id, date: m.date, time: m.time, country: m.country,
-    title: Ics.title(V.t(taal, "act." + m.type), m.products, m.hospital),
-    location: Ics.place(m.hospital, m.address), description: m.note,
-  })), "FollowUp · Proef");
-  assert.deepEqual(zonder(await res.text()), zonder(verwacht), `agenda (${taal}): het abonnement en de download verschillen`);
+  const tekst = await res.text();
+  assert.ok(tekst.endsWith("END:VCALENDAR\r\n") && !/[^\r]\n/.test(tekst), `agenda (${taal}): elke regel eindigt op CRLF`);
+  const lang = tekst.split("\r\n").filter((r) => new TextEncoder().encode(r).length > 75);
+  assert.deepEqual(lang, [], `agenda (${taal}): een regel is langer dan 75 bytes`);
+  const regels = tekst.replace(/\r\n /g, "").split("\r\n");
+  assert.ok(regels.includes("X-WR-CALNAME:FollowUp · Proef"), `agenda (${taal}): de naam van het abonnement`);
+  assert.ok(regels.includes("TZID:Europe/Brussels"), `agenda (${taal}): de tijdzone staat erin`);
+  const afspraken = regels.slice(regels.indexOf("BEGIN:VEVENT"), regels.lastIndexOf("END:VEVENT") + 1).filter((r) => !r.startsWith("DTSTAMP:"));
+  assert.deepEqual(afspraken, AFSPRAKEN((k) => V.t(taal, "act." + k)), `agenda (${taal}): de afspraken`);
 }
 
 // Wat iemand met schrijfrecht in het document kan zetten, mag geen eigen
@@ -58,11 +77,6 @@ antwoord = [200, { label: "", lang: "nl", events: [kwaad, { ...kwaad, id: "goed1
   assert.ok(!/\r\nURL:/.test(tekst), "een id met regeleinden maakt geen eigen eigenschap in het abonnement");
   assert.equal((tekst.match(/BEGIN:VEVENT/g) || []).length, 1, "het moment met een kwaad id valt weg, het goede blijft");
   assert.match(tekst, /SUMMARY:Andere · AZ Proef/, "een onbekende soort heet 'Andere', niet een functie uit het prototype");
-}
-{
-  const tekst = Ics.calendar([{ ...kwaad, title: "t", location: "", description: "" }], "");
-  assert.ok(!/\r\nURL:/.test(tekst), "de download laat een id met regeleinden geen eigen eigenschap maken");
-  assert.equal((tekst.match(/BEGIN:VEVENT/g) || []).length, 1, "de download maakt van één moment één afspraak");
 }
 
 // Een onbekend geheim en een databank die hapert zijn niet hetzelfde: met een

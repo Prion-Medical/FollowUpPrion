@@ -109,4 +109,25 @@ await geval("werktuigen: verplicht ≠ weglaten", () => {
   }
 });
 
+// Wat app.js, stats.js en feeds.js van domain.js gebruiken, moeten ze er ook
+// uithalen: een naam die enkel in domain.js bestaat, geeft pas een fout als
+// die regel loopt. typesOffered() ontbrak zo in app.js en hield de app bij het
+// laden tegen voor wie op het logboek stond.
+await geval("elke regel uit domain.js die een bestand oproept, haalt het er ook uit", () => {
+  const namen = Object.keys(D).filter((k) => typeof D[k] === "function");
+  const mis = [];
+  for (const pad of ["public/app.js", "public/stats.js", "public/feeds.js"]) {
+    const code = lees(pad);
+    // Wat het bestand uit window.FollowUpDomain haalt, en wat het zelf maakt.
+    const gehaald = new Set([...code.matchAll(/const \{([^}]*)\} = window\.FollowUpDomain/g)]
+      .flatMap((m) => m[1].split(",").map((s) => s.trim()).filter(Boolean)));
+    const eigen = (n) => new RegExp(`(?:const|let|function)\\s+${n}\\b`).test(code);
+    for (const n of namen) {
+      const opgeroepen = new RegExp(`(?<![\\w.$])${n}\\(`).test(code);
+      if (opgeroepen && !gehaald.has(n) && !eigen(n) && !code.includes(`FollowUpDomain.${n}`)) mis.push(`${pad}: ${n}`);
+    }
+  }
+  assert.deepEqual(mis, [], "opgeroepen maar niet uit domain.js gehaald");
+});
+
 klaar("lijsten");

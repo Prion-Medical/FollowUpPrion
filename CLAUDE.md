@@ -52,8 +52,7 @@ deploy that skips the stamp bump ships nothing.
 
 Some rules live in more than one place, because the app, the connector, the database
 and the calendar feed cannot share a file: the product, stage and type lists, the type
-names, what a contact moment does to the colour, stage and rooms, and what an event
-looks like. Nothing fails when two copies drift apart, so `tests/` checks it:
+names, what a contact moment does to the colour, stage and rooms. Nothing fails when two copies drift apart, so `tests/` checks it:
 
 ```bash
 node --experimental-strip-types tests/alles.mjs   # the flag can go from Node 23.6
@@ -61,14 +60,14 @@ node --experimental-strip-types tests/alles.mjs   # the flag can go from Node 23
 
 | File | Checks |
 |---|---|
-| `tests/lijsten.mjs` | Products, stages, types (and their names), the counting types, kinds of stent and facts per product agree between `domain.js`, `i18n.js`, the connector, the calendar function and `schema.sql` |
+| `tests/lijsten.mjs` | Products, stages, types (and their names), the counting types, kinds of stent and facts per product agree between `domain.js`, `i18n.js`, the connector, the calendar function and `schema.sql`; and `app.js`, `stats.js` and `feeds.js` import every `domain.js` function they call |
 | `tests/vertalingen.mjs` | Every key in both languages, and every key the code asks for exists |
 | `tests/databank.mjs` | What a contact moment does to the follow-up: the case table between `-- regels:begin` and `-- regels:end` in `controle.sql` (stored hospital, incoming hospital, scope, expected rows, colour, stage, rooms) run through `domain.js`. `controle.sql` runs the same table through the database, so one set of cases holds both copies to the same answer |
 | `tests/regels.mjs` | The connector's `add_contact_moment` / `update_moment` store the same record as the app and leave the follow-up alone, its replies report what `read_state()` gave back after the write, `stageStatus` / `zonderProduct` / a new row in `update_follow_up` agree with `domain.js`, and it accepts exactly the types `typesAmong()` offers, for no product, one, two, a shared moment and a restricted account |
 | `tests/planning.mjs` | Planned moments: planning without a date, the order (date, time, undated first) in the app, the connector and `fix_planned()`, ticking off (id reused, time dropped, kind of stent kept, date at the latest today) and "planned for" |
 | `tests/cijfers.mjs` | Units sold, per kind of stent, and active rooms: `domain.js`'s counting against the connector's `get_statistics`, with awkward quantities |
 | `tests/samenvoegen.mjs` | `merge3()`: both sides' edits survive, a real clash is a conflict, deletions, stamps, ticks, a moment about several products; `momentsMoved()` fires only on what the database acts on, and after a save the database's follow-up wins while a field typed meanwhile survives |
-| `tests/agenda.mjs` | The download (`ics.js`) and the feed write the same events, and the feed answers 404 / 503 correctly |
+| `tests/agenda.mjs` | What the calendar feed writes, line by line (time zones, a whole day, a floating hour, escaping, folding), that a hostile id or type cannot add lines, and that it answers 404 / 503 correctly |
 
 Each file runs in its own process (`alles.mjs`), and within a file every case is
 reported, so one run lists everything that is broken. Run it before every commit,
@@ -129,7 +128,7 @@ Two things that cost an evening to find out:
 |---|---|
 | `public/domain.js` | Fixed values and pure rules both app.js and stats.js need: what a contact moment does to colour, stage and rooms (`autoStatus`, `syncPipeline`, `syncRooms`), the order of planned moments (`byWhen`), how units and rooms are counted, plus `esc()` and `pickBox()`. The connector copies these; `tests/` compares the copies |
 | `public/ui.js` | What the page does without knowing about hospitals: icons, `leave()`, `ask()`, row motion, the sliding switch, the select list |
-| `public/app.js` | The whole app: map, list, record, agenda, dialogs, export/import (~1,500 lines) |
+| `public/app.js` | The whole app: map, list, record, agenda, dialogs, export/import (~3,300 lines) |
 | `public/i18n.js` | NL/EN dictionaries and `t()` |
 | `public/stats.js` | Statistics page, charts as plain HTML |
 | `public/storage.js` | Two backends: local `server.py`, or Supabase with login |
@@ -139,7 +138,7 @@ Two things that cost an evening to find out:
 | `data/seed.json` | 40 starter hospitals (BE/NL/LU), no contacts, approximate coordinates |
 | `public/consent.html`, `consent.js` | The page where someone allows an assistant to act as them (see The assistant connector) |
 | `supabase/functions/agent/index.ts` | The connector an assistant such as Claude talks to: a Supabase Edge Function, one file, no imports |
-| `public/ics.js` | Writes iCalendar: one planned moment as a file to download |
+| `public/feeds.js` | The calendar subscription as you see it: the "Abonneren" dialog and every subscription on the users screen. It reaches nothing in `app.js` but what `init()` hands it |
 | `supabase/functions/calendar/index.ts` | The calendar feed a calendar app fetches: an Edge Function, one file, no imports (see The calendar feed) |
 | `docs/agent-instructions.md` | What to paste into the assistant's project so it behaves like a colleague who keeps the log |
 
@@ -855,8 +854,9 @@ One way only — the calendar shows, planning stays here. A planned moment becom
 event with the type, product and hospital as its title, the hospital's name and
 address as the location, and the note; with a `time` it lasts an hour, without one
 it is a whole day. No contact person: that is a clinician's name in a third
-party's calendar, on lock screens. A single moment can also be downloaded as a
-file (`public/ics.js`), which is a copy that does not follow changes.
+party's calendar, on lock screens. There is no download of a single moment any
+more: it was a copy that did not follow changes, and the subscription does the
+same job properly.
 
 - **The address is the key.** A calendar app signs in as nobody, so the address
   carries a 64-hex secret. `public.calendar_feeds` keeps only its SHA-256, so the
@@ -880,6 +880,9 @@ file (`public/ics.js`), which is a copy that does not follow changes.
 - **Managed by a person.** `feed_create()`, `feed_list()` and `feed_remove()` all
   refuse an assistant's key (`via_assistant()`), and `feed_create()` takes an
   advisory lock so two simultaneous calls cannot pass the cap of ten together.
+  The cap lives in one place, `followup.feed_max()`: `feed_list()` hands it to the
+  app with the list (`{feeds, max}`), so the dialog hides the form at the
+  maximum without a copy of the number in the browser.
 - **What reaches the calendar is escaped, or reduced.** Every text property
   goes through `text()`; the record id, which sits in `UID`, is cut down to
   letters, digits, `-` and `_` (`uidOf()`), because anyone who can write can put
@@ -890,9 +893,9 @@ file (`public/ics.js`), which is a copy that does not follow changes.
   `calendar_feed()` into `text/calendar`. It runs with the public key and no
   service key, needs **Verify JWT off** (a calendar sends no token), answers 404
   for an unknown or stopped address and 503 when the database fails, because a
-  404 makes some calendars drop the subscription. It holds a copy of `ics.js`
-  and of the type labels in both languages; the language is chosen per
-  subscription.
+  404 makes some calendars drop the subscription. It is the only code that
+  writes iCalendar, and it holds a copy of the type labels in both languages;
+  the language is chosen per subscription.
 - **From thirty days back onwards**, so an overdue moment stays until ticked off.
   The logbook is not in the feed, and neither is a planned moment without a date.
 - **It is not instant**: Apple lets you choose, Outlook takes hours, Google up to
@@ -950,3 +953,7 @@ Not bugs; decisions. Reviewers will flag them, so the reasoning is recorded here
   place still agree, not the app as a whole.
 - **`app.js` is large** for a single file. Splitting it is reasonable eventually, but
   there is no module bundler and no appetite for one, so it stays until the pain is real.
+  `feeds.js` is a narrow exception, not the start of a split: a feature that already
+  had its own file on the server (`supabase/functions/calendar`), and that needs
+  nothing from `app.js` beyond a handful of helpers. A piece of `app.js` that reads
+  or redraws its state does not qualify.

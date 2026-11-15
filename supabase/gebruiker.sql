@@ -366,6 +366,24 @@ begin
       case when v_id is null then 'overgeslagen' when v_fout is null then 'OK' else '>>> FOUT' end,
       coalesce(v_fout, case when v_id is null then 'geen zichtbaar gepland moment' else 'duplicate_id, zoals het hoort' end));
   end if;
+
+  -- C6 — feed_list() geeft de eigen abonnementen en het maximum per account,
+  -- zodat de app het formulier op tijd weglaat (issue 23). Het maximum is dat
+  -- van feed_max(), dat feed_create() ook handhaaft.
+  v_fout := null; v_r := null;
+  begin
+    perform set_config('request.jwt.claims', v_claims, true);
+    set local role authenticated;
+    v_r := public.feed_list(false);
+    raise sqlstate 'XRB01';
+  exception
+    when sqlstate 'XRB01' then null;
+    when others then v_fout := sqlstate || ' ' || sqlerrm;
+  end;
+  insert into uitslag_c values ('C6', 'feed_list: de abonnementen en het maximum uit feed_max',
+    case when v_fout is null and jsonb_typeof(v_r -> 'feeds') = 'array'
+              and (v_r ->> 'max')::int = followup.feed_max() then 'OK' else '>>> FOUT' end,
+    coalesce(v_fout, format('%s abonnement(en), maximum %s', jsonb_array_length(v_r -> 'feeds'), v_r ->> 'max')));
 end
 $controle$;
 
