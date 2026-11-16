@@ -562,6 +562,10 @@ window.FollowUpDomain = (() => {
   // afgeschermd is krijgt h.products gesnoeid op zijn eigen bereik, en zou
   // anders de opvolging van een collega wissen bij de eerste opslag.
   function syncPipeline(h) {
+    // De vinkjes in de vorm van followup.lijstvorm_vinkjes(): zonder dubbels,
+    // in de volgorde van PRODUCTS. Wie een vinkje zet, zet het achteraan; de
+    // databank bewaart ze gesorteerd, en een andere volgorde telde als wijziging.
+    if (Array.isArray(h.products)) toProductList(h);
     if (!h.pipeline || typeof h.pipeline !== "object" || Array.isArray(h.pipeline)) h.pipeline = {};
     for (const [p, e] of Object.entries(h.pipeline)) {
       if (!e || typeof e !== "object") { delete h.pipeline[p]; continue; }
