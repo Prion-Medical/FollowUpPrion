@@ -367,6 +367,46 @@ begin
       coalesce(v_fout, case when v_id is null then 'geen zichtbaar gepland moment' else 'duplicate_id, zoals het hoort' end));
   end if;
 
+  -- C7 — een ziekenhuis met een gepland moment verwijdert enkel een beheerder.
+  -- Deze gebruiker maakt er zelf een aan (één gepland moment zonder product)
+  -- en haalt het in een tweede opslag weer weg: een admin mag dat, een
+  -- bewerker en een aanvuller niet. Alles wordt teruggedraaid.
+  if not v_main then
+    insert into uitslag_c values ('C7', 'ziekenhuis met momenten verwijderen: enkel een beheerder', 'overgeslagen', 'geen rij main');
+  elsif v_rol not in ('admin', 'editor', 'contributor') then
+    insert into uitslag_c values ('C7', 'ziekenhuis met momenten verwijderen: enkel een beheerder', 'overgeslagen', 'deze gebruiker mag niet schrijven');
+  else
+    v_fout := null; v_rec := null;
+    begin
+      perform set_config('request.jwt.claims', v_claims, true);
+      set local role authenticated;
+      v_r := public.read_state();
+      perform public.write_state(jsonb_set(v_r -> 'data', '{hospitals}',
+                (v_r -> 'data' -> 'hospitals') || jsonb_build_array(jsonb_build_object(
+                  'id', 'controle-c7', 'name', 'Controle C7', 'products', '[]'::jsonb, 'contacts', '[]'::jsonb,
+                  'activities', '[]'::jsonb, 'unit', '{}'::jsonb,
+                  'planned', jsonb_build_array(jsonb_build_object('id', 'controle-c7p', 'date', '2026-12-01',
+                                                                  'type', 'call', 'products', '[]'::jsonb, 'note', ''))))),
+                (v_r ->> 'updated_at')::timestamptz);
+      v_r := public.read_state();
+      perform public.write_state(jsonb_set(v_r -> 'data', '{hospitals}',
+                coalesce((select jsonb_agg(t.e order by t.i) from jsonb_array_elements(v_r -> 'data' -> 'hospitals') with ordinality t(e, i)
+                           where t.e ->> 'id' <> 'controle-c7'), '[]'::jsonb)),
+                (v_r ->> 'updated_at')::timestamptz);
+      v_rec := '"verwijderd"'::jsonb;
+      raise sqlstate 'XRB01';
+    exception
+      when sqlstate 'XRB01' then null;
+      when others then v_fout := sqlerrm;
+    end;
+    insert into uitslag_c values ('C7', 'ziekenhuis met momenten verwijderen: enkel een beheerder',
+      case when v_rol = 'admin' and v_rec is not null then 'OK'
+           when v_rol = 'editor' and v_fout like 'followup:no_delete enkel een beheerder%' then 'OK'
+           when v_rol = 'contributor' and v_fout like 'followup:no_delete%' then 'OK'
+           else '>>> FOUT' end,
+      coalesce(v_fout, 'verwijderd, zoals een beheerder mag'));
+  end if;
+
   -- C6 — feed_list() geeft de eigen abonnementen en het maximum per account,
   -- zodat de app het formulier op tijd weglaat (issue 23). Het maximum is dat
   -- van feed_max(), dat feed_create() ook handhaaft.

@@ -86,6 +86,8 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('feed_create',     'pg_advisory_xact_lock', 'het maximum aan abonnementen geldt ook bij gelijktijdige oproepen'),
   ('feed_list',       'via_assistant',  'een assistent ziet geen abonnementen'),
   ('feed_remove',     'via_assistant',  'een assistent zet geen abonnement stop'),
+  -- Een ziekenhuis met momenten verwijdert enkel een beheerder (2026-11-16).
+  ('write_state',     'enkel een beheerder verwijdert een ziekenhuis', 'een bewerker verwijdert geen ziekenhuis met momenten'),
   -- Issue 23: het maximum aan abonnementen staat op één plek.
   ('feed_max',        'select 10',      'het maximum aan abonnementen per account'),
   ('feed_create',     'followup.feed_max()', 'feed_create handhaaft het maximum uit feed_max'),
@@ -135,6 +137,8 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('lijstvorm_record', 'shared',        'de vlag van read_state() gaat eraf bij het schrijven'),
   ('lijstvorm_record', 'zonder_aantal', 'een moment over meer producten verliest zijn aantal, ook onbeperkt'),
   ('lijstvorm_hospital', 'lijstvorm_record', 'bestaat die functie überhaupt'),
+  ('lijstvorm_hospital', 'lijstvorm_vinkjes', 'de vinkjes van het ziekenhuis in de volgorde van PRODUCTS'),
+  ('lijstvorm',       'lijstvorm_hospital(t.e) is distinct', 'een document met vinkjes in een andere volgorde wordt omgezet'),
   ('lijstvorm',       'lijstvorm_hospital', 'bestaat die functie überhaupt'),
   ('zonder_aantal',   'count(distinct x)', 'telt de volledige lijst, niet de vorm'),
   ('scope_entries',   'shared',         'een gesnoeid moment zegt de browser dat het gedeeld is'),
@@ -142,7 +146,8 @@ with verwacht(functie, moet_bevatten, waarvoor) as (values
   ('merge_entries',   'zonder_aantal_beperkt', 'geen aantal op een moment met het product van een collega'),
   ('merge_entries',   'then s.e else p.e', 'wie zich van een gedeeld moment afhaalt, verandert er verder niets aan'),
   ('merge_entries',   'only_in(followup.products_of(x.e), allowed)', 'een gedeeld plan afvinken zonder een eigen product wordt geweigerd'),
-  ('een_lijst',       'product_sort',   'een lijst producten komt er altijd op één manier uit: uniek, niet leeg, gesorteerd'),
+  ('een_lijst',       'productlijst',   'een lijst producten komt er altijd op één manier uit: uniek, niet leeg, gesorteerd'),
+  ('productlijst',    'product_sort',   'uniek, niet leeg, in de volgorde van PRODUCTS'),
   ('product_sort',    'collate "C"',    'onbekende producten in een vaste volgorde, los van de taal van de server'),
   ('zonder_aantal_beperkt', 'only_in',  'bestaat die functie überhaupt'),
   -- Uit de veiligheidscontrole van 2026-11-15.

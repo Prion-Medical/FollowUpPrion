@@ -420,15 +420,18 @@ $$;
 -- een lijst niet meer van volgorde zodra een beperkte gebruiker ze opslaat —
 -- wat anders een nieuwe laatste wijziger gaf voor een moment dat niemand
 -- aanraakte.
+create or replace function followup.productlijst(l jsonb) returns jsonb
+language sql immutable set search_path = public as $$
+  select to_jsonb(followup.product_sort(array(select x from unnest(followup.texts(l)) x where x <> '')));
+$$;
+
 create or replace function followup.een_lijst(e jsonb) returns jsonb
 language sql immutable set search_path = public as $$
   select case
     when jsonb_typeof(e) is distinct from 'object' then e
-    else (e - 'product') || jsonb_build_object('products', to_jsonb(followup.product_sort(array(
-           select x from unnest(case when jsonb_typeof(e -> 'products') = 'array'
-                                     then followup.texts(e -> 'products')
-                                     else followup.texts(jsonb_build_array(e -> 'product')) end) x
-            where x <> ''))))
+    else (e - 'product') || jsonb_build_object('products', followup.productlijst(
+           case when jsonb_typeof(e -> 'products') = 'array' then e -> 'products'
+                else jsonb_build_array(e -> 'product') end))
   end;
 $$;
 
@@ -448,13 +451,27 @@ language sql immutable set search_path = public as $$
   end;
 $$;
 
+-- De vinkjes van het ziekenhuis zelf, op dezelfde manier (productlijst):
+-- de app en de koppeling zetten een nieuw vinkje achteraan, een beperkte
+-- opslag zet het in de volgorde van product_sort() (merge_products). Zonder
+-- dit veranderde het document bij elke beperkte opslag van een ziekenhuis
+-- waar het laatste vinkje niet het laatste product was (gebruiker.sql C2b).
+-- Een ziekenhuis zonder "products" krijgt er geen.
+create or replace function followup.lijstvorm_vinkjes(h jsonb) returns jsonb
+language sql immutable set search_path = public as $$
+  select case
+    when jsonb_typeof(h -> 'products') is distinct from 'array' then h
+    else h || jsonb_build_object('products', followup.productlijst(h -> 'products'))
+  end;
+$$;
+
 create or replace function followup.lijstvorm_hospital(h jsonb) returns jsonb
 language sql immutable set search_path = public as $$
   select case
     when jsonb_typeof(h) is distinct from 'object' then h
     -- Enkel de lijsten die er staan: seed.json heeft geen planned, en daar
     -- mag er geen lege bij komen.
-    else h || coalesce((
+    else followup.lijstvorm_vinkjes(h) || coalesce((
       select jsonb_object_agg(k.lijst, (
                select coalesce(jsonb_agg(followup.lijstvorm_record(c.e, k.moment) order by c.i), '[]'::jsonb)
                  from jsonb_array_elements(h -> k.lijst) with ordinality c(e, i)))
@@ -471,12 +488,11 @@ create or replace function followup.lijstvorm(doc jsonb) returns jsonb
 language sql immutable set search_path = public as $$
   select case
     when jsonb_typeof(doc -> 'hospitals') is distinct from 'array' then doc
+    -- Dezelfde vraag als hieronder, per ziekenhuis: zou de omzetting iets
+    -- veranderen? Wat lijstvorm_hospital() erbij leert, volgt deze test vanzelf.
     when not exists (
-      select 1
-        from jsonb_array_elements(doc -> 'hospitals') t(e)
-        cross join (values ('contacts', false), ('activities', true), ('planned', true)) as k(lijst, moment)
-        cross join lateral jsonb_array_elements(followup.arr(t.e -> k.lijst)) c(e)
-       where followup.lijstvorm_record(c.e, k.moment) is distinct from c.e) then doc
+      select 1 from jsonb_array_elements(doc -> 'hospitals') t(e)
+       where followup.lijstvorm_hospital(t.e) is distinct from t.e) then doc
     else doc || jsonb_build_object('hospitals', (
       select jsonb_agg(followup.lijstvorm_hospital(t.e) order by t.i)
         from jsonb_array_elements(doc -> 'hospitals') with ordinality t(e, i)))
@@ -1920,6 +1936,19 @@ begin
               detail = 'Herlaad de app. Een back-up terugzetten gaat met mode => import.';
     end if;
     v_weg_h := array(select k from unnest(v_weg) k where k like 'h:%');
+    -- Een ziekenhuis met contactmomenten of geplande momenten verwijdert enkel
+    -- een beheerder: daarmee gaat de geschiedenis van iedereen mee, ook wat
+    -- een collega er logde. Een leeg ziekenhuis (een dubbele invoer, een
+    -- tikfout) mag een bewerker nog altijd weghalen. We kijken naar wat
+    -- opgeslagen stond, niet naar wat deze gebruiker ervan zag.
+    if v_rol <> 'admin' and exists (
+         select 1 from jsonb_array_elements(followup.arr(v_basis -> 'hospitals')) t(e)
+          where ('h:' || (t.e ->> 'id')) = any(v_weg_h)
+            and (jsonb_array_length(followup.arr(t.e -> 'activities')) > 0
+                 or jsonb_array_length(followup.arr(t.e -> 'planned')) > 0)) then
+      raise exception 'followup:no_delete enkel een beheerder verwijdert een ziekenhuis met contactmomenten of geplande momenten'
+        using errcode = 'PT403', hint = 'no_delete';
+    end if;
     -- De records van een verwijderd ziekenhuis gaan mee en tellen niet apart.
     v_weg_r := array(select k from unnest(v_weg) k
                       where k not like 'h:%'

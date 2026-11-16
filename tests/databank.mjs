@@ -156,6 +156,9 @@ await geval("toProductList zet elke oude vorm om zoals followup.lijstvorm()", ()
     assert.deepEqual(uit.products, na[sleutel].products, sleutel);
     assert.ok(!("product" in uit), `${sleutel}: "product" bleef staan`);
   }
+  // De vinkjes van het ziekenhuis zelf: normalize() en een aangevinkt product.
+  const zh = Object.fromEntries(jsonNa("oudvormverwacht").hospitals.map((h) => [h.id, h.products]));
+  for (const h of jsonNa("oudvorm").hospitals) assert.deepEqual(D.toProductList(kopie(h)).products, zh[h.id], `${h.id}: vinkjes`);
 });
 
 for (const g of gevallen) {

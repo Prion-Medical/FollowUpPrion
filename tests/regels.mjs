@@ -49,6 +49,7 @@ function begin(zhs, scope = [], { na = null, faalt = false } = {}) {
   databank = na;
   leesFout = faalt;
   K.scope = scope;
+  K.rol = "editor";
 }
 async function roep(naam, args) {
   const r = await K.werktuig(naam, args);
@@ -206,6 +207,22 @@ await geval("verwijderen: een installatie haalt zelf geen kamers af", async () =
   const { h } = await roep("remove", { kind: "contact_moment", hospital_id: "h", record_id: "i1", confirm: eerst.uit.confirm });
   assert.equal(h.activities.length, 0, "het moment staat er nog");
   onaangeroerd(h, geinstalleerd);
+});
+
+// Een ziekenhuis met contactmomenten of geplande momenten verwijdert enkel een
+// beheerder, zoals write_state() het afdwingt; een leeg ziekenhuis mag een
+// bewerker nog weghalen.
+await geval("verwijderen: een ziekenhuis met momenten enkel door een beheerder", async () => {
+  begin(geinstalleerd);
+  const r = await K.werktuig("remove", { kind: "hospital", hospital_id: "h" });
+  assert.ok(r.fout && /admin/.test(r.tekst), "een bewerker kreeg geen weigering: " + r.tekst);
+  begin(geinstalleerd);
+  K.rol = "admin";
+  const eerst = await K.werktuig("remove", { kind: "hospital", hospital_id: "h" });
+  assert.ok(!eerst.fout && eerst.uit.confirm, eerst.tekst);
+  begin(zh({ products: [] }));
+  const leeg = await K.werktuig("remove", { kind: "hospital", hospital_id: "h" });
+  assert.ok(!leeg.fout && leeg.uit.confirm, "een leeg ziekenhuis: " + leeg.tekst);
 });
 
 // --- het antwoord komt uit wat er opgeslagen is ----------------------------------

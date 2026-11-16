@@ -272,12 +272,13 @@ gedeeldaf as (
 -- planned, en mag die er ook niet bij krijgen. Een lijst komt er altijd op
 -- één manier uit: tekst die niet leeg is, zonder dubbels, in de volgorde van
 -- PRODUCTS, en wat we niet kennen achteraan op de bytes van de naam (Zeta
--- vóór alpha). tests/databank.mjs houdt toProductList() in de app aan
--- dezelfde twee documenten.
+-- vóór alpha). De vinkjes van het ziekenhuis zelf ook: die zette de app in
+-- de volgorde van aanvinken (v1). tests/databank.mjs houdt toProductList() in
+-- de app aan dezelfde twee documenten.
 oudvorm as (select $j${
   "version": 1,
   "hospitals": [
-    { "id": "v1", "name": "UZ Oude Vorm", "products": ["EndoQ", "Ainex"],
+    { "id": "v1", "name": "UZ Oude Vorm", "products": ["Ainex", "EndoQ", "Ainex"],
       "status": "orange", "stage": "meeting", "nextAction": "", "nextActionDate": "", "unit": {},
       "contacts": [
         { "id": "vc1", "name": "Dr EndoQ", "product": "EndoQ" },

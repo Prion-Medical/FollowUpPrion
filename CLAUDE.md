@@ -402,7 +402,10 @@ one see the same figures.
 name once, only non-empty text, in `PRODUCTS` order with an unknown product last
 and unknowns among themselves in byte order (`collate "C"`). A list in another
 order would otherwise be re-sorted by the next restricted save, which then counts
-as a change and restamps the record. `tests/databank.mjs` holds the app to the
+as a change and restamps the record. The hospital's own ticks (`h.products`) follow the same order:
+`followup.lijstvorm_vinkjes()` in the database and `syncPipeline()` in the app. A tick
+used to be added at the end and a restricted save re-sorted it, so loading and saving
+changed the document (`gebruiker.sql` C2b). `tests/databank.mjs` holds the app to the
 fixture `controle.sql` holds the database to (`oudvorm`). Ticking off
 a shared plan sends the trimmed list, and `followup.afgevinkt()` hands the merge
 the stored plan as the stored side of the new contact moment, so the colleague's
@@ -633,8 +636,8 @@ touch".
 
 | Role | May |
 |---|---|
-| `admin` | everything, plus assigning roles |
-| `editor` | everything with the data, including deleting and importing a backup |
+| `admin` | everything, plus assigning roles and deleting a hospital that has contact moments or planned moments |
+| `editor` | everything with the data, including deleting and importing a backup — except deleting a hospital that has contact moments or planned moments |
 | `contributor` | add and change; not delete, not import |
 | `viewer` | read, print and export only |
 
@@ -667,6 +670,12 @@ or anyone could copy a colleague's product onto a moment by borrowing a plan's i
 or block the plan from ever being ticked off (`controle.sql` 165). `write_state()`
 also refuses a `mode` of null, which used to slip past the cap on deletions and the
 server-side stamp (166).
+
+A hospital that has contact moments or planned moments is deleted by an `admin`
+only: with it goes everyone's history. `write_state()` checks what was stored, so
+it counts a colleague's moments the editor never saw; the app and the connector
+say so first (`gebruiker.sql` C7). An empty hospital — a double entry, a typo — an
+editor may still remove.
 
 ## The product wall
 
