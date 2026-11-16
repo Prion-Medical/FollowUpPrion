@@ -169,7 +169,13 @@ Dark mode is the same token names under `:root[data-theme="dark"]` inside `@medi
 screen` — `screen`, so a print is always light. `public/theme.js` sets that attribute
 from the choice in the menu (system, light or dark, kept in `localStorage`); it loads
 in the `<head>` so the page does not flash white first, and it is a file of its own
-because the CSP allows no inline script. A rule that needs a different value in
+because the CSP allows no inline script. Two rules about depth and corners: a
+corner inside a corner has the outer radius minus the padding between them, which
+is what `--radius-in` is (a row in a dropdown, the pill in a switch); and in the
+dark, depth comes from a lighter surface and not from a shadow, so whatever
+floats — the menu, the dropdowns, the dialogs, the login card — is drawn on
+`--float`, the same as the panel in light and a step lighter in dark, with
+`--float-hover` and `--float-press` for what lights up on it. A rule that needs a different value in
 the dark gets a token, not a second rule: a rule inside that block that also exists
 further down the file loses to it. Icons are `icon("edit")` from `ui.js`, inline
 SVG in the colour of the text beside them; no glyphs from the font. Motion is short
@@ -209,6 +215,40 @@ that dialog and the next `openDialog()` drops it. The subscription dialog uses i
 twice: not while the database is still making the address, and not without asking
 when the address was never copied. The banner under the top bar takes a tone,
 `showBanner(msg, reload, "error" | "warn" | "info")`, and is red unless told otherwise.
+
+**The back button.** The app is one page, so without help the back button (or
+the back gesture on a phone) leaves it. `layer(close)` in `ui.js` puts a step in
+the browser's history for anything that opens and returns a function to call when
+it closed some other way; on back, `close()` is called. Three things use it: the
+open record (`syncFicheLayer()`, called from `renderFiche()` because the record
+opens and closes along many paths), a change of view (`setView()`; going back
+yourself with "Terug naar kaart" takes the step away again, and the view the app
+opens with gets none), and both dialogs (`openModal()`, released in
+`softClose()`). Each step carries its number in `history.state`, so a popstate
+says how many layers should be left; a layer that closed while something lay on
+top stays as a dead place and is skipped on the way back. A dialog that asks
+before closing returns false and keeps its step. Screens deliberately get no
+address: the pages are public and a hospital id in a link adds nothing.
+
+**Undo.** Removing a contact moment, a planned moment or a contact asks nothing:
+it is gone at once and the toast offers "Ongedaan maken" for six seconds
+(`offerUndo()` in `app.js`). While that runs **nothing is saved** —
+`scheduleSave()` only notes that something is waiting — so a record that is put
+back never left the database: the inventory in `write_state()` does not see it
+go, and it keeps its author. Each removal hands `offerUndo()` a function that
+puts back exactly what it took: the record in its place, the links to a removed
+contact, the hospital's ticks, the installed rooms. One at a time: a second
+removal, or any other toast, lets the first go through, and so does leaving the
+page. A hospital still asks first.
+
+**Keys.** `/` jumps to the search, Escape closes the record, and with a record
+open `N` starts a contact moment and `P` a planned moment. They work whenever
+nobody is typing — focus on a list row counts as not typing — and never with
+Ctrl, Alt or Cmd. The one exception is Ctrl+Z or Cmd+Z while an undo is on
+offer: the toast's button is too far away in the tab order to reach in six
+seconds. The toast is a live region (`role="status"`), so a screen reader hears
+what was removed. Each key is shown where its action is: in the search field
+(`.key-hint`, hidden on touch devices) and in the button's tooltip (`keyTip()`).
 
 **Making things go away.** Anything that closes with a fade goes through
 `leave(el, after, opts)` in `ui.js`: it fades the element and only then runs `after`,

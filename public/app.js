@@ -17,7 +17,7 @@
     normalizeFacts, syncPipeline, zonderProduct, syncRooms, shared, byWhen, assigneeOf, tickOffDate, typesInAll, momentsMoved,
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
-  const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
+  const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows, layer, openModal } = window.FollowUpUI;
   // Agenda-abonnementen: zie feeds.js. De afspraken zelf maakt de serverkant
   // (supabase/functions/calendar).
   const Feeds = window.FollowUpFeeds;
@@ -126,6 +126,17 @@
     const n = Number(v);
     return v === "" || v == null || !Number.isFinite(n) ? null : n;
   };
+  // Wat mensen plakken is zelden netjes. Een telefoonnummer houden we zoals
+  // het is, op de witruimte errond en dubbele spaties na: toestelnummers en
+  // buitenlandse nummers komen in te veel vormen om ze te herschrijven. Van
+  // een e-mailadres dat als "Naam <adres>" of met mailto: binnenkomt blijft
+  // het adres over.
+  const cleanPhone = (v) => str(v).replace(/\s+/g, " ").trim();
+  const cleanEmail = (v) => {
+    const s = str(v).trim().replace(/^mailto:/i, "");
+    const m = s.match(/<\s*([^<>\s]+@[^<>\s]+)\s*>/);
+    return (m ? m[1] : s).trim();
+  };
   const dateOrEmpty = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(str(v)) ? str(v) : "");
   // Een uur als 14:00. Enkel bij een gepland moment: een contactmoment heeft
   // een datum en geen uur.
@@ -198,13 +209,67 @@
     return t("rel.daysAgo", { n });
   }
 
-  function toast(msg) {
+  // action is een knop in de melding ({ label, run }): de melding blijft dan
+  // wat langer staan, en after loopt zodra ze weg is zonder dat erop geklikt
+  // is.
+  function toast(msg, action, after) {
     const el = $("#toast");
+    // Een andere melding neemt de plaats in van "Ongedaan maken": dan is die
+    // kans voorbij en gaat de verwijdering door.
+    if (pendingUndo && !action) settleUndo();
     el.textContent = msg;
+    if (action) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "toast-act";
+      b.textContent = action.label;
+      if (action.title) b.title = action.title;
+      b.onclick = () => { hideToast(); action.run(); };
+      el.append(" ", b);
+    }
     stay(el); // stond ze net weg te gaan, dan blijft ze
     el.hidden = false;
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => leave(el, () => { el.hidden = true; }, { ms: 160, shift: "translate(-50%, 6px)" }), 2600);
+    toast._t = setTimeout(() => { hideToast(); if (after) after(); }, action ? 6000 : 2600);
+  }
+  function hideToast() {
+    const el = $("#toast");
+    clearTimeout(toast._t);
+    if (!el.hidden) leave(el, () => { el.hidden = true; }, { ms: 160, shift: "translate(-50%, 6px)" });
+  }
+  // ---------- ongedaan maken ----------
+  // Een contactmoment, een gepland moment of een contactpersoon verwijder je
+  // zonder vraag vooraf: het is meteen weg, en een paar tellen lang kun je het
+  // terugzetten. Zolang die kans loopt wordt er niet bewaard, zodat een
+  // teruggezet record de databank nooit verlaten heeft: de inventaris in
+  // write_state() ziet het niet verdwijnen, en het krijgt geen nieuwe auteur.
+  // Eén tegelijk: een tweede verwijdering laat de eerste doorgaan. Een
+  // ziekenhuis houdt zijn vraag, want daarmee verdwijnt ieders geschiedenis.
+  // pendingUndo.held: of er, los van de verwijdering, nog iets te bewaren is.
+  let pendingUndo = null;
+  function offerUndo(msg, undo) {
+    settleUndo();
+    pendingUndo = { undo, held: dirty };
+    clearTimeout(saveTimer);
+    dirty = true;
+    showSaveState("save.saving");
+    toast(msg, { label: t("btn.undo"), title: `${t("btn.undo")} (${KEY_UNDO})`, run: runUndo }, settleUndo);
+  }
+  // De kans is voorbij: de verwijdering gaat naar de databank.
+  function settleUndo() {
+    if (!pendingUndo) return;
+    pendingUndo = null;
+    hideToast();
+    scheduleSave();
+  }
+  function runUndo() {
+    const u = pendingUndo;
+    if (!u) return;
+    pendingUndo = null;
+    u.undo();
+    renderAll();
+    if (u.held) scheduleSave();
+    else { dirty = false; showSaveState("save.saved"); }
   }
   // ---------- opslag ----------
   let saveTimer = null;
@@ -232,6 +297,9 @@
     dirty = true;
     showSaveState("save.saving");
     clearTimeout(saveTimer);
+    // Loopt de kans om een verwijdering ongedaan te maken nog, dan wacht ook
+    // deze wijziging daarop: anders ging de verwijdering mee de deur uit.
+    if (pendingUndo) { pendingUndo.held = true; return; }
     saveTimer = setTimeout(save, 400);
   }
   // ---------- samen werken ----------
@@ -414,6 +482,14 @@
   }
   window.addEventListener("beforeunload", (e) => {
     if (dirty) e.preventDefault();
+  });
+  // Wie weggaat terwijl "Ongedaan maken" nog staat, wil de verwijdering: ze
+  // gaat meteen de deur uit in plaats van te wachten op een klok die stopt.
+  window.addEventListener("pagehide", () => {
+    if (!pendingUndo) return;
+    pendingUndo = null;
+    clearTimeout(saveTimer);
+    save();
   });
 
   // Een tekstvak drukt alleen af wat in het kadertje past; de rest valt weg,
@@ -843,6 +919,11 @@
         .addTo(map)
         .bindTooltip(esc(h.name), { direction: "top", offset: [0, -10], className: "pin-label" })
         .on("click", () => select(h.id, false));
+      // Een speld is een knop waar je met Tab op komt; zonder naam hoort een
+      // schermlezer veertig keer "knop". Geen title: dat zou een tweede
+      // tekstballon naast de onze geven.
+      const pin = m.getElement();
+      if (pin) pin.setAttribute("aria-label", h.name);
       m.on("dragend", () => {
         const p = m.getLatLng();
         h.lat = +p.lat.toFixed(5);
@@ -1188,9 +1269,26 @@
       <input type="number" min="0" data-unit="${key}" value="${esc(h.unit[key] ?? "")}">
     </label>`;
 
+  // De open fiche is een laag voor de terugknop (layer in ui.js). Hier en niet
+  // in select() en closeFiche(): de fiche gaat langs meer wegen open en dicht
+  // (een ander scherm kiezen, een speld plaatsen, herladen), en ze komen
+  // allemaal hier voorbij.
+  let ficheLayer = null;
+  // De toetsen voor de twee dingen die je in een fiche het vaakst doet. Ze
+  // staan in de tooltip van hun knop (keyTip), zodat je ze kunt vinden.
+  const KEY_ACTIVITY = "n", KEY_PLANNED = "p";
+  // Ongedaan maken heeft de toets die het overal heeft. Hoe ze heet, hangt af
+  // van het toestel.
+  const KEY_UNDO = /Mac|iPhone|iPad/.test(navigator.platform) ? "\u2318Z" : "Ctrl+Z";
+  const keyTip = (label, key) => `${label} (${key.toUpperCase()})`;
+  function syncFicheLayer(open) {
+    if (open && !ficheLayer) ficheLayer = layer(() => { ficheLayer = null; closeFiche(); });
+    else if (!open && ficheLayer) { const done = ficheLayer; ficheLayer = null; done(); }
+  }
   function renderFiche() {
     const el = $("#fiche");
     const h = sel();
+    syncFicheLayer(!!(h && state.ficheOpen));
     // Sluiten gaat zacht: het paneel schuift weg en is daarna pas verborgen.
     // De inhoud blijft tot dan staan (een leeg paneel zien wegschuiven is
     // lelijker dan niets), en pas daarna is de kaart zo breed als ze wordt.
@@ -1226,7 +1324,7 @@
           <i class="dot ${esc(shown(h).status)}" style="width:14px;height:14px"></i>
           <input class="fiche-title" data-field="name" value="${esc(h.name)}" title="${esc(h.name)}" aria-label="${esc(t("fiche.name"))}">
           <button class="icon-btn show-on-map" data-act="show-map" title="${esc(t("map.showOnMap"))}" aria-label="${esc(t("map.showOnMap"))}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg></button>
-          <button class="icon-btn" data-act="close" title="${esc(t("btn.close"))}" aria-label="${esc(t("btn.close"))}">${icon("close")}</button>
+          <button class="icon-btn" data-act="close" title="${esc(t("btn.close"))} (Esc)" aria-label="${esc(t("btn.close"))}">${icon("close")}</button>
         </div>
         ${pipe.length || beperkt ? "" : `<div class="status-pick">
           ${STATUSES.map((k) => `<button class="${k} ${h.status === k ? "active" : ""}" data-status="${k}" title="${esc(t("status." + k))}"><span><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</span></button>`).join("")}
@@ -1270,7 +1368,7 @@
       </div>
 
       ${secOpen("planned")}
-        ${secHead("planned", t("section.planned"), `${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned">${esc(t("btn.addPlanned"))}</button>`)}
+        ${secHead("planned", t("section.planned"), `${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned" title="${esc(keyTip(t("dlg.plannedNew"), KEY_PLANNED))}">${esc(t("btn.addPlanned"))}</button>`)}
         ${h.planned.length ? `<ul class="timeline">${[...h.planned].sort(byWhen).map((p) => {
           // Dezelfde regel als in de agenda, zodat ook hier staat voor wie
           // het moment is.
@@ -1291,7 +1389,7 @@
       </div>
 
       ${secOpen("activities")}
-        ${secHead("activities", t("section.activities"), ` <button class="btn small" data-act="add-activity">${esc(t("btn.addActivity"))}</button>`)}
+        ${secHead("activities", t("section.activities"), ` <button class="btn small" data-act="add-activity" title="${esc(keyTip(t("dlg.actNew"), KEY_ACTIVITY))}">${esc(t("btn.addActivity"))}</button>`)}
         ${acts.length ? `<ul class="timeline ${state.actsOpen === h.id ? "" : "capped"}">${acts.map((a, i) => {
           const sub = momentLine(h, a, false);
           return `<li${i >= ACT_CAP ? ' class="extra"' : ""}>
@@ -1720,7 +1818,9 @@
     // eigenschap en geen luisteraar, zodat die van de vorige dialoog hier
     // vervalt in plaats van zich op te stapelen.
     form.onchange = null;
-    if (!dlg.open) dlg.showModal();
+    // Terug sluit de dialoog zoals Escape dat doet. Stelt hij eerst een vraag
+    // (beforeClose), dan blijft de laag staan tot het antwoord er is.
+    openModal(dlg, () => { closeDialog(dlg); return form.beforeClose ? false : undefined; });
     const first = form.querySelector("input, select, textarea");
     if (first) first.focus();
     form.onsubmit = (e) => {
@@ -1733,7 +1833,9 @@
         // Eerst vragen. De dialoog blijft eronder openstaan: wie "Annuleer"
         // kiest, staat terug waar hij was in plaats van alles kwijt te zijn.
         e.preventDefault();
-        ask(askDelete).then((yes) => {
+        // Zonder vraag: de dialoog biedt na het verwijderen zelf "Ongedaan
+        // maken" aan (offerUndo).
+        (askDelete ? ask(askDelete) : Promise.resolve(true)).then((yes) => {
           if (!yes) return;
           softClose(dlg, "delete");
           onSubmit(null, "delete");
@@ -1782,7 +1884,7 @@
           <select name="department">${[opt("", "—", v.department), ...DEPARTMENTS.map((d) => opt(d, t("dept." + d), v.department))].join("")}</select>
         </label>
         <label class="field">${esc(t("dlg.c.role"))}<input name="role" value="${esc(v.role)}" placeholder="${esc(t("dlg.c.role.ph"))}"></label>
-        <label class="field">${esc(t("dlg.c.phone"))}<input name="phone" value="${esc(v.phone)}"></label>
+        <label class="field">${esc(t("dlg.c.phone"))}<input name="phone" type="tel" inputmode="tel" autocomplete="off" value="${esc(v.phone)}"></label>
         <label class="field">${esc(t("dlg.c.email"))}<input name="email" type="email" value="${esc(v.email)}"></label>
         <label class="field full">${esc(t("dlg.c.address"))}<input name="address" value="${esc(v.address)}"></label>
         <div class="field">${esc(t("dlg.c.products"))}
@@ -1804,9 +1906,25 @@
         <button class="btn primary" value="ok">${esc(t("btn.save"))}</button>
       </div>`, (data, action) => {
       if (action === "delete") {
+        // Wat de verwijdering meeneemt, voor wie ze ongedaan maakt: de plaats
+        // in de lijst, de momenten die naar deze persoon wezen, en de vinkjes
+        // van het ziekenhuis (syncProducts laat een product vallen dat niemand
+        // meer gebruikt).
+        const at = h.contacts.indexOf(c);
+        const linked = h.activities.filter((a) => a.contactId === c.id);
+        const products = [...h.products];
         h.contacts = h.contacts.filter((x) => x.id !== c.id);
-        h.activities.forEach((a) => { if (a.contactId === c.id) a.contactId = ""; });
+        linked.forEach((a) => { a.contactId = ""; });
         syncProducts(h, c.products);
+        syncPipeline(h);
+        offerUndo(t("toast.removed.contact", { name: c.name }), () => {
+          h.contacts.splice(Math.min(at, h.contacts.length), 0, c);
+          linked.forEach((a) => { a.contactId = c.id; });
+          h.products = products;
+          syncPipeline(h);
+        });
+        renderAll();
+        return;
       } else {
         const rec = c || { id: uid() };
         const had = c ? [...c.products] : [];
@@ -1816,7 +1934,7 @@
         const keuze = picked(form);
         Object.assign(rec, {
           name: data.name.trim(), department: data.department, role: data.role.trim(), language: data.language,
-          phone: data.phone.trim(), email: data.email.trim(), address: data.address.trim(),
+          phone: cleanPhone(data.phone), email: cleanEmail(data.email), address: data.address.trim(),
           products: [...new Set([...had.filter((p) => !mine.includes(p)), ...keuze])],
           notes: data.notes.trim(), primary: !!data.primary,
         });
@@ -1828,7 +1946,10 @@
       syncPipeline(h);
       scheduleSave();
       renderAll();
-    }, c && t("confirm.deleteContact", { name: c.name }));
+    });
+    // Een geplakt "Naam <adres>" wordt het adres zodra je het veld verlaat,
+    // vóór de browser het als ongeldig afkeurt.
+    form.elements.email.onchange = (e) => { e.target.value = cleanEmail(e.target.value); };
   }
 
   // De keuzelijst van soorten voor een product; zonder product die van de
@@ -1948,8 +2069,19 @@
         <button class="btn primary" value="ok">${esc(t("btn.save"))}</button>
       </div>`, (data, action) => {
       if (action === "delete") {
+        const at = h.activities.indexOf(a);
+        // syncRooms telt de zalen van een installatie weer af: dat getal gaat
+        // bij het terugzetten gewoon terug naar wat er stond.
+        const unit = { ...h.unit };
         h.activities = h.activities.filter((x) => x.id !== a.id);
         syncRooms(h, a, null);
+        offerUndo(t("toast.removed.activity"), () => {
+          h.activities.splice(Math.min(at, h.activities.length), 0, a);
+          h.unit.roomsInstalled = unit.roomsInstalled;
+          h.unit.roomsDemo = unit.roomsDemo;
+        });
+        renderAll();
+        return;
       } else {
         // Komt dit uit de agenda, dan erft het contactmoment het id van het
         // plan. De databank ziet dan dat p:<id> verdwijnt en a:<id> opduikt, en
@@ -2019,7 +2151,7 @@
       }
       scheduleSave();
       renderAll();
-    }, t("confirm.deleteActivity"));
+    });
     // Het aantal hangt af van soort én product: kamers bij een abonnement,
     // bestelde stuks bij een product per ingreep. Het veld is hetzelfde, het
     // opschrift volgt het product.
@@ -2117,6 +2249,14 @@
       </div>`, (data, action) => {
       if (action === "delete") {
         h.planned = h.planned.filter((x) => x.id !== p.id);
+        syncNextAction(h);
+        offerUndo(t("toast.removed.planned"), () => {
+          h.planned.push(p);
+          h.planned.sort(byWhen);
+          syncNextAction(h);
+        });
+        renderAll();
+        return;
       } else {
         const rec = p || { id: uid() };
         Object.assign(rec, {
@@ -2145,7 +2285,7 @@
       syncNextAction(h);
       scheduleSave();
       renderAll();
-    }, t("confirm.deletePlanned"));
+    });
     // Een ander product, andere collega's: de lijst volgt de keuze. Wie
     // gekozen was blijft staan als hij dat product ook heeft.
     // onchange en geen luisteraar: #dialogForm wordt hergebruikt, en een
@@ -2409,7 +2549,33 @@
       else if (!menuList.hidden) toggleMenu(false);
       else if (state.selectedId) closeFiche();
     }
-    if (e.key === "/" && document.activeElement === document.body) { e.preventDefault(); $("#search").focus(); }
+    // Toetsen werken alleen als je nergens in typt en er geen dialoog of
+    // uitklapper openstaat, en nooit samen met Ctrl, Alt of Cmd: die zijn van de browser.
+    // "Nergens in typen" is niet "de focus op de pagina": wie net een
+    // ziekenhuis in de lijst aanklikte, staat op die rij.
+    const el = document.activeElement;
+    // Een veld in een dialoog die al dicht is houdt soms de focus: daar typt
+    // niemand (zoals in handsBusy).
+    const typing = !!(el && el.matches && el.matches("input, textarea, select, [contenteditable]") && el.offsetParent !== null);
+    if (typing || document.querySelector("dialog[open], details.pick[open]")) return;
+    // De ene uitzondering op "nooit met Ctrl of Cmd": Ctrl+Z of Cmd+Z zet terug
+    // wat net verwijderd is. De knop in de melding staat ver weg in de
+    // tabvolgorde en is na zes seconden weg; met het toetsenbord haal je die
+    // niet. In een veld blijft de toets van de browser: daar kwamen we niet.
+    if (pendingUndo && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      hideToast();
+      runUndo();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "/") { e.preventDefault(); $("#search").focus(); return; }
+    // N en P: een contactmoment of een gepland moment voor de open fiche.
+    const h = state.ficheOpen && sel();
+    if (!h || !store.can.write) return;
+    const k = e.key.toLowerCase();
+    if (k === KEY_ACTIVITY) { e.preventDefault(); activityDialog(h); }
+    else if (k === KEY_PLANNED) { e.preventDefault(); plannedDialog(h); }
   });
 
   // ---------- agenda ----------
@@ -2863,7 +3029,27 @@
   const statsView = $("#statsView");
   const agendaView = $("#agendaView");
   const usersView = $("#usersView");
-  function setView(view) {
+  // Elke wissel van scherm is een stap voor de terugknop: terug brengt je naar
+  // het scherm waar je vandaan kwam. Wie zelf teruggaat naar dat scherm (de
+  // knop "Terug naar kaart") neemt die stap weer weg in plaats van er een
+  // bovenop te leggen. quiet: zonder stap, voor de terugknop zelf en voor het
+  // scherm waarmee de app opent.
+  const viewTrail = [];
+  function setView(view, quiet) {
+    const prev = document.body.dataset.view;
+    if (!quiet && prev && prev !== view) {
+      const top = viewTrail[viewTrail.length - 1];
+      if (top && top.from === view) { viewTrail.pop(); top.done(); }
+      else {
+        const step = { from: prev };
+        step.done = layer(() => {
+          const i = viewTrail.indexOf(step);
+          if (i >= 0) viewTrail.splice(i, 1);
+          setView(step.from, true);
+        });
+        viewTrail.push(step);
+      }
+    }
     if (view !== "agenda") clearLogHospital();
     document.body.dataset.view = view;
     statsView.hidden = view !== "stats";
@@ -3009,7 +3195,7 @@
   });
   try {
     const saved = localStorage.getItem("followup-view");
-    if (saved && !["stats", "agenda", "users"].includes(saved)) setView(saved);
+    if (saved && !["stats", "agenda", "users"].includes(saved)) setView(saved, true);
   } catch (e) { /* privévenster */ }
 
   // Herladen brengt je terug waar je was: hetzelfde scherm, dezelfde fiche,
@@ -3054,7 +3240,7 @@
     if (!place) return;
     if (["planned", "log"].includes(place.tab)) state.agenda.tab = place.tab;
     // Het gebruikersscherm wacht: wie het mag zien weten we pas na aanmelden.
-    if (["stats", "agenda"].includes(place.view)) setView(place.view);
+    if (["stats", "agenda"].includes(place.view)) setView(place.view, true);
     if (place.hospital) {
       const el = $("#fiche");
       el.innerHTML = skelFiche();
@@ -3087,7 +3273,7 @@
       else state.pendingFocus = [h.lat, h.lng];
     }
     const views = ["map", "list", "stats", "agenda", ...(store.can.manageUsers ? ["users"] : [])];
-    if (views.includes(place.view)) setView(place.view);
+    if (views.includes(place.view)) setView(place.view, true);
   }
   showPlaceEarly();
 
