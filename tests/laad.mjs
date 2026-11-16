@@ -82,12 +82,13 @@ export async function koppeling() {
   const ctx = {
     stand: { version: 1, hospitals: [] },
     scope: [],
+    rol: "editor",
     mensen: [{ id: "u1", name: "Proef Persoon", products: [] }, { id: "u2", name: "Collega Proef", products: [] }],
   };
   const handler = await edgeFunctie("supabase/functions/agent/index.ts", async (url, opt) => {
     if (url.endsWith("/auth/v1/user")) return [200, { id: "u1" }];
     if (url.includes("/app_users")) return [200, ctx.mensen];
-    if (url.endsWith("/rpc/read_state")) return [200, { data: kopie(ctx.stand), updated_at: "t1", role: "editor", products: ctx.scope }];
+    if (url.endsWith("/rpc/read_state")) return [200, { data: kopie(ctx.stand), updated_at: "t1", role: ctx.rol, products: ctx.scope }];
     if (url.endsWith("/rpc/write_state")) { ctx.stand = JSON.parse(opt.body).payload; return [200, "t2"]; }
     throw new Error("onverwacht adres: " + url);
   });

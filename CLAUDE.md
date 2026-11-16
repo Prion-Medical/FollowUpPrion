@@ -633,8 +633,8 @@ touch".
 
 | Role | May |
 |---|---|
-| `admin` | everything, plus assigning roles |
-| `editor` | everything with the data, including deleting and importing a backup |
+| `admin` | everything, plus assigning roles and deleting a hospital that has contact moments or planned moments |
+| `editor` | everything with the data, including deleting and importing a backup — except deleting a hospital that has contact moments or planned moments |
 | `contributor` | add and change; not delete, not import |
 | `viewer` | read, print and export only |
 
@@ -671,6 +671,12 @@ server-side stamp (166).
 ## The product wall
 
 `app_users.products` restricts someone to EndoQ or Ainex, and it is a wall, not a
+A hospital that has contact moments or planned moments is deleted by an `admin`
+only: with it goes everyone's history. `write_state()` checks what was stored, so
+it counts a colleague's moments the editor never saw; the app and the connector
+say so first (`gebruiker.sql` C7). An empty hospital — a double entry, a typo — an
+editor may still remove.
+
 filter: `read_state()` strips the other product's contacts, contact moments and
 planned moments before the row leaves the database, so that data never reaches the
 browser at all.

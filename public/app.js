@@ -1536,6 +1536,10 @@
         if (state.dragId) toast(t("map.dragHint"));
         return renderAll();
       case "delete":
+        // Met contactmomenten of geplande momenten enkel een beheerder; de
+        // databank weigert het ook (write_state). Wat dit account niet ziet,
+        // telt daar mee: dan zegt de databank het na het bewaren.
+        if (store.me().role !== "admin" && (h.activities.length || h.planned.length)) return tell(t("rights.deleteHospitalAdmin"));
         ask(t("confirm.deleteHospital", { name: h.name })).then((yes) => {
           if (!yes) return;
           state.db.hospitals = state.db.hospitals.filter((x) => x.id !== h.id);

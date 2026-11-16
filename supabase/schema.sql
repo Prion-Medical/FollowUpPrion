@@ -1936,6 +1936,19 @@ begin
   update public.app_state
      set data = v_nieuw, updated_at = now(), updated_by = auth.uid()
    where id = 'main'
+    -- Een ziekenhuis met contactmomenten of geplande momenten verwijdert enkel
+    -- een beheerder: daarmee gaat de geschiedenis van iedereen mee, ook wat
+    -- een collega er logde. Een leeg ziekenhuis (een dubbele invoer, een
+    -- tikfout) mag een bewerker nog altijd weghalen. We kijken naar wat
+    -- opgeslagen stond, niet naar wat deze gebruiker ervan zag.
+    if v_rol <> 'admin' and exists (
+         select 1 from jsonb_array_elements(followup.arr(v_basis -> 'hospitals')) t(e)
+          where ('h:' || (t.e ->> 'id')) = any(v_weg_h)
+            and (jsonb_array_length(followup.arr(t.e -> 'activities')) > 0
+                 or jsonb_array_length(followup.arr(t.e -> 'planned')) > 0)) then
+      raise exception 'followup:no_delete enkel een beheerder verwijdert een ziekenhuis met contactmomenten of geplande momenten'
+        using errcode = 'PT403', hint = 'no_delete';
+    end if;
   returning updated_at into v_at;
   return v_at;
 end $$;

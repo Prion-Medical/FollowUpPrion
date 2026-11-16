@@ -1030,12 +1030,19 @@ async function remove(token: string, args: Any, user: Any) {
   const mayDelete = (role: string) => {
     if (!["admin", "editor"].includes(role)) throw new ToolError("This account may not remove anything. Only an editor or an admin can.");
   };
+  // Zoals write_state(): een ziekenhuis met momenten verwijdert enkel een beheerder.
+  const adminOnly = (role: string, h: Any) => {
+    if (kind === "hospital" && role !== "admin" && (h.activities.length || h.planned.length)) {
+      throw new ToolError("Only an admin can remove a hospital that has contact moments or planned moments. Remove those first, or ask an admin.");
+    }
+  };
   const codeFor = (updatedAt: string, h: Any, rec: Any) => confirmCode([user.id, kind, h.id, rec.id, updatedAt]);
 
   if (!has(args, "confirm") || args.confirm === "") {
     const { doc, role, updatedAt } = await loadState(token);
     mayDelete(role);
     const { h, rec } = target(doc, kind, args);
+    adminOnly(role, h);
     return {
       about_this_data: NOT_INSTRUCTIONS,
       removed: false,
@@ -1047,6 +1054,7 @@ async function remove(token: string, args: Any, user: Any) {
   return await change(token, async ({ doc, role, updatedAt }) => {
     mayDelete(role);
     const { h, rec } = target(doc, kind, args);
+    adminOnly(role, h);
     if (String(args.confirm) !== await codeFor(updatedAt, h, rec)) {
       throw new ToolError("That confirm code is not valid (any more): the data changed since it was given, or it belongs to something else. Call remove without confirm to see what would be removed now.");
     }
