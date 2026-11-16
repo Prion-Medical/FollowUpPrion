@@ -70,9 +70,89 @@ window.FollowUpUI = (() => {
     arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
     prev: '<path d="m14.5 6-6 6 6 6"/>',
     next: '<path d="m9.5 6 6 6-6 6"/>',
+    calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M8.5 3v4M15.5 3v4"/>',
+    copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
   };
   const icon = (name, cls) =>
     `<svg class="ic${cls ? " " + cls : ""}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+
+  // ---------- de terugknop ----------
+  // De app is één pagina, en zonder dit verlaat de terugknop (of het
+  // teruggebaar op een telefoon) haar meteen, ook als je alleen een fiche of
+  // een dialoog wilde sluiten. Alles wat opengaat legt daarom een laag in de
+  // geschiedenis van de browser: layer(close) geeft een functie terug die je
+  // oproept zodra de laag langs een andere weg dichtging (een knop, Escape).
+  // Drukt iemand op terug, dan roepen wij close() op.
+  //
+  // trail loopt gelijk met de geschiedenis: elke stap draagt zijn nummer in
+  // history.state, zodat we na een popstate weten hoeveel lagen er nog horen
+  // te staan, ook als iemand vooruit ging of meerdere stappen tegelijk nam.
+  // Een laag die dichtging terwijl er nog iets bovenop lag, blijft als dode
+  // plaats staan: haar stap bestaat nog, en die slaan we bij terug over.
+  // Geeft close() false terug (een dialoog die eerst iets vraagt), dan staat
+  // de laag er nog en leggen we de stap opnieuw.
+  //
+  // Adressen krijgen de schermen hier bewust niet: de pagina's zijn openbaar
+  // en een id van een ziekenhuis in een link voegt niets toe.
+  const trail = [];
+  const stepOf = (state) => (state && Number.isInteger(state.fu) && state.fu > 0 ? state.fu : 0);
+  // Na een herlading staan de oude stappen er nog, zonder dat wij weten wat
+  // ze waren: dode plaatsen, zodat de nummering doorloopt.
+  let at = 0, skip = 0;
+  if (typeof history !== "undefined") {
+    try { at = stepOf(history.state); } catch (e) { /* geen toegang */ }
+    for (let i = 0; i < at; i++) trail.push({ dead: true });
+  }
+  const push = () => { try { history.pushState({ fu: at }, ""); } catch (e) { /* geen toegang */ } };
+  function layer(close) {
+    const e = { close, dead: false };
+    trail.length = at; // wat vooruit lag, vervalt zoals in de browser zelf
+    trail.push(e);
+    at = trail.length;
+    push();
+    return () => {
+      if (e.dead) return;
+      e.dead = true;
+      // Bovenaan: de stap gaat mee weg. Anders blijft ze als dode plaats.
+      if (trail[trail.length - 1] === e && at === trail.length) {
+        trail.pop();
+        at--;
+        skip++;
+        try { history.back(); } catch (err) { skip--; }
+      }
+    };
+  }
+  if (typeof window !== "undefined") window.addEventListener("popstate", (ev) => {
+    const target = stepOf(ev.state);
+    // Een stap terug die we zelf zetten omdat een laag al dicht was.
+    if (skip) { skip--; at = target; return; }
+    const back = target < at;
+    at = target;
+    let did = false;
+    while (trail.length > target) {
+      const e = trail.pop();
+      if (e.dead) continue;
+      e.dead = true;
+      if (e.close() === false) {
+        // Ze bleef open: de laag en haar stap komen terug.
+        e.dead = false;
+        trail.push(e);
+        at = trail.length;
+        push();
+        return;
+      }
+      did = true;
+    }
+    // Alleen dode plaatsen gesloten: de gebruiker zag niets gebeuren, dus
+    // meteen een stap verder terug.
+    if (back && !did && target > 0) { try { history.back(); } catch (e) { /* laat maar */ } }
+  });
+  // Een <dialog> openen met een laag eronder; softClose() ruimt ze op.
+  function openModal(dlg, onBack) {
+    if (dlg.open) return;
+    dlg.showModal();
+    dlg._release = layer(onBack);
+  }
 
   // ---------- dialogen ----------
   // Een dialoog die zacht dichtgaat. De browser sluit een <dialog> in één
@@ -82,7 +162,13 @@ window.FollowUpUI = (() => {
   function softClose(dlg, value = "") {
     return new Promise((resolve) => {
       if (!dlg.open || leaving(dlg)) return resolve(value);
-      leave(dlg, () => { dlg.close(value); resolve(value); },
+      leave(dlg, () => {
+        dlg.close(value);
+        const done = dlg._release;
+        dlg._release = null;
+        if (done) done();
+        resolve(value);
+      },
         { shift: phone() ? "translateY(24px)" : "translateY(6px) scale(0.98)", backdrop: true });
     });
   }
@@ -102,7 +188,8 @@ window.FollowUpUI = (() => {
       const answer = (value) => softClose(d, value).then((v) => resolve(v === "ok"));
       d.onsubmit = (e) => { e.preventDefault(); answer(e.submitter ? e.submitter.value : ""); };
       d.oncancel = (e) => { e.preventDefault(); answer(""); }; // Escape
-      d.showModal();
+      // Terug is hier hetzelfde als Escape: nee.
+      openModal(d, () => { answer(""); });
       d.querySelector(cancel ? '[value="cancel"]' : '[value="ok"]').focus();
     });
   }
@@ -386,5 +473,5 @@ window.FollowUpUI = (() => {
   window.addEventListener("resize", selClose);
   document.addEventListener("focusout", (e) => { if (sel && e.target === sel.el) selClose(); });
 
-  return { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows };
+  return { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows, layer, openModal };
 })();

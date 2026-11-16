@@ -12,10 +12,21 @@
     DB_VERSION, STATUSES, STAGES, PRE_SALE, ACT_TYPES, ACT_TYPE_KEYS,
     PRODUCTS, SCOPE_BRANDS, PROCESSOR_BRANDS, DEPARTMENTS, SECTORS, LANGUAGES, COUNTRIES, REGIONS, REGION_KEYS, regionOf, ROLES,
     CMM_STATES, YES_NO, productKind, wantsQuantity, stagesFor, furthest, pipelineView,
+    typesAmong, typesOffered, COUNTING_TYPES, productsOf, productOf, toProductList, familiesFor, wantsFamily, factsFor,
     esc, pickBox, syncPick, myProducts, productColor, merge3, deepEqual, setMain, mainContact,
+    normalizeFacts, syncPipeline, zonderProduct, syncRooms, shared, byWhen, assigneeOf, tickOffDate, typesInAll, momentsMoved,
   } = window.FollowUpDomain;
   // Wat de pagina doet zonder iets van ziekenhuizen te weten: zie ui.js.
-  const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows } = window.FollowUpUI;
+  const { icon, leave, stay, leaving, softClose, ask, tell, rowTops, settleRows, layer, openModal } = window.FollowUpUI;
+  // Agenda-abonnementen: zie feeds.js. De afspraken zelf maakt de serverkant
+  // (supabase/functions/calendar).
+  const Feeds = window.FollowUpFeeds;
+
+  // De regels voor kleur en fase staan in domain.js. Ze geven terug welke
+  // kleur erbij kwam; hier komt de melding erbij.
+  const kleurMelding = (kleur) => { if (kleur) toast(t(kleur === "green" ? "status.toGreen" : "status.toOrange")); };
+  const stageStatus = (x, contacted) => kleurMelding(window.FollowUpDomain.stageStatus(x, contacted));
+  const autoStatus = (h, act) => kleurMelding(window.FollowUpDomain.autoStatus(h, act));
   // Welk product staat standaard in een nieuw contactmoment of een planning:
   // dat van het ziekenhuis als er maar één is, anders het jouwe als jij er maar
   // één mag.
@@ -30,6 +41,29 @@
   // staan, anders stond wie alleen de Benelux volgt na één klik weer tussen
   // de ziekenhuizen van de rest van de wereld.
   const REGION_KEY = "followup-regions";
+  // Welke secties van het dossier dichtgeklapt staan, onthouden per browser:
+  // wie veel producten heeft klapt dicht wat hij zelden nodig heeft, en dat
+  // geldt dan voor elk ziekenhuis. Per sectie een sleutel; voor een product
+  // is dat "product:" met zijn naam erachter.
+  const SECTIONS_KEY = "followup-sections";
+  const closedSections = (() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(SECTIONS_KEY) || "[]");
+      return new Set(Array.isArray(v) ? v.filter((k) => typeof k === "string") : []);
+    } catch (e) { return new Set(); }
+  })();
+  function toggleSection(key) {
+    if (closedSections.has(key)) closedSections.delete(key); else closedSections.add(key);
+    try { localStorage.setItem(SECTIONS_KEY, JSON.stringify([...closedSections])); } catch (e) { /* privévenster */ }
+    return closedSections.has(key);
+  }
+  // Het begin van een sectie en haar kopje. Het kopje is zelf de knop: het
+  // pijltje wijst naar rechts als de sectie dicht is en naar beneden als ze
+  // openstaat. Wat er na de titel in het kopje komt (een teller, de knop om
+  // iets toe te voegen) blijft ook bij een dichte sectie staan.
+  const secOpen = (key) => `<div class="section${closedSections.has(key) ? " closed" : ""}" data-sec="${esc(key)}">`;
+  const secHead = (key, title, rest = "") =>
+    `<h3><button type="button" class="sec-toggle" data-sec-toggle="${esc(key)}" aria-expanded="${closedSections.has(key) ? "false" : "true"}">${icon("next")}<span>${esc(title)}</span></button>${rest}</h3>`;
   function savedRegions() {
     try {
       const v = JSON.parse(localStorage.getItem(REGION_KEY) || "[]");
@@ -92,7 +126,21 @@
     const n = Number(v);
     return v === "" || v == null || !Number.isFinite(n) ? null : n;
   };
+  // Wat mensen plakken is zelden netjes. Een telefoonnummer houden we zoals
+  // het is, op de witruimte errond en dubbele spaties na: toestelnummers en
+  // buitenlandse nummers komen in te veel vormen om ze te herschrijven. Van
+  // een e-mailadres dat als "Naam <adres>" of met mailto: binnenkomt blijft
+  // het adres over.
+  const cleanPhone = (v) => str(v).replace(/\s+/g, " ").trim();
+  const cleanEmail = (v) => {
+    const s = str(v).trim().replace(/^mailto:/i, "");
+    const m = s.match(/<\s*([^<>\s]+@[^<>\s]+)\s*>/);
+    return (m ? m[1] : s).trim();
+  };
   const dateOrEmpty = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(str(v)) ? str(v) : "");
+  // Een uur als 14:00. Enkel bij een gepland moment: een contactmoment heeft
+  // een datum en geen uur.
+  const timeOrEmpty = (v) => (/^([01]\d|2[0-3]):[0-5]\d$/.test(str(v)) ? str(v) : "");
   const coord = (v, max) => {
     const n = numOrNull(v);
     return n == null || Math.abs(n) > max ? null : n;
@@ -107,15 +155,19 @@
   // Hoort dit contactmoment of geplande moment bij de producten waarop
   // gefilterd is? Zonder filter alles; een record zonder product hoort overal
   // bij, zoals het ook voor iedereen zichtbaar is.
-  const inFilter = (r) => !state.filter.products.length || !r.product || state.filter.products.includes(r.product);
+  const inFilter = (r) => !state.filter.products.length || !productsOf(r).length || productsOf(r).some((p) => state.filter.products.includes(p));
   // "Te laat", "stil gevallen" en "demo gepland" volgen de productfilter, net
   // als de kleur: wie op Thyroid RFA filtert wil niet de achterstallige actie
   // van EndoQ zien. planned staat op datum, dus het eerste dat past is de
   // volgende actie — zonder filter is dat gewoon nextActionDate.
+  // Een moment zonder datum kan niet te laat zijn: het eerste mét datum telt.
   function isOverdue(h) {
-    const p = h.planned.find(inFilter);
+    const p = h.planned.find((x) => x.date && inFilter(x));
     return !!p && p.date < today();
   }
+  // Te laat: een datum, en die is voorbij. Een moment zonder datum staat
+  // klaar tot iemand het doet, en is dus nooit te laat.
+  const isLate = (p) => !!p.date && p.date < today();
   // Stil gevallen: er is contact geweest, er staat niets gepland en het laatste
   // contactmoment is lang geleden. Zo'n ziekenhuis glipt door alle andere
   // filters — niet rood (er was contact), niet groen (er staat niets), niet
@@ -130,7 +182,9 @@
   // Een datum als YYYY-MM-DD uit de losse delen. Niet via toISOString(): die
   // rekent in UTC en schuift bij ons 's avonds een dag op.
   const ymd = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  // nextAction en nextActionDate volgen uit het eerste geplande moment. Zo
+  // nextAction en nextActionDate volgen uit het eerste geplande moment — ook
+  // als dat er een zonder datum is: dat staat bovenaan, dus dat is wat er nu
+  // te doen is. nextActionDate is dan leeg. Zo
   // blijven de lijst, de filter "actie te laat" en de CSV werken zoals
   // voorheen, zonder tweede plaats waar hetzelfde wordt bijgehouden.
   function syncNextAction(h) {
@@ -142,7 +196,9 @@
   // staat het gewoon in de agenda, zodat de teller en de agenda hetzelfde zien.
   function hasDemoPlanned(h) {
     const d = today();
-    return h.planned.some((p) => p.type === "demo" && p.date >= d && inFilter(p));
+    // Ook een demo die nog geen datum heeft: die moet geregeld worden, en is
+    // dus gepland.
+    return h.planned.some((p) => p.type === "demo" && (!p.date || p.date >= d) && inFilter(p));
   }
   function relDays(d) {
     if (!d) return "";
@@ -153,13 +209,67 @@
     return t("rel.daysAgo", { n });
   }
 
-  function toast(msg) {
+  // action is een knop in de melding ({ label, run }): de melding blijft dan
+  // wat langer staan, en after loopt zodra ze weg is zonder dat erop geklikt
+  // is.
+  function toast(msg, action, after) {
     const el = $("#toast");
+    // Een andere melding neemt de plaats in van "Ongedaan maken": dan is die
+    // kans voorbij en gaat de verwijdering door.
+    if (pendingUndo && !action) settleUndo();
     el.textContent = msg;
+    if (action) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "toast-act";
+      b.textContent = action.label;
+      if (action.title) b.title = action.title;
+      b.onclick = () => { hideToast(); action.run(); };
+      el.append(" ", b);
+    }
     stay(el); // stond ze net weg te gaan, dan blijft ze
     el.hidden = false;
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => leave(el, () => { el.hidden = true; }, { ms: 160, shift: "translate(-50%, 6px)" }), 2600);
+    toast._t = setTimeout(() => { hideToast(); if (after) after(); }, action ? 6000 : 2600);
+  }
+  function hideToast() {
+    const el = $("#toast");
+    clearTimeout(toast._t);
+    if (!el.hidden) leave(el, () => { el.hidden = true; }, { ms: 160, shift: "translate(-50%, 6px)" });
+  }
+  // ---------- ongedaan maken ----------
+  // Een contactmoment, een gepland moment of een contactpersoon verwijder je
+  // zonder vraag vooraf: het is meteen weg, en een paar tellen lang kun je het
+  // terugzetten. Zolang die kans loopt wordt er niet bewaard, zodat een
+  // teruggezet record de databank nooit verlaten heeft: de inventaris in
+  // write_state() ziet het niet verdwijnen, en het krijgt geen nieuwe auteur.
+  // Eén tegelijk: een tweede verwijdering laat de eerste doorgaan. Een
+  // ziekenhuis houdt zijn vraag, want daarmee verdwijnt ieders geschiedenis.
+  // pendingUndo.held: of er, los van de verwijdering, nog iets te bewaren is.
+  let pendingUndo = null;
+  function offerUndo(msg, undo) {
+    settleUndo();
+    pendingUndo = { undo, held: dirty };
+    clearTimeout(saveTimer);
+    dirty = true;
+    showSaveState("save.saving");
+    toast(msg, { label: t("btn.undo"), title: `${t("btn.undo")} (${KEY_UNDO})`, run: runUndo }, settleUndo);
+  }
+  // De kans is voorbij: de verwijdering gaat naar de databank.
+  function settleUndo() {
+    if (!pendingUndo) return;
+    pendingUndo = null;
+    hideToast();
+    scheduleSave();
+  }
+  function runUndo() {
+    const u = pendingUndo;
+    if (!u) return;
+    pendingUndo = null;
+    u.undo();
+    renderAll();
+    if (u.held) scheduleSave();
+    else { dirty = false; showSaveState("save.saved"); }
   }
   // ---------- opslag ----------
   let saveTimer = null;
@@ -187,6 +297,9 @@
     dirty = true;
     showSaveState("save.saving");
     clearTimeout(saveTimer);
+    // Loopt de kans om een verwijdering ongedaan te maken nog, dan wacht ook
+    // deze wijziging daarop: anders ging de verwijdering mee de deur uit.
+    if (pendingUndo) { pendingUndo.held = true; return; }
     saveTimer = setTimeout(save, 400);
   }
   // ---------- samen werken ----------
@@ -202,6 +315,9 @@
   // een tweede naast de eerste zou op een verouderde basis samenvoegen, en
   // "bezet, ga maar door" liet de opslag zonder samenvoegen opnieuw proberen.
   let pulling = null;
+  // Het tijdstip van een eigen opslag dat we bewust nog niet overnamen (zie
+  // momentsMoved): enkel een import heeft het nodig, zie save().
+  let heldAt = null;
   // Het samengevoegde document overnemen zonder de objecten te vervangen waar
   // een open dialoog of de fiche nog naar wijst: een ziekenhuis, een
   // contactpersoon of een moment dat al bestond blijft hetzelfde object en
@@ -243,6 +359,7 @@
     refill(state.db, clone(merged));
     base = clone(fresh.db);
     store.accept(fresh.at);
+    heldAt = null;
     // Wie in de fiche aan het typen is, houdt zijn veld: wat hij typt staat
     // nog niet in het document en zou bij een hertekening weg zijn.
     const a = document.activeElement;
@@ -251,21 +368,36 @@
     } else renderAll();
     return mineLeft ? "dirty" : "clean";
   }
+  // Wat een contactmoment met de opvolging doet (kleur, fase, geïnstalleerde
+  // zalen), beslist de databank bij elke opslag. Wat de app zelf uitrekende is
+  // maar een voorproefje: na zo'n opslag halen we op wat er werkelijk bewaard
+  // is en nemen dat over, met als basis precies wat we stuurden. Anders stuurt
+  // de volgende opslag ons eigen voorproefje terug, en dat wint.
+  // Daarvoor is geen eigen vlag nodig: na zo'n opslag nemen we het nieuwe
+  // tijdstip niet over (save() hieronder). Voor deze app is het document dan
+  // nog niet het hare, zoals na de opslag van een collega: refreshQuietly
+  // ziet het en haalt het op, en een opslag die eerder komt, botst en
+  // voegt samen langs de gewone weg. Meestal is het meteen na de opslag al
+  // opgehaald.
+  // Typt er iemand, staat er een lijstje open of versleept iemand een speld?
+  // Het scherm hertekenen zou dat dan onder zijn handen wegnemen. Een veld
+  // dat de focus nog heeft maar niet meer te zien is (in een dialoog die al
+  // dicht is) telt niet: daar typt niemand.
   // Stil bijwerken. Wanneer je naar het tabblad terugkeert, en af en toe
   // terwijl het openstaat, vragen we of er iets veranderd is; zo ja, dan komt
   // het erbij zonder dat je er iets van merkt. Niet terwijl er een dialoog
   // openstaat of een opslag onderweg is: die regelen het zelf.
+  function handsBusy() {
+    const a = document.activeElement;
+    return !!(a && a.matches && a.matches("input, textarea, select") && a.offsetParent !== null)
+      || !!(state.dragId || state.placing || document.querySelector("details.pick[open]"));
+  }
   async function refreshQuietly() {
     if (store.mode !== "supabase" || state.loading || document.hidden) return;
     if (saving || pulling || dirty || document.querySelector("dialog[open]")) return;
     // Ook niet terwijl je ergens typt, een lijstje openstaat of een speld
-    // versleept: het scherm hertekenen zou dat onder je handen wegnemen. Het
-    // komt een halve minuut later wel.
-    // Een veld dat de focus nog heeft maar niet meer te zien is (in een
-    // dialoog die al dicht is) telt niet: daar typt niemand.
-    const a = document.activeElement;
-    if (a && a.matches && a.matches("input, textarea, select") && a.offsetParent !== null) return;
-    if (state.dragId || state.placing || document.querySelector("details.pick[open]")) return;
+    // versleept (handsBusy): het komt een halve minuut later wel.
+    if (handsBusy()) return;
     try {
       if (!(await store.changed())) return;
       const result = await pull();
@@ -288,14 +420,30 @@
     saveMode = "save";
     saving = true;
     try {
+      // Een pull die al onderweg is eerst laten landen: hij leest base pas na
+      // het ophalen, en een opslag die intussen slaagt, zou hem tegen een
+      // nieuwere basis een ouder document laten samenvoegen.
+      if (pulling) await pulling.catch(() => {});
       // Iemand anders bewaarde ondertussen: ophalen, samenvoegen en opnieuw
       // proberen, zonder er de gebruiker mee lastig te vallen. Een paar keer,
       // want in de tijd van het ophalen kan er nog iemand bewaard hebben. Een
       // import voegen we niet samen: die zet bewust alles terug.
+      // Een import zet alles terug en voegt niet samen; wat hij overschrijft
+      // van het achtergehouden tijdstip is enkel wat de databank over onze
+      // eigen vorige opslag besliste. Zonder dit botste hij daarop, alsof
+      // iemand anders bewaard had.
+      if (mode === "import" && heldAt) { store.accept(heldAt); heldAt = null; }
+      let moved = false;
       for (let attempt = 0; ; attempt++) {
         const sent = clone(state.db);
         try {
-          await store.save(state.db, mode);
+          const at = await store.save(state.db, mode);
+          moved = mode === "save" && store.mode === "supabase" && !!base && momentsMoved(base, sent);
+          // Raakte de opslag een contactmoment, dan besliste de databank iets
+          // wat wij nog niet hebben: het tijdstip blijft dan het oude, zie
+          // momentsMoved hierboven.
+          if (moved) heldAt = at;
+          else { store.accept(at); heldAt = null; }
           base = sent;
           break;
         } catch (e) {
@@ -305,6 +453,16 @@
       }
       dirty = saveAgain;
       showSaveState("save.saved");
+      // De databank heeft over de opvolging beslist: meteen overnemen wat ze
+      // bewaarde. Ook onder een open dialoog, zoals de pull hierboven: refill()
+      // houdt de objecten waar die dialoog naar wijst. Niet onder iemands
+      // handen (handsBusy): dan doet refreshQuietly het straks, of botst de
+      // volgende opslag en voegt ze samen. Lukt het ophalen niet, idem.
+      if (moved && !handsBusy()) {
+        try {
+          if ((await pull()) === "conflict") showBanner(t("save.conflict"), true, "warn");
+        } catch (e) { /* zie hierboven */ }
+      }
     } catch (e) {
       // Een import die niet doorging mag later niet als gewone opslag worden
       // samengevoegd: dan zou de back-up half over de echte gegevens komen.
@@ -324,6 +482,14 @@
   }
   window.addEventListener("beforeunload", (e) => {
     if (dirty) e.preventDefault();
+  });
+  // Wie weggaat terwijl "Ongedaan maken" nog staat, wil de verwijdering: ze
+  // gaat meteen de deur uit in plaats van te wachten op een klok die stopt.
+  window.addEventListener("pagehide", () => {
+    if (!pendingUndo) return;
+    pendingUndo = null;
+    clearTimeout(saveTimer);
+    save();
   });
 
   // Een tekstvak drukt alleen af wat in het kadertje past; de rest valt weg,
@@ -475,23 +641,49 @@
     // vaak het aanspreekpunt voor allebei, en met een derde product erbij wordt
     // dat alleen maar vaker zo. Het oude veld wordt hier omgezet en verdwijnt,
     // zoals demoDate destijds in planned[] is opgegaan.
-    if (!Array.isArray(c.products)) c.products = str(c.product) ? [str(c.product)] : [];
-    delete c.product;
-    c.products = [...new Set(c.products.filter((p) => typeof p === "string" && p))];
+    // Dezelfde omzetting als bij een moment: toProductList() in domain.js.
+    toProductList(c);
     // De dienst is een vaste sleutel; de functie ernaast blijft vrije tekst.
     c.department = DEPARTMENTS.includes(c.department) ? c.department : "";
     c.language = LANGUAGES.includes(c.language) ? c.language : "";
     c.primary = !!c.primary;
     return c;
   }
+  // De producten van een moment staan altijd in "products", een lijst. De
+  // oude vorm, "product" met één naam, zet de databank om; hier gebeurt
+  // hetzelfde voor een oude back-up die terugkomt, of voor data/db.json bij
+  // server.py, met toProductList() uit domain.js: dezelfde regel als
+  // followup.een_lijst() in schema.sql, en tests/databank.mjs houdt ze gelijk.
+  //
+  // "shared" zet de databank erbij als ze de lijst voor deze gebruiker
+  // snoeide (zie shared() in domain.js). Ze haalt het er bij het bewaren zelf
+  // weer af. Bij server.py is er geen muur en dus niets gesnoeid: wat daar
+  // binnenkomt (een back-up van een afgeschermd account) gaat er hier af,
+  // anders zou het in data/db.json blijven staan.
+  function productShape(r) {
+    toProductList(r);
+    if (r.shared !== true || store.mode !== "supabase") delete r.shared;
+  }
+  // Een aantal hoort bij één product: gaat het moment over meer, dan is er
+  // geen aantal.
+  const wantsNumber = (type, r) => !shared(r) && wantsQuantity(type, productOf(r));
+  // De soort binnen het product (bij stents). Het veld staat er alleen als
+  // er een gekozen is: een lege waarde bij elk ouder moment zou wie als
+  // eerste opslaat de laatste bewerker van het hele logboek maken.
+  function familyShape(r) {
+    const p = shared(r) ? "" : productOf(r);
+    if (wantsFamily(r.type, p) && familiesFor(p).includes(r.family)) r.family = str(r.family);
+    else delete r.family;
+  }
   function normalizeActivity(a) {
     a.id = str(a.id) || uid();
     a.type = ACT_TYPE_KEYS.includes(a.type) ? a.type : "other";
     a.date = dateOrEmpty(a.date);
-    a.product = str(a.product);
+    productShape(a);
     a.contactId = str(a.contactId);
     a.note = str(a.note);
-    a.rooms = wantsQuantity(a.type, a.product) ? numOrNull(a.rooms) : null;
+    a.rooms = wantsNumber(a.type, a) ? numOrNull(a.rooms) : null;
+    familyShape(a);
     stampFields(a);
     return a;
   }
@@ -502,86 +694,19 @@
     p.id = str(p.id) || uid();
     p.type = ACT_TYPE_KEYS.includes(p.type) ? p.type : "other";
     p.date = dateOrEmpty(p.date);
-    p.product = str(p.product);
+    productShape(p);
     p.contactId = str(p.contactId);
     p.note = str(p.note);
+    familyShape(p);
     // Aan wie het moment is toegewezen. Het veld staat er alleen als iemand
     // gekozen is: schreven we bij elk ouder moment een lege waarde, dan zou
     // wie als eerste opslaat de laatste bewerker van de hele agenda worden.
     if (str(p.assignee)) p.assignee = str(p.assignee); else delete p.assignee;
+    // Een uur is er alleen als iemand het invulde, om dezelfde reden: een leeg
+    // veld bij elk ouder moment zou het hele rooster als gewijzigd opslaan.
+    if (timeOrEmpty(p.time)) p.time = timeOrEmpty(p.time); else delete p.time;
     stampFields(p);
     return p;
-  }
-  // Voor wie een gepland moment is. Zonder toewijzing is dat wie het invoerde:
-  // wie iets plant, volgt het bijna altijd ook op, en zo werkt de filter in de
-  // agenda meteen voor alles wat er al stond.
-  const assigneeOf = (p) => p.assignee || p.createdBy || "";
-  // De gegevens van een product per ingreep. Ze staan in de rij van dat
-  // product in h.pipeline en niet in een blok op het ziekenhuis zoals unit:
-  // Thyroid RFA en Fibroid RFA hebben elk hun eigen goedkeuring, prioriteit en
-  // concurrent in hetzelfde ziekenhuis, en zo vallen ze vanzelf binnen de
-  // productmuur — de databank schermt die rijen al af per product.
-  function normalizeFacts(e) {
-    e.cmm = CMM_STATES.includes(e.cmm) ? e.cmm : "";
-    e.prio = [1, 2, 3].includes(Number(e.prio)) ? Number(e.prio) : null;
-    e.doesAlready = YES_NO.includes(e.doesAlready) ? e.doesAlready : "";
-    e.currentSystem = str(e.currentSystem);
-    e.notes = str(e.notes);
-    return e;
-  }
-  // De opvolging per product. Elk product dat bij het ziekenhuis aangevinkt
-  // staat krijgt een eigen fase, kleur en verantwoordelijke; wat op het
-  // ziekenhuis zelf staat volgt daaruit (zie pipelineView in domain.js).
-  //
-  // Vroeger was er één fase per ziekenhuis. Die wordt hier de fase van elk
-  // product dat er toen aangevinkt stond — de app wist niet beter, en twee
-  // keer dezelfde fase is juister dan één van de twee op prospect zetten. Een
-  // product dat er láter bijkomt begint vooraan: prospect, of eerste contact
-  // als er al een contactmoment voor bestaat.
-  //
-  // Een rij verdwijnt hier nooit, ook niet als het vinkje weggaat. Wie
-  // afgeschermd is krijgt h.products gesnoeid op zijn eigen bereik, en zou
-  // anders de opvolging van een collega wissen bij de eerste opslag.
-  function syncPipeline(h) {
-    if (!h.pipeline || typeof h.pipeline !== "object" || Array.isArray(h.pipeline)) h.pipeline = {};
-    for (const [p, e] of Object.entries(h.pipeline)) {
-      if (!e || typeof e !== "object") { delete h.pipeline[p]; continue; }
-      e.stage = STAGES.includes(e.stage) ? e.stage : "prospect";
-      e.status = STATUSES.includes(e.status) ? e.status : "red";
-      e.owner = str(e.owner);
-      if (productKind(p) === "procedure") normalizeFacts(e);
-    }
-    const eerste = !Object.keys(h.pipeline).length;
-    for (const p of h.products) {
-      if (h.pipeline[p]) continue;
-      const contacted = h.activities.some((a) => a.product === p);
-      const e = eerste ? { stage: h.stage, status: h.status, owner: "" }
-        : { stage: contacted ? "first_contact" : "prospect", status: contacted ? "orange" : "red", owner: "" };
-      // Een fase die dit product niet kent, schuift naar de dichtste die het
-      // wel kent: allebei liggen ze net voor of net na de evaluatie.
-      if (!stagesFor(p).includes(e.stage)) e.stage = "evaluation";
-      if (productKind(p) === "procedure") normalizeFacts(e);
-      h.pipeline[p] = e;
-    }
-    if (h.products.length) {
-      const f = furthest(h.products.map((p) => h.pipeline[p]));
-      h.status = f.status;
-      h.stage = f.stage;
-    } else if (!stagesFor("").includes(h.stage)) {
-      // Zonder product geldt de keuzelijst van het ziekenhuis zelf, en die
-      // kent niet elke fase.
-      h.stage = "evaluation";
-    }
-  }
-  // Het laatste product is afgevinkt. De kleur en de fase op het ziekenhuis
-  // waren die van dat product; ze laten staan zou zeggen dat een ziekenhuis
-  // zonder product klant is. Terug naar wat de contactmomenten zeggen. Wat er
-  // per product stond blijft bewaard en komt terug als het vinkje terugkomt.
-  function zonderProduct(h) {
-    if (h.products.length) return;
-    const contacted = h.activities.length > 0;
-    h.status = contacted ? "orange" : "red";
-    h.stage = contacted ? "first_contact" : "prospect";
   }
   // Wat de kaart, de lijst en de tellers van een ziekenhuis tonen: het volgt
   // de productfilter in de zijbalk.
@@ -600,18 +725,21 @@
     // Een account dat niet meer bestaat is "?", niet niets: anders lijkt het
     // moment van wie het invoerde.
     const to = r.assignee && r.assignee !== store.me().id && r.assignee !== r.createdBy && (personName(r.assignee) || "?");
-    return [withType && t("act." + r.type), r.product, c && c.name,
-      r.rooms ? `${r.rooms} ${t(productKind(r.product) === "procedure" ? "act.units" : "act.rooms")}` : "",
+    return [withType && t("act." + r.type), productsOf(r).join(" + "), r.family && t("family." + r.family), c && c.name,
+      r.rooms ? `${r.rooms} ${t(productKind(productOf(r)) !== "procedure" ? (r.rooms === 1 ? "act.room" : "act.rooms") : r.type === "procedure" ? "act.used" : "act.units")}` : "",
       to && t("for", { name: to }),
       by && t("by", { name: by })].filter(Boolean).join(" · ");
   }
   // De contactmomenten als CSV, recentste eerst: voor de export van alles en
   // voor "CSV van deze keuze" in het logboek.
   function activitiesCsv(items) {
+    // De kolom met de soort staat er alleen voor wie een product heeft dat
+    // soorten kent.
+    const withFamily = myProducts().some((p) => familiesFor(p).length);
     return csv([
-      [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.quantity"), t("col.note"), t("col.addedBy")],
+      [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), ...(withFamily ? [t("col.family")] : []), t("col.contact"), t("col.quantity"), t("col.note"), t("col.addedBy")],
       ...[...items].sort((x, y) => y.a.date.localeCompare(x.a.date))
-        .map(({ h, a }) => [a.date, h.name, t("act." + a.type), a.product,
+        .map(({ h, a }) => [a.date, h.name, t("act." + a.type), productsOf(a).join(", "), ...(withFamily ? [a.family ? t("family." + a.family) : ""] : []),
           (h.contacts.find((c) => c.id === a.contactId) || {}).name, a.rooms ?? "", a.note, personName(a.createdBy)]),
     ]);
   }
@@ -652,10 +780,12 @@
   // Aan wie je een gepland moment kunt toewijzen: wie het product van dat
   // moment mag zien. Zonder product is dat iedereen. Een keuze, geen muur: de
   // databank verbergt het moment sowieso voor wie het product niet heeft.
-  function assigneeOptions(product, current) {
+  // products: de producten van het moment. Wie er minstens één van heeft,
+  // ziet het moment en kan het dus opvolgen.
+  function assigneeOptions(products, current) {
     const list = owners().filter(([id]) => {
       const scope = id === store.me().id ? (store.can.products || []) : (peopleScope.get(id) || []);
-      return !product || !scope.length || scope.includes(product);
+      return !products.length || !scope.length || products.some((p) => scope.includes(p));
     });
     if (current && !list.some(([id]) => id === current)) list.push([current, personName(current) || "?"]);
     // "—" alleen als er niemand bekend is (een moment van vóór de stempel):
@@ -712,7 +842,9 @@
     }
     delete h.demoDate;
     // Zonder datum is het geen planning, en de agenda rekent op de sortering.
-    h.planned = h.planned.filter((p) => p.date).sort((a, b) => a.date.localeCompare(b.date));
+    // Op datum, en wat geen datum heeft vooraan: dat staat klaar tot iemand
+    // het doet. Dezelfde volgorde als fix_planned() in de databank.
+    h.planned.sort(byWhen);
     syncNextAction(h);
     h.createdAt = dateOrEmpty(h.createdAt) || today();
     // Een halve locatie is geen locatie: de kaart rekent op lat én lng.
@@ -787,6 +919,11 @@
         .addTo(map)
         .bindTooltip(esc(h.name), { direction: "top", offset: [0, -10], className: "pin-label" })
         .on("click", () => select(h.id, false));
+      // Een speld is een knop waar je met Tab op komt; zonder naam hoort een
+      // schermlezer veertig keer "knop". Geen title: dat zou een tweede
+      // tekstballon naast de onze geven.
+      const pin = m.getElement();
+      if (pin) pin.setAttribute("aria-label", h.name);
       m.on("dragend", () => {
         const p = m.getLatLng();
         h.lat = +p.lat.toFixed(5);
@@ -1123,18 +1260,6 @@
 
   // ---------- fiche ----------
   const opt = (value, label, current) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
-  // Eén product kiezen, in dezelfde uitklapper als overal elders. Radio's en
-  // geen vinkjes: een contactmoment hoort bij één product. Omdat ze allemaal
-  // name="product" dragen, komt de keuze via FormData binnen, en de
-  // samenvatting houdt de uitklapper zelf bij — de dialoog hoeft er dus
-  // helemaal niets voor te doen. Het streepje is een rij als alle andere, en
-  // daarmee ook meteen de tekst die er staat als er niets gekozen is.
-  const productOne = (chosen) => pickBox([
-    { attrs: `name="product" value=""`, label: "—", checked: !chosen, type: "radio" },
-    ...myProducts().map((p) => ({
-      attrs: `name="product" value="${esc(p)}"`, label: p, checked: chosen === p, type: "radio",
-    })),
-  ], "—");
   // Twee afvinklijsten met dezelfde merken: de scopes en de videoprocessors.
   // Welke lijst
   // een vakje bijwerkt staat in data-brand-list.
@@ -1144,9 +1269,26 @@
       <input type="number" min="0" data-unit="${key}" value="${esc(h.unit[key] ?? "")}">
     </label>`;
 
+  // De open fiche is een laag voor de terugknop (layer in ui.js). Hier en niet
+  // in select() en closeFiche(): de fiche gaat langs meer wegen open en dicht
+  // (een ander scherm kiezen, een speld plaatsen, herladen), en ze komen
+  // allemaal hier voorbij.
+  let ficheLayer = null;
+  // De toetsen voor de twee dingen die je in een fiche het vaakst doet. Ze
+  // staan in de tooltip van hun knop (keyTip), zodat je ze kunt vinden.
+  const KEY_ACTIVITY = "n", KEY_PLANNED = "p";
+  // Ongedaan maken heeft de toets die het overal heeft. Hoe ze heet, hangt af
+  // van het toestel.
+  const KEY_UNDO = /Mac|iPhone|iPad/.test(navigator.platform) ? "\u2318Z" : "Ctrl+Z";
+  const keyTip = (label, key) => `${label} (${key.toUpperCase()})`;
+  function syncFicheLayer(open) {
+    if (open && !ficheLayer) ficheLayer = layer(() => { ficheLayer = null; closeFiche(); });
+    else if (!open && ficheLayer) { const done = ficheLayer; ficheLayer = null; done(); }
+  }
   function renderFiche() {
     const el = $("#fiche");
     const h = sel();
+    syncFicheLayer(!!(h && state.ficheOpen));
     // Sluiten gaat zacht: het paneel schuift weg en is daarna pas verborgen.
     // De inhoud blijft tot dan staan (een leeg paneel zien wegschuiven is
     // lelijker dan niets), en pas daarna is de kaart zo breed als ze wordt.
@@ -1182,7 +1324,7 @@
           <i class="dot ${esc(shown(h).status)}" style="width:14px;height:14px"></i>
           <input class="fiche-title" data-field="name" value="${esc(h.name)}" title="${esc(h.name)}" aria-label="${esc(t("fiche.name"))}">
           <button class="icon-btn show-on-map" data-act="show-map" title="${esc(t("map.showOnMap"))}" aria-label="${esc(t("map.showOnMap"))}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg></button>
-          <button class="icon-btn" data-act="close" title="${esc(t("btn.close"))}" aria-label="${esc(t("btn.close"))}">${icon("close")}</button>
+          <button class="icon-btn" data-act="close" title="${esc(t("btn.close"))} (Esc)" aria-label="${esc(t("btn.close"))}">${icon("close")}</button>
         </div>
         ${pipe.length || beperkt ? "" : `<div class="status-pick">
           ${STATUSES.map((k) => `<button class="${k} ${h.status === k ? "active" : ""}" data-status="${k}" title="${esc(t("status." + k))}"><span><i class="dot ${k}"></i>${esc(t("status." + k + ".short"))}</span></button>`).join("")}
@@ -1198,8 +1340,8 @@
         </div>
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.followup"))}</h3>
+      ${secOpen("followup")}
+        ${secHead("followup", t("section.followup"))}
         ${pipe.length ? pipe.map((p) => {
           const e = h.pipeline[p];
           return `<div class="pipe">
@@ -1225,14 +1367,14 @@
         </div>`}
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.planned"))}${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned">${esc(t("btn.addPlanned"))}</button></h3>
-        ${h.planned.length ? `<ul class="timeline">${h.planned.map((p) => {
+      ${secOpen("planned")}
+        ${secHead("planned", t("section.planned"), `${late ? ` <span class="badge">${esc(t("badge.late"))}</span>` : ""} <button class="btn small" data-act="add-planned" title="${esc(keyTip(t("dlg.plannedNew"), KEY_PLANNED))}">${esc(t("btn.addPlanned"))}</button>`)}
+        ${h.planned.length ? `<ul class="timeline">${[...h.planned].sort(byWhen).map((p) => {
           // Dezelfde regel als in de agenda, zodat ook hier staat voor wie
           // het moment is.
           const sub = momentLine(h, p, false);
-          return `<li class="${p.date < today() ? "late" : ""}">
-            <div class="t-date">${esc(fmtDate(p.date))}<span class="t-rel">${esc(relDays(p.date))}</span></div>
+          return `<li class="${isLate(p) ? "late" : ""}">
+            <div class="t-date">${esc(p.date ? fmtDate(p.date) : t("planned.noDate"))}${p.time ? `<span class="t-rel">${esc(p.time)}</span>` : ""}<span class="t-rel">${esc(relDays(p.date))}</span></div>
             <div class="t-body">
               <div class="t-type"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(t("act." + p.type))}</div>
               ${sub ? `<div class="t-sub">${esc(sub)}</div>` : ""}
@@ -1246,8 +1388,8 @@
         }).join("")}</ul>` : `<p class="muted">${esc(t("empty.planned"))}</p>`}
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.activities"))} <button class="btn small" data-act="add-activity">${esc(t("btn.addActivity"))}</button></h3>
+      ${secOpen("activities")}
+        ${secHead("activities", t("section.activities"), ` <button class="btn small" data-act="add-activity" title="${esc(keyTip(t("dlg.actNew"), KEY_ACTIVITY))}">${esc(t("btn.addActivity"))}</button>`)}
         ${acts.length ? `<ul class="timeline ${state.actsOpen === h.id ? "" : "capped"}">${acts.map((a, i) => {
           const sub = momentLine(h, a, false);
           return `<li${i >= ACT_CAP ? ' class="extra"' : ""}>
@@ -1267,8 +1409,8 @@
           : `<p class="muted">${esc(t("empty.activities"))}</p>`}
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.contacts"))} <button class="btn small" data-act="add-contact">${esc(t("btn.addContact"))}</button></h3>
+      ${secOpen("contacts")}
+        ${secHead("contacts", t("section.contacts"), ` <button class="btn small" data-act="add-contact">${esc(t("btn.addContact"))}</button>`)}
         ${contacts.length ? contacts.map((c) => `
           <div class="contact ${c.primary ? "primary" : ""}">
             <div class="c-actions">
@@ -1284,8 +1426,8 @@
           </div>`).join("") : `<p class="muted">${esc(t("empty.contacts"))}</p>`}
       </div>
 
-      <div class="section">
-        <h3>${esc(t("section.data"))}</h3>
+      ${secOpen("data")}
+        ${secHead("data", t("section.data"))}
         <div class="grid">
           <label class="field">${esc(t("field.country"))}
             <select data-field="country">${[opt("", "—", h.country), ...COUNTRIES.map((c) => opt(c, t("country." + c), h.country))].join("")}</select>
@@ -1327,31 +1469,32 @@
         // dit ziekenhuis aangevinkt is en binnen je bereik valt.
         const e = h.pipeline[p];
         const fact = (k) => `data-fact="${k}" data-fact-product="${esc(p)}"`;
-        return `<div class="section">
-        <h3>${esc(p)}</h3>
+        const facts = factsFor(p);
+        return `${secOpen("product:" + p)}
+        ${secHead("product:" + p, p)}
         <p class="muted">${esc(t("unit.unknownOk"))}</p>
         <div class="grid">
-          <label class="field">${esc(t("rfa.cmm"))}
+          ${!facts.includes("cmm") ? "" : `<label class="field">${esc(t("rfa.cmm"))}
             <select ${fact("cmm")}>${[opt("", "—", e.cmm), ...CMM_STATES.map((k) => opt(k, t("rfa.cmm." + k), e.cmm))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("rfa.prio"))}
+          </label>`}
+          ${!facts.includes("prio") ? "" : `<label class="field">${esc(t("rfa.prio"))}
             <select ${fact("prio")}>${[opt("", "—", String(e.prio ?? "")), ...[1, 2, 3].map((n) => opt(String(n), String(n), String(e.prio ?? "")))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("rfa.doesAlready"))}
+          </label>`}
+          ${!facts.includes("doesAlready") ? "" : `<label class="field">${esc(t("rfa.doesAlready"))}
             <select ${fact("doesAlready")}>${[opt("", "—", e.doesAlready), ...YES_NO.map((k) => opt(k, t("yn." + k), e.doesAlready))].join("")}</select>
-          </label>
-          <label class="field">${esc(t("rfa.currentSystem"))}
+          </label>`}
+          ${!facts.includes("currentSystem") ? "" : `<label class="field">${esc(t("rfa.currentSystem"))}
             <input ${fact("currentSystem")} value="${esc(e.currentSystem)}" placeholder="${esc(t("rfa.currentSystem.ph"))}">
-          </label>
-          <label class="field full">${esc(t("rfa.notes"))}
+          </label>`}
+          ${!facts.includes("notes") ? "" : `<label class="field full">${esc(t("rfa.notes"))}
             <textarea ${fact("notes")} rows="3">${esc(e.notes)}</textarea>
-          </label>
+          </label>`}
         </div>
       </div>`;
       }).join("")}
 
-      ${!endoFor(h) ? "" : `<div class="section">
-        <h3>${esc(t("section.unit"))}</h3>
+      ${!endoFor(h) ? "" : `${secOpen("unit")}
+        ${secHead("unit", t("section.unit"))}
         <p class="muted">${esc(t("unit.unknownOk"))}</p>
         <div class="grid">
           <div class="field full"><span class="field-label">${esc(t("unit.scopeBrands"))}</span>
@@ -1406,14 +1549,14 @@
       if (d.field === "stage") stageStatus(h, h.activities.length > 0);
     } else if (d.pstage && h.pipeline[d.pstage]) {
       h.pipeline[d.pstage].stage = el.value;
-      stageStatus(h.pipeline[d.pstage], h.activities.some((a) => a.product === d.pstage));
+      stageStatus(h.pipeline[d.pstage], h.activities.some((a) => productsOf(a).includes(d.pstage)));
       syncPipeline(h);
     } else if (d.powner && h.pipeline[d.powner]) {
       h.pipeline[d.powner].owner = el.value;
     } else if (d.fact && h.pipeline[d.factProduct]) {
       // normalizeFacts houdt de vaste sleutels en het getal in de hand.
       h.pipeline[d.factProduct][d.fact] = el.value;
-      normalizeFacts(h.pipeline[d.factProduct]);
+      normalizeFacts(h.pipeline[d.factProduct], d.factProduct);
     } else if (d.unit) {
       h.unit[d.unit] = el.type === "number" ? num(el.value) : el.value;
     } else if (d.unitBool) {
@@ -1449,6 +1592,15 @@
       renderFiche();
       return;
     }
+    // Een sectie open- of dichtklappen. Zonder hertekenen: alleen de klasse
+    // wisselt, zodat wat je in een veld aan het typen was blijft staan.
+    const sec = e.target.closest("[data-sec-toggle]");
+    if (sec) {
+      const dicht = toggleSection(sec.dataset.secToggle);
+      sec.closest(".section").classList.toggle("closed", dicht);
+      sec.setAttribute("aria-expanded", dicht ? "false" : "true");
+      return;
+    }
     const b = e.target.closest("[data-act]");
     if (!b) return;
     const id = b.dataset.id;
@@ -1482,6 +1634,10 @@
         if (state.dragId) toast(t("map.dragHint"));
         return renderAll();
       case "delete":
+        // Met contactmomenten of geplande momenten enkel een beheerder; de
+        // databank weigert het ook (write_state). Wat dit account niet ziet,
+        // telt daar mee: dan zegt de databank het na het bewaren.
+        if (store.me().role !== "admin" && (h.activities.length || h.planned.length)) return tell(t("rights.deleteHospitalAdmin"));
         ask(t("confirm.deleteHospital", { name: h.name })).then((yes) => {
           if (!yes) return;
           state.db.hospitals = state.db.hospitals.filter((x) => x.id !== h.id);
@@ -1635,23 +1791,36 @@
   // De formulierdialoog sluit zacht (softClose in ui.js), langs elke weg: een
   // knop of Escape. Dit staat op de dialoog en loopt dus na de afhandeling op
   // het formulier zelf; hield die het sluiten al tegen, dan blijft hij open.
+  // beforeClose hoort bij de dialoog die nu open is (openDialog() zet hem):
+  // een vraag die eerst beantwoord wordt, voor een dialoog die iets toont dat
+  // na het sluiten weg is, of die nog op de databank wacht.
+  function closeDialog(dlg, value) {
+    const guard = $("#dialogForm").beforeClose;
+    if (!guard) return softClose(dlg, value);
+    guard().then((yes) => { if (yes) softClose(dlg, value); });
+  }
   $("#dialog").addEventListener("submit", (e) => {
     if (e.defaultPrevented) return;
     e.preventDefault();
-    softClose(e.currentTarget, e.submitter ? e.submitter.value : "");
+    closeDialog(e.currentTarget, e.submitter ? e.submitter.value : "");
   });
-  $("#dialog").addEventListener("cancel", (e) => { e.preventDefault(); softClose(e.currentTarget); });
+  $("#dialog").addEventListener("cancel", (e) => { e.preventDefault(); closeDialog(e.currentTarget); });
   // askDelete is de vraag die de knop "Verwijder" eerst stelt; een dialoog
   // zonder zo'n knop laat hem weg.
-  function openDialog(html, onSubmit, askDelete) {
+  // opts.beforeClose: zie closeDialog(). Een dialoog die al openstaat (de
+  // tweede stap van het abonnement) krijgt enkel nieuwe inhoud.
+  function openDialog(html, onSubmit, askDelete, opts = {}) {
     const dlg = $("#dialog");
     const form = $("#dialogForm");
+    form.beforeClose = opts.beforeClose || null;
     form.innerHTML = html;
     // #dialogForm wordt door elke dialoog hergebruikt. onchange is een
     // eigenschap en geen luisteraar, zodat die van de vorige dialoog hier
     // vervalt in plaats van zich op te stapelen.
     form.onchange = null;
-    dlg.showModal();
+    // Terug sluit de dialoog zoals Escape dat doet. Stelt hij eerst een vraag
+    // (beforeClose), dan blijft de laag staan tot het antwoord er is.
+    openModal(dlg, () => { closeDialog(dlg); return form.beforeClose ? false : undefined; });
     const first = form.querySelector("input, select, textarea");
     if (first) first.focus();
     form.onsubmit = (e) => {
@@ -1664,7 +1833,9 @@
         // Eerst vragen. De dialoog blijft eronder openstaan: wie "Annuleer"
         // kiest, staat terug waar hij was in plaats van alles kwijt te zijn.
         e.preventDefault();
-        ask(askDelete).then((yes) => {
+        // Zonder vraag: de dialoog biedt na het verwijderen zelf "Ongedaan
+        // maken" aan (offerUndo).
+        (askDelete ? ask(askDelete) : Promise.resolve(true)).then((yes) => {
           if (!yes) return;
           softClose(dlg, "delete");
           onSubmit(null, "delete");
@@ -1691,7 +1862,7 @@
       const e = h.pipeline[p];
       const followed = !!e && (!!e.owner || e.status !== "red" || e.stage !== "prospect"
         || !!(e.cmm || e.prio || e.doesAlready || e.currentSystem || e.notes));
-      const used = followed || h.contacts.some((c) => c.products.includes(p)) || h.activities.some((a) => a.product === p);
+      const used = followed || h.contacts.some((c) => c.products.includes(p)) || h.activities.some((a) => productsOf(a).includes(p));
       if (!used) h.products = h.products.filter((x) => x !== p);
     }
     // Enkel als hier het laatste product wegviel — een ziekenhuis dat er al
@@ -1713,7 +1884,7 @@
           <select name="department">${[opt("", "—", v.department), ...DEPARTMENTS.map((d) => opt(d, t("dept." + d), v.department))].join("")}</select>
         </label>
         <label class="field">${esc(t("dlg.c.role"))}<input name="role" value="${esc(v.role)}" placeholder="${esc(t("dlg.c.role.ph"))}"></label>
-        <label class="field">${esc(t("dlg.c.phone"))}<input name="phone" value="${esc(v.phone)}"></label>
+        <label class="field">${esc(t("dlg.c.phone"))}<input name="phone" type="tel" inputmode="tel" autocomplete="off" value="${esc(v.phone)}"></label>
         <label class="field">${esc(t("dlg.c.email"))}<input name="email" type="email" value="${esc(v.email)}"></label>
         <label class="field full">${esc(t("dlg.c.address"))}<input name="address" value="${esc(v.address)}"></label>
         <div class="field">${esc(t("dlg.c.products"))}
@@ -1735,9 +1906,25 @@
         <button class="btn primary" value="ok">${esc(t("btn.save"))}</button>
       </div>`, (data, action) => {
       if (action === "delete") {
+        // Wat de verwijdering meeneemt, voor wie ze ongedaan maakt: de plaats
+        // in de lijst, de momenten die naar deze persoon wezen, en de vinkjes
+        // van het ziekenhuis (syncProducts laat een product vallen dat niemand
+        // meer gebruikt).
+        const at = h.contacts.indexOf(c);
+        const linked = h.activities.filter((a) => a.contactId === c.id);
+        const products = [...h.products];
         h.contacts = h.contacts.filter((x) => x.id !== c.id);
-        h.activities.forEach((a) => { if (a.contactId === c.id) a.contactId = ""; });
+        linked.forEach((a) => { a.contactId = ""; });
         syncProducts(h, c.products);
+        syncPipeline(h);
+        offerUndo(t("toast.removed.contact", { name: c.name }), () => {
+          h.contacts.splice(Math.min(at, h.contacts.length), 0, c);
+          linked.forEach((a) => { a.contactId = c.id; });
+          h.products = products;
+          syncPipeline(h);
+        });
+        renderAll();
+        return;
       } else {
         const rec = c || { id: uid() };
         const had = c ? [...c.products] : [];
@@ -1747,7 +1934,7 @@
         const keuze = picked(form);
         Object.assign(rec, {
           name: data.name.trim(), department: data.department, role: data.role.trim(), language: data.language,
-          phone: data.phone.trim(), email: data.email.trim(), address: data.address.trim(),
+          phone: cleanPhone(data.phone), email: cleanEmail(data.email), address: data.address.trim(),
           products: [...new Set([...had.filter((p) => !mine.includes(p)), ...keuze])],
           notes: data.notes.trim(), primary: !!data.primary,
         });
@@ -1759,30 +1946,121 @@
       syncPipeline(h);
       scheduleSave();
       renderAll();
-    }, c && t("confirm.deleteContact", { name: c.name }));
+    });
+    // Een geplakt "Naam <adres>" wordt het adres zodra je het veld verlaat,
+    // vóór de browser het als ongeldig afkeurt.
+    form.elements.email.onchange = (e) => { e.target.value = cleanEmail(e.target.value); };
+  }
+
+  // De keuzelijst van soorten voor een product; zonder product die van de
+  // producten waar dit account mee werkt. Een moment dat al een soort heeft
+  // die hier niet (meer) wordt aangeboden, houdt haar: de lijst versmalt de
+  // keuze, ze herschrijft niets.
+  // keys: de soorten die de dialoog aanbiedt (zie soortenVan in de dialogen).
+  function typeOptions(keys, current) {
+    return (current && !keys.includes(current) ? [current, ...keys] : keys).map((k) => opt(k, t("act." + k), current)).join("");
+  }
+  // De producten van een moment: vinkjes in dezelfde uitklapper als overal.
+  // Meestal één, soms meer (een gesprek over twee producten tegelijk).
+  const productMany = (chosen) => pickBox(myProducts().map((p) => ({
+    attrs: `data-mproduct="${esc(p)}"`, label: p, checked: chosen.includes(p),
+  })), "—");
+  const pickedProducts = (form) => [...form.querySelectorAll("[data-mproduct]:checked")].map((x) => x.dataset.mproduct);
+  // Een ander product gekozen in de dialoog: de lijst volgt. Bestaat de
+  // gekozen soort daar niet, dan valt de keuze terug op de eerste.
+  // Geeft de soort terug die moest wijken, of niets. De dialoog zegt dat
+  // dan: anders staat er bij het opslaan stil een andere soort dan gekozen.
+  function retype(select, keys) {
+    const was = select.value;
+    select.innerHTML = keys.map((k) => opt(k, t("act." + k), keys.includes(was) ? was : keys[0])).join("");
+    return was && !keys.includes(was) ? was : "";
+  }
+  // De regel onder de keuzes die zegt welke soort moest wijken. Kiest
+  // iemand daarna zelf een soort, dan is de melding achterhaald.
+  // key: de zin die het zegt; bij het afvinken van een plan een eigen.
+  function typeNote(form, e, weg, key = "dlg.typeChanged") {
+    const note = $("#typeNote", form);
+    if (weg) {
+      note.textContent = t(key, { was: t("act." + weg), now: t("act." + form.elements.type.value) });
+      note.hidden = false;
+    } else if (e && (e.target.name === "type" || e.target.dataset.mproduct)) note.hidden = true;
+  }
+
+  // Wat beide momentdialogen samen hebben: de producten bepalen de soorten,
+  // de soort en het product bepalen of er een soort stent bij hoort, en een
+  // moment over meer producten draagt geen aantal en geen soort. Ook niet als
+  // de databank er het product van een collega uit snoeide ("shared", zie
+  // shared() in domain.js): dat blijft gedeeld, wat er ook aangevinkt wordt.
+  // Wie wél alles ziet en een tweede product weer afvinkt, heeft een gewoon
+  // moment over één product, en dat mag een aantal dragen. Geeft een functie
+  // terug die de dialoog bij elke wijziging aanroept, met wat de dialoog
+  // daarna nog zelf nodig heeft.
+  // soortenVan(keuze) geeft de soorten die bij een keuze van producten passen.
+  function momentFields(form, v, soortenVan) {
+    const verborgen = v.shared === true;
+    let familyFor = null;
+    return (e) => {
+      const keuze = pickedProducts(form);
+      const gedeeld = verborgen || keuze.length > 1;
+      const product = gedeeld ? "" : keuze[0] || "";
+      const veranderd = !!(e && e.target.dataset.mproduct);
+      typeNote(form, e, veranderd ? retype(form.elements.type, soortenVan(keuze)) : "");
+      const type = form.elements.type.value;
+      const fam = form.elements.family;
+      if (familyFor !== product) {
+        const was = familyFor === null ? v.family || "" : fam.value;
+        fam.innerHTML = [opt("", "—", was), ...familiesFor(product).map((k) => opt(k, t("family." + k), was))].join("");
+        familyFor = product;
+      }
+      $("#familyField", form).hidden = !wantsFamily(type, product);
+      return { keuze, gedeeld, product, type, veranderd };
+    };
   }
 
   function activityDialog(h, a, plan) {
-    const v = a || (plan ? { ...plan, rooms: "" } : {
+    // Wat afgevinkt wordt, gebeurde ten laatste vandaag: een plan zonder datum
+    // of voor volgende week staat dan op vandaag, tot iemand iets anders
+    // kiest. Dezelfde regel als complete_planned_moment in de koppeling.
+    const v = a || (plan ? { ...plan, date: tickOffDate(plan, today()), rooms: "" } : {
       date: today(),
-      type: h.activities.length ? "email" : "prospecting",
-      product: defaultProduct(h),
+      type: "email",
+      products: defaultProduct(h) ? [defaultProduct(h)] : [],
       contactId: (mainContact(h, defaultProduct(h)) || {}).id || "",
       rooms: "", note: "",
     });
+    const had = productsOf(v);
+    // Een nieuw contactmoment (ook een afgevinkt plan) over meer producten
+    // mag een soort met een aantal hebben: bij het bewaren wordt het één
+    // contactmoment per product, elk met zijn eigen aantal. Niet bij een
+    // bestaand moment, en niet bij een plan waar de databank het product van
+    // een collega uit snoeide ("shared"): dat ziet deze gebruiker niet, en de
+    // databank houdt het op één moment.
+    const splitsen = !a && !(plan && plan.shared === true);
+    const soortenVan = (keuze) => (splitsen ? typesInAll(keuze, myProducts()) : typesAmong(keuze, myProducts(), v.shared === true));
+    // Een bestaand moment houdt zijn soort, ook als die niet meer aangeboden
+    // wordt (typeOptions). Een afgevinkt plan niet: een gedeeld plan voor een
+    // bestelling werd anders een bestelling zonder aantal, die voor wie maar
+    // één product ziet toch als verkocht telde. De koppeling weigert dat
+    // afvinken om dezelfde reden.
     const form = openDialog(`
       <h2>${esc(a ? t("dlg.actEdit") : t("dlg.actNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
         <label class="field">${esc(t("dlg.a.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
         <label class="field">${esc(t("dlg.a.type"))}
-          <select name="type">${Object.keys(ACT_TYPES).map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
+          <select name="type">${typeOptions(soortenVan(had), a || soortenVan(had).includes(v.type) ? v.type : "")}</select>
         </label>
-        <div class="field">${esc(t("dlg.a.product"))}${productOne(v.product)}</div>
+        <div class="field full">${esc(t("dlg.a.product"))}${productMany(had)}</div>
         <label class="field">${esc(t("dlg.a.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
-        <label class="field full" id="roomsField"><span id="roomsLabel">${esc(t("dlg.a.rooms"))}</span><input type="number" min="0" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
+        <p class="muted full" id="typeNote" hidden></p>
+        <p class="muted full" id="manyHint" hidden>${esc(t("dlg.a.many.hint"))}</p>
+        <div class="full per-product" id="perProduct" hidden></div>
+        <label class="field" id="roomsField"><span id="roomsLabel">${esc(t("dlg.a.rooms"))}</span><input type="number" min="0" max="100000" name="rooms" value="${esc(v.rooms ?? "")}" placeholder="1"></label>
+        <label class="field" id="familyField">${esc(t("dlg.a.family"))}<select name="family"></select></label>
+        <p class="muted full" id="roomsHint">${esc(t("dlg.a.used.hint"))}</p>
         <label class="field full">${esc(t("dlg.a.note"))}<textarea name="note" rows="4" placeholder="${esc(t("dlg.a.note.ph"))}">${esc(v.note)}</textarea></label>
+        <p class="muted full" id="noteHint">${esc(t("dlg.a.procedure.hint"))}</p>
       </div>
       ${stampLine(a)}
       <div class="actions">
@@ -1791,32 +2069,78 @@
         <button class="btn primary" value="ok">${esc(t("btn.save"))}</button>
       </div>`, (data, action) => {
       if (action === "delete") {
+        const at = h.activities.indexOf(a);
+        // syncRooms telt de zalen van een installatie weer af: dat getal gaat
+        // bij het terugzetten gewoon terug naar wat er stond.
+        const unit = { ...h.unit };
         h.activities = h.activities.filter((x) => x.id !== a.id);
         syncRooms(h, a, null);
+        offerUndo(t("toast.removed.activity"), () => {
+          h.activities.splice(Math.min(at, h.activities.length), 0, a);
+          h.unit.roomsInstalled = unit.roomsInstalled;
+          h.unit.roomsDemo = unit.roomsDemo;
+        });
+        renderAll();
+        return;
       } else {
         // Komt dit uit de agenda, dan erft het contactmoment het id van het
         // plan. De databank ziet dan dat p:<id> verdwijnt en a:<id> opduikt, en
         // weet dat dit afvinken is en geen verwijderen. Niets verwijst naar een
         // id van een gepland moment, dus hergebruiken kan veilig.
-        const rec = a || { id: plan ? plan.id : uid() };
-        const wantsRooms = wantsQuantity(data.type, data.product);
-        // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
-        const before = a ? { type: rec.type, rooms: rec.rooms, product: rec.product } : null;
-        Object.assign(rec, {
-          date: data.date, type: data.type, product: data.product, contactId: data.contactId,
-          rooms: wantsRooms ? num(data.rooms) : null, note: data.note.trim(),
-        });
-        stamp(rec, !a);
-        if (!a) h.activities.push(rec);
-        // Een contactmoment voor een product zet dat product bij het
-        // ziekenhuis: anders is er geen opvolging om bij te werken.
-        if (rec.product && !h.products.includes(rec.product)) h.products.push(rec.product);
-        syncPipeline(h);
-        // Ook bij een wijziging: een contactmoment dat nú een installatie of
-        // een bestelling is, zet de kleur en de fase mee goed.
-        if (!a || before.type !== rec.type) autoStatus(h, rec);
-        // Een installatie of demo met aantal kamers werkt de afdelingsgegevens bij.
-        syncRooms(h, before, rec);
+        // Snoeide de databank het product van een collega uit het plan, dan
+        // gaat "shared" mee: ook het contactmoment draagt dan geen aantal, en
+        // de databank zet het product van de collega er weer bij (en haalt
+        // "shared" er zelf af).
+        const keuze = pickedProducts(form);
+        // Een gedeeld plan afvinken zonder een van je eigen producten: dan
+        // blijft er voor jou niets van over, en de databank weigert het
+        // (buiten je bereik). Liever nu zeggen dan na een mislukte opslag.
+        if (plan && plan.shared === true && !keuze.length) {
+          tell(t("dlg.a.sharedNeedsMine"));
+          return KEEP_OPEN;
+        }
+        if (splitsen && keuze.length > 1 && keuze.some((p) => wantsQuantity(data.type, p))) {
+          // Eén contactmoment per product, elk met zijn eigen aantal (en soort
+          // stent). Het eerste erft het id van het plan, zodat de databank ziet
+          // dat dit afvinken is.
+          keuze.forEach((p, i) => {
+            const rec = {
+              id: i === 0 && plan ? plan.id : uid(), date: data.date, type: data.type, products: [p],
+              contactId: data.contactId, note: data.note.trim(),
+              rooms: wantsQuantity(data.type, p) ? num(data["q:" + p]) : null,
+            };
+            if (wantsFamily(data.type, p) && data["f:" + p]) rec.family = data["f:" + p];
+            stamp(rec, true);
+            h.activities.push(rec);
+            if (!h.products.includes(p)) h.products.push(p);
+            syncPipeline(h);
+            autoStatus(h, rec);
+            syncRooms(h, null, rec);
+          });
+        } else {
+          const rec = a || { id: plan ? plan.id : uid(), ...(plan && plan.shared === true ? { shared: true } : {}) };
+          // Toestand vóór de wijziging, om straks het verschil te kunnen toepassen.
+          const before = a ? { type: rec.type, rooms: rec.rooms, products: productsOf(rec) } : null;
+          rec.products = keuze;
+          const product = shared(rec) ? "" : productOf(rec);
+          Object.assign(rec, {
+            date: data.date, type: data.type, contactId: data.contactId,
+            rooms: wantsNumber(data.type, rec) ? num(data.rooms) : null, note: data.note.trim(),
+          });
+          if (wantsFamily(data.type, product) && data.family) rec.family = data.family;
+          else delete rec.family;
+          stamp(rec, !a);
+          if (!a) h.activities.push(rec);
+          // Een contactmoment voor een product zet dat product bij het
+          // ziekenhuis: anders is er geen opvolging om bij te werken.
+          for (const p of productsOf(rec)) if (!h.products.includes(p)) h.products.push(p);
+          syncPipeline(h);
+          // Ook bij een wijziging: een contactmoment dat nú een installatie of
+          // een bestelling is, zet de kleur en de fase mee goed.
+          if (!a || before.type !== rec.type) autoStatus(h, rec);
+          // Een installatie of demo met aantal kamers werkt de afdelingsgegevens bij.
+          syncRooms(h, before, rec);
+        }
         // Kwam dit uit de agenda, dan is het nu gebeurd en hoeft het niet meer
         // gepland te staan.
         if (plan) {
@@ -1827,17 +2151,50 @@
       }
       scheduleSave();
       renderAll();
-    }, t("confirm.deleteActivity"));
+    });
     // Het aantal hangt af van soort én product: kamers bij een abonnement,
     // bestelde stuks bij een product per ingreep. Het veld is hetzelfde, het
     // opschrift volgt het product.
-    const sync = () => {
-      const product = form.elements.product.value;
-      $("#roomsField", form).hidden = !wantsQuantity(form.elements.type.value, product);
-      $("#roomsLabel", form).textContent = t(productKind(product) === "procedure" ? "dlg.a.quantity" : "dlg.a.rooms");
+    // De soorten volgen het product, en de soort binnen het product (bij
+    // stents) staat er alleen waar ook het aantal staat.
+    const velden = momentFields(form, v, soortenVan);
+    // Per product een aantal (en een soort stent), voor een nieuw moment over
+    // meer producten met een soort die een aantal draagt. Enkel opnieuw
+    // getekend als de producten of de soort veranderen: anders verdween bij
+    // elk ingevuld veld de cursor uit het volgende.
+    let perProductVan = "";
+    const aantalLabel = (p, type) => t(productKind(p) !== "procedure" ? "dlg.a.rooms" : type === "procedure" ? "dlg.a.used" : "dlg.a.quantity");
+    const perProduct = (keuze, type) => {
+      const box = $("#perProduct", form);
+      const sleutel = `${type}|${keuze.join("|")}`;
+      if (sleutel === perProductVan) return;
+      perProductVan = sleutel;
+      const was = Object.fromEntries([...box.querySelectorAll("[name]")].map((x) => [x.name, x.value]));
+      box.innerHTML = keuze.map((p) => `<div class="pp-row">
+          <span class="pp-name">${esc(p)}</span>
+          ${wantsQuantity(type, p) ? `<label class="field">${esc(aantalLabel(p, type))}<input type="number" min="0" max="100000" name="q:${esc(p)}" value="${esc(was["q:" + p] ?? "")}" placeholder="1"></label>` : ""}
+          ${wantsFamily(type, p) ? `<label class="field">${esc(t("dlg.a.family"))}<select name="f:${esc(p)}">${[opt("", "—", was["f:" + p] || ""), ...familiesFor(p).map((k) => opt(k, t("family." + k), was["f:" + p] || ""))].join("")}</select></label>` : ""}
+        </div>`).join("") + `<p class="muted">${esc(t("dlg.a.split.hint"))}</p>`;
+    };
+    const sync = (e) => {
+      const { keuze, gedeeld, product, type } = velden(e);
+      const perStuk = splitsen && keuze.length > 1 && keuze.some((p) => wantsQuantity(type, p));
+      $("#manyHint", form).hidden = !gedeeld || perStuk;
+      $("#perProduct", form).hidden = !perStuk;
+      if (perStuk) perProduct(keuze, type);
+      const perPiece = productKind(product) === "procedure";
+      const number = !gedeeld && wantsQuantity(type, product);
+      $("#roomsField", form).hidden = !number;
+      $("#roomsLabel", form).textContent = aantalLabel(product, type);
+      $("#roomsHint", form).hidden = !((perPiece && number) || (perStuk && keuze.some((p) => productKind(p) === "procedure")));
+      $("#noteHint", form).hidden = type !== "procedure";
     };
     form.onchange = sync;
     sync();
+    // Een afgevinkt plan waarvan de soort hier niet aangeboden wordt: de
+    // keuzelijst viel op de eerste. Dat zeggen we, anders staat er bij het
+    // opslaan stil een andere soort dan gepland.
+    if (plan && !a && v.type && !soortenVan(had).includes(v.type)) typeNote(form, null, v.type, "dlg.a.planTypeChanged");
   }
 
   // Een moment plannen. Dezelfde soorten als een contactmoment, zodat een kleur
@@ -1847,29 +2204,41 @@
     const v = p || {
       date: today(),
       type: "visit",
-      product: defaultProduct(h),
+      products: defaultProduct(h) ? [defaultProduct(h)] : [],
       contactId: (mainContact(h, defaultProduct(h)) || {}).id || "",
       note: "",
     };
     // Een nieuw moment is voor jezelf tot je iemand anders kiest; een bestaand
     // toont wie het nu opvolgt.
     const assignee = p ? assigneeOf(p) : store.me().id;
+    const had = productsOf(v);
+    // Een plan draagt geen aantal: elke soort die bij alle gekozen producten
+    // bestaat, mag. Het aantal komt bij het afvinken, per product. Behalve
+    // bij een plan waar de databank het product van een collega uit snoeide
+    // ("shared"): daar geen soort die een aantal kan dragen, want die zet de
+    // databank stil terug. De soort die er al stond blijft (typeOptions).
+    const soortenVan = (keuze) => typesInAll(keuze, myProducts())
+      .filter((k) => !(v.shared === true && COUNTING_TYPES.includes(k)));
     // Lokaal zonder naam is er niemand om aan toe te wijzen: dan geen veld.
     const canAssign = owners().length > 0 || !!assignee;
     const form = openDialog(`
       <h2>${esc(p ? t("dlg.plannedEdit") : t("dlg.plannedNew"))} · ${esc(h.name)}</h2>
       <div class="grid">
-        <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" required value="${esc(v.date)}"></label>
+        <label class="field">${esc(t("dlg.p.date"))}<input type="date" name="date" value="${esc(v.date)}"></label>
+        <label class="field">${esc(t("dlg.p.time"))}<input type="time" name="time" value="${esc(v.time || "")}"></label>
+        <p class="muted full">${esc(t("dlg.p.when.hint"))}</p>
+        <div class="field full">${esc(t("dlg.p.product"))}${productMany(had)}</div>
         <label class="field">${esc(t("dlg.p.type"))}
-          <select name="type">${ACT_TYPE_KEYS.map((k) => opt(k, t("act." + k), v.type)).join("")}</select>
+          <select name="type">${typeOptions(soortenVan(had), v.type)}</select>
         </label>
-        <div class="field">${esc(t("dlg.p.product"))}${productOne(v.product)}</div>
         <label class="field">${esc(t("dlg.p.contact"))}
           <select name="contactId">${[opt("", "—", v.contactId), ...h.contacts.map((c) => opt(c.id, c.name, v.contactId))].join("")}</select>
         </label>
         ${canAssign ? `<label class="field full">${esc(t("dlg.p.assignee"))}
-          <select name="assignee">${assigneeOptions(v.product, assignee)}</select>
+          <select name="assignee">${assigneeOptions(had, assignee)}</select>
         </label>` : ""}
+        <p class="muted full" id="typeNote" hidden></p>
+        <label class="field full" id="familyField">${esc(t("dlg.a.family"))}<select name="family"></select></label>
         <label class="field full">${esc(t("dlg.p.note"))}<textarea name="note" rows="3" placeholder="${esc(t("dlg.p.note.ph"))}">${esc(v.note)}</textarea></label>
       </div>
       ${stampLine(p)}
@@ -1880,12 +2249,28 @@
       </div>`, (data, action) => {
       if (action === "delete") {
         h.planned = h.planned.filter((x) => x.id !== p.id);
+        syncNextAction(h);
+        offerUndo(t("toast.removed.planned"), () => {
+          h.planned.push(p);
+          h.planned.sort(byWhen);
+          syncNextAction(h);
+        });
+        renderAll();
+        return;
       } else {
         const rec = p || { id: uid() };
         Object.assign(rec, {
-          date: data.date, type: data.type, product: data.product,
+          date: dateOrEmpty(data.date), type: data.type,
           contactId: data.contactId, note: data.note.trim(),
         });
+        // Zonder uur een hele dag in de agenda; met een uur een uur lang. Een
+        // uur zonder dag zegt niets, dus dat valt weg.
+        if (rec.date && timeOrEmpty(data.time)) rec.time = timeOrEmpty(data.time); else delete rec.time;
+        rec.products = pickedProducts(form);
+        // De soort stent kan al bij het plannen: bij het afvinken gaat ze mee.
+        const product = shared(rec) ? "" : productOf(rec);
+        if (wantsFamily(data.type, product) && data.family) rec.family = data.family;
+        else delete rec.family;
         // Het veld komt er alleen bij als het moment voor iemand anders is dan
         // wie het invoerde: voor die persoon volgt het al uit de stempel. Zo
         // krijgt een moment dat je voor jezelf plant geen naam mee, en blijft
@@ -1895,100 +2280,40 @@
         else delete rec.assignee;
         stamp(rec, !p);
         if (!p) h.planned.push(rec);
-        h.planned.sort((a, b) => a.date.localeCompare(b.date));
+        h.planned.sort(byWhen);
       }
       syncNextAction(h);
       scheduleSave();
       renderAll();
-    }, t("confirm.deletePlanned"));
+    });
     // Een ander product, andere collega's: de lijst volgt de keuze. Wie
     // gekozen was blijft staan als hij dat product ook heeft.
     // onchange en geen luisteraar: #dialogForm wordt hergebruikt, en een
     // luisteraar per geopende dialoog zou zich opstapelen (zie openDialog).
+    // De soorten volgen de producten: soortenVan hierboven.
+    const velden = momentFields(form, v, soortenVan);
+    velden();
+    // Een uur zonder dag zegt niets: zonder datum staat het uur uit, en dat
+    // ziet wie het invult, in plaats van dat het bij het opslaan stil wegvalt.
+    const when = () => { form.elements.time.disabled = !form.elements.date.value; };
+    when();
     form.onchange = (e) => {
+      if (e.target.name === "date") when();
+      const { veranderd: changed, keuze } = velden(e);
       const pick = form.elements.assignee;
-      if (!pick || e.target.name !== "product") return;
+      if (!pick || !changed) return;
       const was = pick.value;
       // Een collega die het nieuwe product niet heeft valt weg. Iemand die we
       // niet (meer) kennen blijft staan: over hem valt niets te zeggen, en een
       // ander product kiezen mag het moment niet stil aan jou toewijzen.
       const unknown = !!was && !owners().some(([id]) => id === was);
-      pick.innerHTML = assigneeOptions(e.target.value, unknown ? was : "");
+      pick.innerHTML = assigneeOptions(keuze, unknown ? was : "");
       const has = (id) => [...pick.options].some((o) => o.value === id);
       const next = has(was) ? was : has(store.me().id) ? store.me().id : "";
       const blank = pick.querySelector('option[value=""]');
       if (next && blank) blank.remove();
       pick.value = next;
     };
-  }
-
-  // Verkoopfase bepaalt mee de kleur: Klant = groen, actieve fases = oranje.
-  // x is waar de fase en de kleur staan: de opvolging van één product, of het
-  // ziekenhuis zelf zolang er geen product aan hangt.
-  function stageStatus(x, contacted) {
-    const before = x.status;
-    if (x.stage === "customer") x.status = "green";
-    else if (x.stage === "prospect") x.status = contacted ? x.status : "red";
-    else if (x.stage !== "not_interested" && x.status !== "green") x.status = "orange";
-    if (x.status !== before) toast(x.status === "green" ? t("status.toGreen") : t("status.toOrange"));
-  }
-
-  // Kleur automatisch mee laten evolueren; manueel aanpassen blijft altijd mogelijk.
-  // Een contactmoment hoort bij één product, dus het is de opvolging van dát
-  // product die meebeweegt — een bestelling voor het ene maakt het andere niet
-  // groen.
-  function autoStatus(h, act) {
-    // Zonder product op het contactmoment: hangt er precies één product aan
-    // het ziekenhuis, dan is het dat. Hangen er meer aan, dan valt niet te
-    // raden welk — en dan blijft alles staan, liever dan het verkeerde product
-    // groen te maken. Hangt er geen aan, dan is het het ziekenhuis zelf.
-    const rows = myProducts().filter((p) => h.products.includes(p) && h.pipeline[p]);
-    const x = (act.product && h.pipeline[act.product])
-      || (rows.length === 1 ? h.pipeline[rows[0]] : rows.length ? null : h);
-    if (!x) return;
-    if ((act.type === "installation" || act.type === "order") && x.status !== "green") {
-      x.status = "green";
-      if (PRE_SALE.includes(x.stage)) x.stage = "customer";
-      toast(t("status.toGreen"));
-    } else if (x.status === "red") {
-      x.status = "orange";
-      if (x.stage === "prospect") x.stage = "first_contact";
-      toast(t("status.toOrange"));
-    }
-    // Na een demo: geïnstalleerd bij een product per abonnement, in evaluatie
-    // bij een product per ingreep, waar niets geïnstalleerd wordt.
-    if (act.type === "demo" && ["prospect", "first_contact", "meeting", "demo_planned"].includes(x.stage)) {
-      x.stage = productKind(act.product) === "procedure" ? "evaluation" : "demo_installed";
-    }
-    syncPipeline(h);
-  }
-
-  // Kamers van de afdeling bijwerken na een demo, installatie of stopzetting.
-  //
-  // Installaties tellen op: na een installatie van 2 en later nog een van 3
-  // staan er 5 kamers live. Een stopgezet abonnement telt er weer af. We passen
-  // het verschil toe en niet de som van alle contactmomenten, zodat een aantal
-  // dat hier al handmatig stond blijft staan.
-  // Een demo overschrijft wél: dat is de huidige toestand, geen optelsom — we
-  // nemen het aantal van de laatste demo waarvoor een aantal is ingevuld.
-  function syncRooms(h, before, after) {
-    // Alleen voor een product per abonnement: het aantal bij een RFA-bestelling
-    // zijn stuks, geen kamers, en hoort dus niet bij de afdeling opgeteld.
-    const perKamer = (a) => !!a && productKind(a.product) === "subscription";
-    const installed = (a) => {
-      if (!perKamer(a) || !a.rooms) return 0;
-      if (a.type === "installation") return a.rooms;
-      if (a.type === "cancellation") return -a.rooms;
-      return 0;
-    };
-    const delta = installed(after) - installed(before);
-    if (delta > 0 || (delta < 0 && h.unit.roomsInstalled != null)) {
-      h.unit.roomsInstalled = Math.max(0, (h.unit.roomsInstalled || 0) + delta);
-    }
-    if ((perKamer(before) && before.type === "demo") || (perKamer(after) && after.type === "demo")) {
-      const demos = h.activities.filter((a) => a.type === "demo" && a.rooms && perKamer(a));
-      if (demos.length) h.unit.roomsDemo = demos.sort((a, b) => b.date.localeCompare(a.date))[0].rooms;
-    }
   }
 
   // ---------- nieuw ziekenhuis ----------
@@ -2133,7 +2458,7 @@
             t("col.address"), t("col.createdAt"), t("col.notes"),
             t("field.network"), t("field.sites"),
             ...myProducts().flatMap((p) => [`${t("col.stage")} ${p}`, `${t("col.owner")} ${p}`,
-              ...(productKind(p) === "procedure" ? ["rfa.cmm", "rfa.prio", "rfa.doesAlready", "rfa.currentSystem", "rfa.notes"].map((k) => `${t(k)} ${p}`) : [])])],
+              ...factsFor(p).map((k) => `${t("rfa." + k)} ${p}`)])],
           ...hs.map((h) => [h.name, h.country && t("country." + h.country), h.sector && t("sector." + h.sector),
             t("status." + h.status), t("stage." + h.stage), h.products.join(", "), lastContact(h),
             countType(h, "demo"), ...(endoAccount() ? [countType(h, "installation"), h.unit.roomsInstalled ?? ""] : []),
@@ -2142,10 +2467,10 @@
             h.network, h.sites,
             ...myProducts().flatMap((p) => {
               const e = h.products.includes(p) && h.pipeline[p];
-              const rfa = productKind(p) === "procedure";
-              if (!e) return rfa ? ["", "", "", "", "", "", ""] : ["", ""];
-              return [t("stage." + e.stage), personName(e.owner),
-                ...(rfa ? [e.cmm && t("rfa.cmm." + e.cmm), e.prio ?? "", e.doesAlready && t("yn." + e.doesAlready), e.currentSystem, e.notes] : [])];
+              const facts = factsFor(p);
+              if (!e) return ["", "", ...facts.map(() => "")];
+              const shown = { cmm: e.cmm && t("rfa.cmm." + e.cmm), prio: e.prio ?? "", doesAlready: e.doesAlready && t("yn." + e.doesAlready), currentSystem: e.currentSystem, notes: e.notes };
+              return [t("stage." + e.stage), personName(e.owner), ...facts.map((k) => shown[k])];
             })]),
         ]), "text/csv");
       } else if (kind === "contacts") {
@@ -2160,10 +2485,10 @@
         // De agenda, eerst wat het eerst komt. Voor wie het is staat er
         // altijd: zonder toewijzing is dat wie het invoerde.
         download(`planned-${span}.csv`, csv([
-          [t("col.date"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("dlg.p.assignee"), t("col.addedBy")],
+          [t("col.date"), t("col.time"), t("col.hospital"), t("col.type"), t("col.product"), t("col.contact"), t("col.note"), t("dlg.p.assignee"), t("col.addedBy")],
           ...hs.flatMap((h) => h.planned.filter((p) => inPeriod(p.date)).map((p) => ({ h, p })))
-            .sort((x, y) => x.p.date.localeCompare(y.p.date) || x.h.name.localeCompare(y.h.name))
-            .map(({ h, p }) => [p.date, h.name, t("act." + p.type), p.product,
+            .sort((x, y) => byWhen(x.p, y.p) || x.h.name.localeCompare(y.h.name))
+            .map(({ h, p }) => [p.date, p.time || "", h.name, t("act." + p.type), productsOf(p).join(", "),
               (h.contacts.find((c) => c.id === p.contactId) || {}).name, p.note, personName(assigneeOf(p)) || (p.assignee ? "?" : ""), personName(p.createdBy)]),
         ]), "text/csv");
       } else if (kind === "units") {
@@ -2224,7 +2549,33 @@
       else if (!menuList.hidden) toggleMenu(false);
       else if (state.selectedId) closeFiche();
     }
-    if (e.key === "/" && document.activeElement === document.body) { e.preventDefault(); $("#search").focus(); }
+    // Toetsen werken alleen als je nergens in typt en er geen dialoog of
+    // uitklapper openstaat, en nooit samen met Ctrl, Alt of Cmd: die zijn van de browser.
+    // "Nergens in typen" is niet "de focus op de pagina": wie net een
+    // ziekenhuis in de lijst aanklikte, staat op die rij.
+    const el = document.activeElement;
+    // Een veld in een dialoog die al dicht is houdt soms de focus: daar typt
+    // niemand (zoals in handsBusy).
+    const typing = !!(el && el.matches && el.matches("input, textarea, select, [contenteditable]") && el.offsetParent !== null);
+    if (typing || document.querySelector("dialog[open], details.pick[open]")) return;
+    // De ene uitzondering op "nooit met Ctrl of Cmd": Ctrl+Z of Cmd+Z zet terug
+    // wat net verwijderd is. De knop in de melding staat ver weg in de
+    // tabvolgorde en is na zes seconden weg; met het toetsenbord haal je die
+    // niet. In een veld blijft de toets van de browser: daar kwamen we niet.
+    if (pendingUndo && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      hideToast();
+      runUndo();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "/") { e.preventDefault(); $("#search").focus(); return; }
+    // N en P: een contactmoment of een gepland moment voor de open fiche.
+    const h = state.ficheOpen && sel();
+    if (!h || !store.can.write) return;
+    const k = e.key.toLowerCase();
+    if (k === KEY_ACTIVITY) { e.preventDefault(); activityDialog(h); }
+    else if (k === KEY_PLANNED) { e.preventDefault(); plannedDialog(h); }
   });
 
   // ---------- agenda ----------
@@ -2237,8 +2588,13 @@
     // Het rooster, "te laat" en de lijst volgen alle drie de keuze "voor wie".
     const who = state.agenda.assignees;
     for (const h of state.db.hospitals) for (const p of h.planned) if (!who.length || who.includes(assigneeOf(p))) out.push({ h, p });
-    return out.sort((a, b) => a.p.date.localeCompare(b.p.date) || a.h.name.localeCompare(b.h.name));
+    return out.sort((a, b) => byWhen(a.p, b.p) || a.h.name.localeCompare(b.h.name));
   }
+
+  // ---------- agenda-abonnementen ----------
+  // De dialoog "Abonneren" en de lijst op het gebruikersscherm staan in
+  // feeds.js. Wat dat bestand van hier nodig heeft, krijgt het nu.
+  Feeds.init({ openDialog, KEEP_OPEN, toast, opt, $, store });
 
   // Voor wie: dezelfde uitklapper als de filters in het logboek en de zijbalk,
   // met jezelf vooraan. "Gepland voor" en niet "Toegewezen aan": dat laatste
@@ -2258,9 +2614,10 @@
 
   function agendaRow({ h, p }) {
     const sub = momentLine(h, p, true);
-    const when = new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" });
-    return `<li class="ag-row ${p.date < today() ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
-      <div class="ag-date"><b>${esc(when)}</b><span>${esc(relDays(p.date))}</span></div>
+    const when = p.date ? new Date(p.date + "T00:00:00").toLocaleDateString(I18N.locale, { weekday: "short", day: "numeric", month: "short" })
+      : t("planned.noDate");
+    return `<li class="ag-row ${isLate(p) ? "late" : ""}" data-hid="${esc(h.id)}" data-pid="${esc(p.id)}">
+      <div class="ag-date"><b${p.date ? "" : ' class="nodate"'}>${esc(when)}</b><span>${esc(p.time ? `${p.time} · ${relDays(p.date)}` : relDays(p.date))}</span></div>
       <div class="ag-body">
         <div class="ag-name">${esc(h.name)}</div>
         <div class="ag-sub"><span class="type-pill" style="background:${ACT_TYPES[p.type] || "#999"}"></span>${esc(sub)}</div>
@@ -2283,7 +2640,9 @@
     const items = plannedAll();
     const td = today();
     const month = `${y}-${String(m + 1).padStart(2, "0")}`;
-    const overdue = items.filter((x) => x.p.date < td);
+    const overdue = items.filter((x) => isLate(x.p));
+    // Zonder datum: niet in het rooster, wel bovenaan de lijst, tot het gedaan is.
+    const undated = items.filter((x) => !x.p.date);
     const inMonth = items.filter((x) => x.p.date.startsWith(month));
     const byDay = new Map();
     for (const x of inMonth) {
@@ -2326,6 +2685,7 @@
           <button class="btn small" data-ag="next" title="${esc(t("btn.nextMonth"))}" aria-label="${esc(t("btn.nextMonth"))}">${icon("next")}</button>
         </div>
         ${agendaAssignee()}
+        ${store.feeds ? `<button class="btn small" data-ag="subscribe" title="${esc(t("feeds.button.title"))}">${icon("calendar")} ${esc(t("feeds.button"))}</button>` : ""}
         ${// De schakelaar als laatste, op beide tabbladen: zo staat hij op
           // dezelfde plaats en verspringt hij niet onder je muis.
           agendaTabs()}
@@ -2341,6 +2701,10 @@
       ${overdue.length && !day && !past ? `<div class="ag-block">
         <h3 class="ag-h">${esc(t("agenda.overdue"))} <span class="badge">${overdue.length}</span></h3>
         <ul class="ag-list">${overdue.map(agendaRow).join("")}</ul>
+      </div>` : ""}
+      ${undated.length && !day ? `<div class="ag-block undated">
+        <h3 class="ag-h">${esc(t("agenda.undated"))} <span class="badge neutral">${undated.length}</span></h3>
+        <ul class="ag-list">${undated.map(agendaRow).join("")}</ul>
       </div>` : ""}
       ${items.length ? `<div class="ag-block">
         <h3 class="ag-h">${esc(day ? fmtDate(day) : monthLabel)}${day ? ` · <button class="link" data-ag="clear">${esc(t("btn.wholeMonth"))}</button>` : ""}</h3>
@@ -2411,7 +2775,7 @@
         if (L.authors.length && !L.authors.includes(a.createdBy)) continue;
         if (words.length) {
           const c = h.contacts.find((x) => x.id === a.contactId);
-          const hay = [place, c && c.name, t("act." + a.type), a.product, a.note].join(" ").toLowerCase();
+          const hay = [place, c && c.name, t("act." + a.type), productsOf(a).join(" "), a.note].join(" ").toLowerCase();
           if (!words.every((w) => hay.includes(w))) continue;
         }
         out.push({ h, a });
@@ -2484,13 +2848,22 @@
         <button class="btn small" data-log-more>${esc(t("log.more"))}</button></p>` : ""}`;
     settle();
   }
+  // De soorten in de filter: die van de producten waarop gefilterd is, of van
+  // je eigen producten. Wat al aangevinkt staat blijft erbij, anders valt een
+  // vinkje weg dat nog wel filtert.
+  function logTypes() {
+    const offered = typesOffered(state.filter.products.length ? state.filter.products : myProducts());
+    return ACT_TYPE_KEYS.filter((k) => offered.includes(k) || state.log.types.includes(k));
+  }
+  const logPick = (key, items, label, leeg, voor) => pickBox(items.map((k) => ({
+    attrs: `data-log-pick="${esc(key)}" data-value="${esc(k)}"`, label: label(k), checked: state.log[key].includes(k),
+  })), leeg, false, voor);
+  const logTypesPick = () => logPick("types", logTypes(), (k) => t("act." + k), t("log.allTypes"));
   function renderLog() {
     const L = state.log;
     const only = L.hospitalId && byId(L.hospitalId);
     if (L.hospitalId && !only) clearLogHospital();
-    const pick = (key, items, label, leeg, voor) => pickBox(items.map((k) => ({
-      attrs: `data-log-pick="${esc(key)}" data-value="${esc(k)}"`, label: label(k), checked: L[key].includes(k),
-    })), leeg, false, voor);
+    const pick = logPick;
     agendaView.innerHTML = `
       <div class="s-head">
         <h2>${esc(t("agenda.title"))}</h2>
@@ -2505,7 +2878,7 @@
         ${only ? "" : FILTERS.filter((f) => f.key !== "statuses" && f.items().length).map((f) => `<label>${pickBox(f.items().map((k) => ({
           attrs: `data-filter="${esc(f.key)}" data-value="${esc(k)}"`, label: f.label(k), checked: chosen(f.key).includes(k),
         })), f.leeg(), false, f.voor && f.voor())}</label>`).join("")}
-        <label>${pick("types", ACT_TYPE_KEYS, (k) => t("act." + k), t("log.allTypes"))}</label>
+        <label data-log-types>${logTypesPick()}</label>
         ${owners().length ? `<label>${pick("authors", owners().map(([id]) => id), personLabel, t("log.anyAuthor"), t("log.author"))}</label>` : ""}
         ${only ? "" : `<input type="search" data-log-search value="${esc(state.filter.query)}" placeholder="${esc(t("log.search"))}" aria-label="${esc(t("log.search"))}">`}
       </div>
@@ -2656,7 +3029,27 @@
   const statsView = $("#statsView");
   const agendaView = $("#agendaView");
   const usersView = $("#usersView");
-  function setView(view) {
+  // Elke wissel van scherm is een stap voor de terugknop: terug brengt je naar
+  // het scherm waar je vandaan kwam. Wie zelf teruggaat naar dat scherm (de
+  // knop "Terug naar kaart") neemt die stap weer weg in plaats van er een
+  // bovenop te leggen. quiet: zonder stap, voor de terugknop zelf en voor het
+  // scherm waarmee de app opent.
+  const viewTrail = [];
+  function setView(view, quiet) {
+    const prev = document.body.dataset.view;
+    if (!quiet && prev && prev !== view) {
+      const top = viewTrail[viewTrail.length - 1];
+      if (top && top.from === view) { viewTrail.pop(); top.done(); }
+      else {
+        const step = { from: prev };
+        step.done = layer(() => {
+          const i = viewTrail.indexOf(step);
+          if (i >= 0) viewTrail.splice(i, 1);
+          setView(step.from, true);
+        });
+        viewTrail.push(step);
+      }
+    }
     if (view !== "agenda") clearLogHospital();
     document.body.dataset.view = view;
     statsView.hidden = view !== "stats";
@@ -2734,6 +3127,8 @@
         state.agenda = { ...a, y: d.getFullYear(), m: d.getMonth(), day: "" };
       } else if (b.dataset.ag === "clear") {
         state.agenda = { ...a, day: "" };
+      } else if (b.dataset.ag === "subscribe") {
+        return Feeds.dialog();
       } else return;
       return renderAgenda();
     }
@@ -2757,6 +3152,10 @@
       renderList();
       renderMarkers();
       renderKpis();
+      // Andere producten, andere soorten: alleen dat ene veld, de rest van de
+      // filterrij blijft staan zodat de open uitklapper niet dichtklapt.
+      const types = d.filter === "products" && $("[data-log-types]", agendaView);
+      if (types) types.innerHTML = logTypesPick();
     } else if (d.logPick) {
       state.log[d.logPick] = toggle(state.log[d.logPick], d.value);
     } else if ("logPeriod" in d) {
@@ -2796,7 +3195,7 @@
   });
   try {
     const saved = localStorage.getItem("followup-view");
-    if (saved && !["stats", "agenda", "users"].includes(saved)) setView(saved);
+    if (saved && !["stats", "agenda", "users"].includes(saved)) setView(saved, true);
   } catch (e) { /* privévenster */ }
 
   // Herladen brengt je terug waar je was: hetzelfde scherm, dezelfde fiche,
@@ -2841,7 +3240,7 @@
     if (!place) return;
     if (["planned", "log"].includes(place.tab)) state.agenda.tab = place.tab;
     // Het gebruikersscherm wacht: wie het mag zien weten we pas na aanmelden.
-    if (["stats", "agenda"].includes(place.view)) setView(place.view);
+    if (["stats", "agenda"].includes(place.view)) setView(place.view, true);
     if (place.hospital) {
       const el = $("#fiche");
       el.innerHTML = skelFiche();
@@ -2874,7 +3273,7 @@
       else state.pendingFocus = [h.lat, h.lng];
     }
     const views = ["map", "list", "stats", "agenda", ...(store.can.manageUsers ? ["users"] : [])];
-    if (views.includes(place.view)) setView(place.view);
+    if (views.includes(place.view)) setView(place.view, true);
   }
   showPlaceEarly();
 
@@ -2952,7 +3351,13 @@
       </div>
       ${users.length
         ? `<div class="u-list">${users.map(row).join("")}</div>`
-        : `<p class="muted">${esc(t("users.none"))}</p>`}`;
+        : `<p class="muted">${esc(t("users.none"))}</p>`}
+      ${store.feeds ? `<div class="u-feeds">
+        <h3>${esc(t("feeds.allTitle"))}</h3>
+        <p class="muted">${esc(t("feeds.allIntro"))}</p>
+        <div class="feed-list-all"><p class="muted">${esc(t("feeds.loading"))}</p></div>
+      </div>` : ""}`;
+    Feeds.allInto(usersView.querySelector(".feed-list-all"));
   }
 
   usersView.addEventListener("change", async (e) => {

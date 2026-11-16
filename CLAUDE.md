@@ -2,8 +2,8 @@
 
 Sales follow-up for **EndoQ** (ScopeWatch) and **Ainex** (ENAD), two AI-assisted
 colonoscopy systems Prion Medical distributes in the **Benelux**, and since November
-2026 also for **Thyroid RFA** and **Fibroid RFA**, which are sold per procedure
-rather than per subscription. A map of hospitals,
+2026 also for **Thyroid RFA**, **Fibroid RFA** and **Stents**, which are sold per
+piece rather than per subscription. A map of hospitals,
 a record per hospital with contacts, contact moments and endoscopy-unit details, and a
 statistics page. Bilingual Dutch / English.
 
@@ -48,6 +48,35 @@ Pushing to `main` deploys: GitHub Pages serves the repository root, where `index
 redirects to `public/`. Browsers keep the old files until the `?v=` stamp changes, so a
 deploy that skips the stamp bump ships nothing.
 
+## Checking the copies
+
+Some rules live in more than one place, because the app, the connector, the database
+and the calendar feed cannot share a file: the product, stage and type lists, the type
+names, what a contact moment does to the colour, stage and rooms. Nothing fails when two copies drift apart, so `tests/` checks it:
+
+```bash
+node --experimental-strip-types tests/alles.mjs   # the flag can go from Node 23.6
+```
+
+| File | Checks |
+|---|---|
+| `tests/lijsten.mjs` | Products, stages, types (and their names), the counting types, kinds of stent and facts per product agree between `domain.js`, `i18n.js`, the connector, the calendar function and `schema.sql`; and `app.js`, `stats.js` and `feeds.js` import every `domain.js` function they call |
+| `tests/vertalingen.mjs` | Every key in both languages, and every key the code asks for exists |
+| `tests/databank.mjs` | What a contact moment does to the follow-up: the case table between `-- regels:begin` and `-- regels:end` in `controle.sql` (stored hospital, incoming hospital, scope, expected rows, colour, stage, rooms) run through `domain.js`. `controle.sql` runs the same table through the database, so one set of cases holds both copies to the same answer |
+| `tests/regels.mjs` | The connector's `add_contact_moment` / `update_moment` store the same record as the app and leave the follow-up alone, its replies report what `read_state()` gave back after the write, `stageStatus` / `zonderProduct` / a new row in `update_follow_up` agree with `domain.js`, and it accepts exactly the types `typesAmong()` offers, for no product, one, two, a shared moment and a restricted account |
+| `tests/planning.mjs` | Planned moments: planning without a date, the order (date, time, undated first) in the app, the connector and `fix_planned()`, ticking off (id reused, time dropped, kind of stent kept, date at the latest today) and "planned for" |
+| `tests/cijfers.mjs` | Units sold, per kind of stent, and active rooms: `domain.js`'s counting against the connector's `get_statistics`, with awkward quantities |
+| `tests/samenvoegen.mjs` | `merge3()`: both sides' edits survive, a real clash is a conflict, deletions, stamps, ticks, a moment about several products; `momentsMoved()` fires only on what the database acts on, and after a save the database's follow-up wins while a field typed meanwhile survives |
+| `tests/agenda.mjs` | What the calendar feed writes, line by line (time zones, a whole day, a floating hour, escaping, folding), that a hostile id or type cannot add lines, and that it answers 404 / 503 correctly |
+
+Each file runs in its own process (`alles.mjs`), and within a file every case is
+reported, so one run lists everything that is broken. Run it before every commit,
+the way `controle.sql` is run after every schema change.
+It needs no browser, no database and no network: the rules come from `domain.js`, and
+the Edge Functions run against a faked `fetch`. It uses invented
+data only — the repository is public. `roomsDemo` is left out of the comparison on
+purpose: the connector leaves it to `fix_rooms_demo()` in the database.
+
 ## Two databases
 
 There are two Supabase projects: the live one and a development one. `public/config.js`
@@ -60,8 +89,9 @@ into `main` leaves nothing to strip. Comment the two development lines out and
 quickest way to work on anything that is not about the database.
 
 The development project exists so that a schema change can be tried before it reaches
-anyone's work: run `schema.sql` there first, then `versie.sql`, `toegang.sql` and
-`controle.sql`, and only then the same against the live project — from disk, as ever.
+anyone's work: run `schema.sql` there first, then `versie.sql`, `toegang.sql`,
+`controle.sql` and `gebruiker.sql`, and only then the same against the live project —
+from disk, as ever.
 
 It holds **invented data only**: the forty hospitals from `data/seed.json` plus made-up
 clinicians on `example.com`. Never an export from the live database. That would put
@@ -78,11 +108,14 @@ identical blank rows.
 
 Two things that cost an evening to find out:
 
-- **Part C of `controle.sql` wants a uuid in five places.** It can look itself up
-  instead: `set_config('request.jwt.claims', …, true)` does what the `set local` line
-  there does and accepts a subquery. Look the uuid up *before* switching role, since
-  `authenticated` may not read `auth.users`. Run those blocks one at a time — the first
-  failure stops the whole transaction, and three of them are supposed to fail.
+- **The checks as a real user are one script.** `supabase/gebruiker.sql` (part C of
+  `controle.sql` until November 2026) takes the uuid once, at the top —
+  `sed 's/PLAK-HIER-HET-UUID/<uuid>/' supabase/gebruiker.sql | pbcopy` — and runs
+  every check in a sub-transaction of its own that is always rolled back, so the three
+  that are supposed to fail no longer stop the rest. Use the `contributor` limited to
+  Ainex: C1 and C2 work with anyone, C3 means something only with that account. A
+  moment without an id is put last on a restricted round trip, so C2b says FOUT on a
+  document holding one; the app and the connector never write one.
 - **Seeding by writing to `app_state` directly** leaves a document that never went
   through `write_state()`, and C2b then reports FOUT for no good reason:
   `merge_hospital()` always writes a `planned` key and `seed.json` has none, so the
@@ -93,9 +126,9 @@ Two things that cost an evening to find out:
 
 | File | What it is |
 |---|---|
-| `public/domain.js` | Fixed values both app.js and stats.js need, plus `esc()` and `pickBox()` |
+| `public/domain.js` | Fixed values and pure rules both app.js and stats.js need: what a contact moment does to colour, stage and rooms (`autoStatus`, `syncPipeline`, `syncRooms`), the order of planned moments (`byWhen`), how units and rooms are counted, plus `esc()` and `pickBox()`. The connector copies these; `tests/` compares the copies |
 | `public/ui.js` | What the page does without knowing about hospitals: icons, `leave()`, `ask()`, row motion, the sliding switch, the select list |
-| `public/app.js` | The whole app: map, list, record, agenda, dialogs, export/import (~1,500 lines) |
+| `public/app.js` | The whole app: map, list, record, agenda, dialogs, export/import (~3,300 lines) |
 | `public/i18n.js` | NL/EN dictionaries and `t()` |
 | `public/stats.js` | Statistics page, charts as plain HTML |
 | `public/storage.js` | Two backends: local `server.py`, or Supabase with login |
@@ -105,6 +138,8 @@ Two things that cost an evening to find out:
 | `data/seed.json` | 40 starter hospitals (BE/NL/LU), no contacts, approximate coordinates |
 | `public/consent.html`, `consent.js` | The page where someone allows an assistant to act as them (see The assistant connector) |
 | `supabase/functions/agent/index.ts` | The connector an assistant such as Claude talks to: a Supabase Edge Function, one file, no imports |
+| `public/feeds.js` | The calendar subscription as you see it: the "Abonneren" dialog and every subscription on the users screen. It reaches nothing in `app.js` but what `init()` hands it |
+| `supabase/functions/calendar/index.ts` | The calendar feed a calendar app fetches: an Edge Function, one file, no imports (see The calendar feed) |
 | `docs/agent-instructions.md` | What to paste into the assistant's project so it behaves like a colleague who keeps the log |
 
 ## Conventions
@@ -134,7 +169,13 @@ Dark mode is the same token names under `:root[data-theme="dark"]` inside `@medi
 screen` — `screen`, so a print is always light. `public/theme.js` sets that attribute
 from the choice in the menu (system, light or dark, kept in `localStorage`); it loads
 in the `<head>` so the page does not flash white first, and it is a file of its own
-because the CSP allows no inline script. A rule that needs a different value in
+because the CSP allows no inline script. Two rules about depth and corners: a
+corner inside a corner has the outer radius minus the padding between them, which
+is what `--radius-in` is (a row in a dropdown, the pill in a switch); and in the
+dark, depth comes from a lighter surface and not from a shadow, so whatever
+floats — the menu, the dropdowns, the dialogs, the login card — is drawn on
+`--float`, the same as the panel in light and a step lighter in dark, with
+`--float-hover` and `--float-press` for what lights up on it. A rule that needs a different value in
 the dark gets a token, not a second rule: a rule inside that block that also exists
 further down the file loses to it. Icons are `icon("edit")` from `ui.js`, inline
 SVG in the colour of the text beside them; no glyphs from the font. Motion is short
@@ -161,14 +202,53 @@ do not say what they stand for; filters carry their wording inside the field and
 never as a label in front of it. `attrs` goes into the tag unescaped — they are attributes and not
 text — so the caller wraps its own values in `esc()`, as everywhere else here. A row
 called "all" is a row like any other, which is why "all products" is also automatically
-the text on the button. `type: "radio"` makes it a choice of one.
+the text on the button. `type: "radio"` makes it a choice of one; nothing uses
+that at the moment.
 
 **Questions and messages.** No `confirm()` or `alert()`: `ask(msg)` in `ui.js` opens
 the app's own dialog (`#ask`) and promises true or false, `tell(msg)` is the same box
 with one button. A form dialog with a delete button passes its question as the third
 argument of `openDialog()`, which asks it with the form still open underneath, so
-"Annuleer" puts you back where you were. The banner under the top bar takes a tone,
+"Annuleer" puts you back where you were. A fourth argument, `{ beforeClose }`, is a
+question asked before the dialog closes by any route, Escape included; it belongs to
+that dialog and the next `openDialog()` drops it. The subscription dialog uses it
+twice: not while the database is still making the address, and not without asking
+when the address was never copied. The banner under the top bar takes a tone,
 `showBanner(msg, reload, "error" | "warn" | "info")`, and is red unless told otherwise.
+
+**The back button.** The app is one page, so without help the back button (or
+the back gesture on a phone) leaves it. `layer(close)` in `ui.js` puts a step in
+the browser's history for anything that opens and returns a function to call when
+it closed some other way; on back, `close()` is called. Three things use it: the
+open record (`syncFicheLayer()`, called from `renderFiche()` because the record
+opens and closes along many paths), a change of view (`setView()`; going back
+yourself with "Terug naar kaart" takes the step away again, and the view the app
+opens with gets none), and both dialogs (`openModal()`, released in
+`softClose()`). Each step carries its number in `history.state`, so a popstate
+says how many layers should be left; a layer that closed while something lay on
+top stays as a dead place and is skipped on the way back. A dialog that asks
+before closing returns false and keeps its step. Screens deliberately get no
+address: the pages are public and a hospital id in a link adds nothing.
+
+**Undo.** Removing a contact moment, a planned moment or a contact asks nothing:
+it is gone at once and the toast offers "Ongedaan maken" for six seconds
+(`offerUndo()` in `app.js`). While that runs **nothing is saved** —
+`scheduleSave()` only notes that something is waiting — so a record that is put
+back never left the database: the inventory in `write_state()` does not see it
+go, and it keeps its author. Each removal hands `offerUndo()` a function that
+puts back exactly what it took: the record in its place, the links to a removed
+contact, the hospital's ticks, the installed rooms. One at a time: a second
+removal, or any other toast, lets the first go through, and so does leaving the
+page. A hospital still asks first.
+
+**Keys.** `/` jumps to the search, Escape closes the record, and with a record
+open `N` starts a contact moment and `P` a planned moment. They work whenever
+nobody is typing — focus on a list row counts as not typing — and never with
+Ctrl, Alt or Cmd. The one exception is Ctrl+Z or Cmd+Z while an undo is on
+offer: the toast's button is too far away in the tab order to reach in six
+seconds. The toast is a live region (`role="status"`), so a screen reader hears
+what was removed. Each key is shown where its action is: in the search field
+(`.key-hint`, hidden on touch devices) and in the button's tooltip (`keyTip()`).
 
 **Making things go away.** Anything that closes with a fade goes through
 `leave(el, after, opts)` in `ui.js`: it fades the element and only then runs `after`,
@@ -225,7 +305,11 @@ needs its own copy, since it cannot read that file: `followup.producten()` in
 `supabase/schema.sql`. That one only fixes the sort order — an unknown product
 sorts last rather than being refused, so an app that already knows a new product
 does not break against a database that has not been updated yet. So: two lines,
-one per side, and a seventh product also wants a `--series-7`.
+one per side, and a seventh product also wants a `--series-7`. A product sold per
+piece needs a third: `followup.per_ingreep()`, the database's copy of
+`productKind()`, or the database counts its quantities as installed rooms.
+`tests/lijsten.mjs` compares all three, and the connector's `PRODUCTS` and
+`PROCEDURE`.
 
 **Regions.** `REGIONS` in `public/domain.js` says which countries make up a
 region and which piece of map belongs to it; `COUNTRIES` is derived from it. A
@@ -250,31 +334,126 @@ the database knows about it. If it ever has to become one, it would key on
 
 **Two kinds of product.** `productKind()` in `public/domain.js` says how a product is
 sold: `"subscription"` (EndoQ, Ainex: per room, counted in rooms and active
-subscriptions) or `"procedure"` (Thyroid RFA, Fibroid RFA: used up per procedure, no
-installation, counted in units ordered). Anything not listed is a subscription, so an
+subscriptions) or `"procedure"` (Thyroid RFA, Fibroid RFA, Stents: used up per procedure, no
+installation, counted in units sold). Stents is one product for every stent
+we sell, not one per model. Anything not listed is a subscription, so an
 unknown product behaves as everything did before. `PRODUCTS` deliberately stays a list
 of names — the name is what is stored on every record and in every scope — and what a
 product *is* hangs beside it. Three things follow from the kind and should keep doing
 so instead of naming products: `wantsQuantity()` (the one number on a contact moment
 is rooms for a subscription product and units for a procedure product, and there only
-on an order), `stagesFor()` (one shared list of stages, of which a procedure product
+on an order or a procedure), `stagesFor()` (one shared list of stages, of which a procedure product
 skips "demo installed" and a subscription product skips "purchase started"), and the
 statistics page, which shows subscriptions, rooms and towers for the one kind and
-orders per month for the other. `syncRooms()` ignores procedure products. Units
-ordered is a sales figure per hospital per month — never a record per patient or per
+units sold per month for the other. `syncRooms()` ignores procedure products. Units
+sold is a sales figure per hospital per month — never a record per patient or per
 procedure.
 
-**One product or several.** A contact moment and a planned moment carry one
-`product`; a contact carries `products[]`, because the same clinician is often the
-point of contact for both. `normalizeContact()` migrates the old single `product`
-and drops the field, the way `demoDate` was folded into `planned[]`. The database
-reads both shapes — `followup.in_scope()` branches on whether the record has a
-`products` key — and deliberately does **not** rewrite the old shape on the way out:
-that would make loading and saving return a different document and break the check
-that matters most. A contact is visible as soon as one product overlaps your scope,
+**Types of contact moment.** `ACT_TYPES` is every type that can be stored;
+`typesFor(product)` is what a dialog offers. A product sold per piece has no
+installation and no cancellation, a subscription product has no procedure, and
+`prospecting` is offered nowhere any more (it said that a hospital was approached
+but not how). The lists only narrow the choice: a saved moment keeps a type that is
+no longer offered and still shows it. The type dropdown in both moment dialogs
+follows the product chosen there, and the logbook's type filter follows the
+products filtered on.
+
+**A procedure** (type `procedure`) is a visit: a colleague stands by or assists
+while the doctor uses the product. Product that is only shipped is an order. Its
+one number is units *used*, and those count as sold (`SOLD_TYPES`), so the same
+units must not also be entered as an order — the dialog says so. A procedure
+without a number counts for nothing in the figures, where an order without one
+counts as one. It moves the product to "under evaluation" when it stood earlier
+and never moves a customer. This type sits closest to the no-patient-data rule:
+a date, a hospital, a doctor, a number and a few words, never anything about the
+patient and never a record per case.
+
+**Kinds within a product.** `FAMILIES` in `domain.js` gives Stents four:
+oesophageal, biliary, colonic and other. A moment that carries a number, so an
+order or a procedure (`wantsFamily()`), can carry one `family`, also while it is
+still planned (ticking it off takes the kind along), stored only when chosen, so older
+records are not rewritten. One per moment: an order of two kinds is two moments.
+The statistics show units per kind, with "no kind chosen" as its own row so the
+sum matches the tile.
+
+**One product or several.** A contact moment, a planned moment and a contact all
+carry `products[]`: usually one name, several when a meeting was about Thyroid RFA
+and Fibroid RFA at once, or when the same clinician is the point of contact for
+both. Until November 2026 a moment carried a single `product` until someone ticked
+a second one; that shape is converted in exactly two places and read nowhere else.
+The database converts with `followup.lijstvorm()`: once on the stored document at
+the foot of `schema.sql`, and on the way in and out in `read_state()`,
+`write_state()` and `feed_events()`, for an old app or an old backup that still
+sends it. A conversion in the database goes through no stamping, so nobody becomes
+the last editor of the whole logbook. The app converts in `normalize()`, for an
+imported backup and for `data/db.json`. `productsOf()` / `productOf()` in
+`domain.js`, `followup.products_of()` and the connector read only the list. The
+connector still accepts `product` (one name) as input on its tools, and stores a
+list. **The schema goes live first**: an older app or connector against this schema
+only refuses numbers it could have offered, but this app or connector against an
+older schema would have every number stripped, because that one treats every list
+as shared. **It cannot be rolled back by running an older `schema.sql`:** that
+one stops with "`scope_entries(jsonb, text[])` is not unique" and leaves
+`read_state()` broken for every restricted user, and its `zonder_aantal()` would
+then strip the number from every moment, since every moment now carries a list. A
+way back is a fix forward. Whatever carries a number belongs to one product. So a
+*new* contact moment about several products with a type that carries a number (an
+order for Fibroid RFA and Stents) asks for a number per product and is saved as one
+contact moment per product, each with its own number and kind of stent; the first
+keeps a ticked-off plan's id. A plan carries no number, so it may be any type all its
+products know (`typesInAll()`); the numbers come when it is ticked off. The
+connector does not split: it refuses a number on several products and says to log
+one moment per product. Such a moment
+moves the follow-up of each of its products, shows under each in the filters,
+and counts once as a contact moment. Its note is shared between the people who
+can see it, as a contact's fields are, and either of them can remove it.
+
+**A shared moment never carries a number.** A moment is shared when its stored list
+holds more than one product. Someone who may see only one of them gets a trimmed
+list that looks like an ordinary single-product moment, so the database says so:
+`scope_entries()` adds `"shared": true` to a moment (never a contact) whose list it
+trimmed, and `write_state()` strips the flag from whatever comes back, before the
+stamp is compared, so it never makes anyone a last editor. `shared()` in
+`domain.js` and in the connector is "the flag, or more than one product";
+`typesAmong(list, mine, gedeeld)` then offers no type with a number, the dialogs
+show no quantity and no kind of stent, `normalize()` drops them, and the connector
+refuses them. A dialog judges by the flag and by what is ticked now, so someone who
+unticks the second product of a moment may give it a number: a list down to one
+product is an ordinary moment again. The database is the authority:
+`followup.zonder_aantal()` strips `rooms` and `family` from any moment whose full
+stored list has more than one product, on every save including an unrestricted
+one, and `followup.geinstalleerd()` counts no rooms for such a moment. A restricted
+saver never puts a number on anything that carries a colleague's product
+(`followup.zonder_aantal_beperkt()`), and someone who unticks their own product
+from a shared moment only takes their tick away: the moment keeps everything else
+as it was, so it cannot become a colleague's order or installation (`controle.sql`
+156–160, 167). Ticking off a shared plan without one of your own products is
+refused (157, 161; the dialog says so first): take your product off the plan
+instead. Nor can a restricted saver change such a moment to a type that counts —
+`COUNTING_TYPES` in `domain.js`, `followup.tellende_soorten()` in the database,
+compared by `tests/lijsten.mjs`: the stored type, or the plan's on a tick-off,
+stays (162–164), and the planned-moment dialog does not offer one on a shared
+plan. A moment the database trimmed counts for no product in the statistics and
+in the connector's `get_statistics`, so a restricted account and an unrestricted
+one see the same figures.
+
+**Every list is canonical.** `toProductList()` in `domain.js` and
+`followup.een_lijst()` clean a list the same way, for moments and contacts: each
+name once, only non-empty text, in `PRODUCTS` order with an unknown product last
+and unknowns among themselves in byte order (`collate "C"`). A list in another
+order would otherwise be re-sorted by the next restricted save, which then counts
+as a change and restamps the record. The hospital's own ticks (`h.products`) follow the same order:
+`followup.lijstvorm_vinkjes()` in the database and `syncPipeline()` in the app. A tick
+used to be added at the end and a restricted save re-sorted it, so loading and saving
+changed the document (`gebruiker.sql` C2b). `tests/databank.mjs` holds the app to the
+fixture `controle.sql` holds the database to (`oudvorm`). Ticking off
+a shared plan sends the trimmed list, and `followup.afgevinkt()` hands the merge
+the stored plan as the stored side of the new contact moment, so the colleague's
+product stays on it (`controle.sql` 71–74). A contact is visible as soon as one product overlaps your scope,
 and `products` is then trimmed to your scope and merged back with the same
 `(stored − yours) ∪ (payload ∩ yours)` rule as the hospital's own ticks, so you
-cannot take a colleague's product off someone. Only `products` is merged that way:
+cannot take a colleague's product off someone. A moment's list is merged the same
+way. Only `products` is merged that way:
 the contact's own fields — name, phone, e-mail, notes — are **shared**, exactly as
 the hospital's are. Two people looking after the same clinician edit the same
 record, and the last save wins.
@@ -299,7 +478,31 @@ first planned item by `syncNextAction()`, which keeps the list, the "actie te la
 and the CSV working; do not write to them directly. The old `demoDate` field was folded
 into `planned[]` the same way: `normalize()` turns it into a planned moment of type
 `demo` and drops the field, and the "demo's gepland" KPI and the CSV column both read
-`planned[]` now. There is one place to plan a demo, and it clears itself when ticked off.
+`planned[]` now. There is one place to plan a demo, and it clears itself when ticked off. A demo planned
+without a date counts as planned too: it still has to be arranged.
+
+A planned moment may have **no date**: something that has to happen but has no day
+yet. It sorts first (an empty date sorts before any other, in `normalize()`,
+`byWhen()`, `sortPlanned()` in the connector and `fix_planned()` in the database),
+stays at the top of the hospital's planned moments and in its own block above the
+agenda, is never overdue (`isLate()`, and `isOverdue()` looks at the first moment
+*with* a date), and is the next action with an empty `nextActionDate`. Ticking it off
+asks for a date, today by default. It is not in a calendar feed and has no download.
+Until November 2026 such a moment was thrown away in three places — `normalize()`,
+`fix_planned()` and `doc_keys()` — and an older app or schema still does that, so
+**this schema and this app go live together**: an old app would drop every undated
+moment on its next save. `doc_keys()` now counts them, so removing one is a deletion
+like any other and a `contributor` cannot.
+
+A planned moment can carry a `time` (`"14:00"`), and only when someone gave one —
+like `assignee`, writing an empty one onto every older moment would make the first
+saver the last editor of the agenda. It belongs to the plan: ticking off builds a
+fresh contact moment, so the time is dropped, and a contact moment has a date and
+no time. `h.planned` is stored in `byWhen()` order — date, then time (a moment
+without a time after those with one), undated first — and `fix_planned()` and the
+connector's `sortPlanned()` sort the same way, so the next action is the moment the
+agenda shows first. Ticking off dates the contact moment at the latest today
+(`tickOffDate()`): a plan for next week ticked off now happened today.
 
 **Assigned to, and planned for.** Two things belong to a person, and they have two
 words on purpose. A product at a hospital is *assigned to* someone: `owner` in that
@@ -326,6 +529,13 @@ instead of an empty screen; `restoreSelection()` and `restoreView()` finish the 
 around the first `renderAll()`. The users screen waits for the data, because who may
 see it is not known before sign-in.
 
+**Sections of the record** fold: the heading is a button (`secHead()` in
+`app.js`) with an arrow that points right when closed and down when open. What is
+closed is remembered per browser (`followup-sections` in `localStorage`) and
+applies to every hospital, since it is about what someone works with and not
+about one record. The click only switches a class, so nothing is redrawn and a
+half-typed field survives; a print always shows everything.
+
 **The logbook.** The agenda page has two tabs: what is planned (`planned[]`) and the
 logbook, every contact moment across hospitals, newest first and grouped per week
 (`renderLog()`). It is not a view of its own — `state.agenda.tab` chooses — so the tab
@@ -347,6 +557,39 @@ instead. Derived like `isOverdue()`, so nothing is stored and nothing migrates.
 `autoStatus()` and `stageStatus()` hold the rules. Manual override must always remain
 possible.
 
+**The database decides what a contact moment does.** `write_state()` runs
+`followup.opvolging_bijwerken_doc()` on every ordinary save (never on an import):
+per hospital it compares with what was stored and applies the rules only to contact
+moments that are **new** or whose **type changed** — so a stage set by hand stays —
+and only to rows within the saver's scope, so a restricted user never moves a
+colleague's row, not even through a shared moment. It also gives every ticked product
+a row, sets `unit.roomsInstalled` to the stored count plus the change the moments
+make (`followup.geinstalleerd()`), and recomputes the hospital's colour and stage
+when a rule fired or the products or rows changed. An unchanged save changes
+nothing. `autoStatus()`, `syncPipeline()` and `syncRooms()` in `domain.js` are still
+run by the app, as a preview that shows the colour at once and that `server.py`
+mode depends on; after a save that added, removed or changed a contact moment the
+app does not adopt the timestamp that save returned (`store.save()` returns it,
+`store.accept()` adopts it), so to the app the document is not yet its own, exactly
+as after a colleague's save. It fetches and merges at once through `pull()`, or,
+while someone is typing, dragging a pin or has a dropdown open (`handsBusy()`), the
+quiet refresh does it later, and a save that comes first meets a conflict and merges
+along the ordinary path. An import, which never merges, first adopts the withheld
+timestamp (`heldAt`): all it overwrites is what the database decided about our own
+previous save. No flag of its own: one conflict mechanism, so the
+database's answer is what stays. If someone changed by hand, in those few hundred
+milliseconds, the very field the database just moved, that is an ordinary clash:
+the banner, and a reload. The connector
+keeps no copy at all: it writes the moment and the product tick and reads the
+result back. Two costs, accepted: a stage set by hand and a room count typed by hand
+in the same save as a new moment are overruled, and when one save holds several
+room moments the database clamps the net change once where `syncRooms()` clamps per
+moment (`controle.sql` case 120, checked on the database side only). Older stored
+shapes — `rooms` as text, an unknown type, a moment without an id — are read the
+way the app's `normalize()` reads them, so a save that changes nothing still moves
+nothing. `stageStatus()` and `zonderProduct()`
+are not about a contact moment and stay in the app and the connector.
+
 **Follow-up per product.** `h.pipeline` holds one row per product:
 `{ stage, status, owner }`, where `owner` is a uuid from `app_users`. A hospital can
 be an EndoQ customer and a Thyroid RFA prospect at once. `h.status` and `h.stage` on
@@ -364,7 +607,10 @@ moves the only row there is, and nothing when there are several.
 
 **What you need to know for an RFA product** — CMM approval, priority, whether they
 already perform RFA, the current system and a note — is the counterpart of the
-endoscopy unit, and shows as a section of its own per product. It is stored in that
+endoscopy unit, and `factsFor(product)` says which of them a product keeps: all
+five for the RFA products, only the note for Stents (CMM approval
+differs per kind of stent, so one field per hospital would mean nothing). It
+shows as a section of its own per product, and is stored in that
 product's row in `h.pipeline` (`normalizeFacts()`), not in a block on the hospital
 like `unit`: Thyroid and Fibroid each have their own approval at the same hospital,
 and a row is already inside the product wall, so these facts never reach an account
@@ -403,6 +649,14 @@ history, outside the database. That was already true of the workbook it replaces
 but it is now something this project does on purpose, and it belongs in whatever
 record of processing Prion keeps.
 
+A calendar feed is another such recipient. Each subscription sends the agenda —
+hospital names and addresses, the type, product, time and note of each planned
+moment — to whichever calendar provider the subscriber uses, from where it reaches
+phones and lock screens, and the note travels further than before. The address is a
+key that works without signing in until it is stopped. Supabase's function logs
+record the address too, secret included, for as long as they are kept. This belongs
+in the same record of processing.
+
 What protects the data is the login, not the repository. Sign-up is disabled on the
 Supabase project, so only users created by hand under Authentication → Users can sign
 in; keep it that way, and keep 2FA on the accounts that can reach the dashboard.
@@ -422,8 +676,8 @@ touch".
 
 | Role | May |
 |---|---|
-| `admin` | everything, plus assigning roles |
-| `editor` | everything with the data, including deleting and importing a backup |
+| `admin` | everything, plus assigning roles and deleting a hospital that has contact moments or planned moments |
+| `editor` | everything with the data, including deleting and importing a backup — except deleting a hospital that has contact moments or planned moments |
 | `contributor` | add and change; not delete, not import |
 | `viewer` | read, print and export only |
 
@@ -450,7 +704,18 @@ the document disappeared — that is what makes `contributor`'s "no delete" real
 same inventory excuses the one legitimate disappearance: ticking a planned moment off
 removes it and adds a contact moment **with the same id**, so `activityDialog()`
 reuses `plan.id` instead of minting a new one. Change that and a `contributor` can no
-longer work through the agenda.
+longer work through the agenda. The plan must really go in that same save: a new
+contact moment with the id of a plan that stays is refused (`followup.plan_bezet()`),
+or anyone could copy a colleague's product onto a moment by borrowing a plan's id,
+or block the plan from ever being ticked off (`controle.sql` 165). `write_state()`
+also refuses a `mode` of null, which used to slip past the cap on deletions and the
+server-side stamp (166).
+
+A hospital that has contact moments or planned moments is deleted by an `admin`
+only: with it goes everyone's history. `write_state()` checks what was stored, so
+it counts a colleague's moments the editor never saw; the app and the connector
+say so first (`gebruiker.sql` C7). An empty hospital — a double entry, a typo — an
+editor may still remove.
 
 ## The product wall
 
@@ -497,8 +762,10 @@ and that moment may be the other product's — sending it unrecomputed would han
 restricted browser the text of a record the wall had just removed. `roomsDemo` only
 when the demo activities themselves changed: the field is also typed by hand in the
 record, and recomputing on every save would wipe what someone put there.
-`unit.roomsInstalled` is not: `syncRooms()` applies a *difference*, not a sum, so it is
-already safe.
+`unit.roomsInstalled` is recomputed as the stored count plus the difference the
+saved contact moments make — not the browser's number plus that difference, which
+would count an installation twice — and left alone when no moment changed it, so a
+count typed by hand stays.
 
 `pipeline` sits inside the wall like a contact moment. `scope_hospital()` passes only
 the rows within scope and recomputes the hospital's status and stage on what is left
@@ -557,12 +824,19 @@ Three rules it rests on:
   to `read_state()` and `write_state()`, so the role, the product wall, the stamp and
   the cap on deletions apply exactly as in the app. `controle.sql` therefore still
   says everything there is to say about what an assistant can reach.
-- **The rules now exist in a third place.** What a contact moment does to the colour
-  and the stage (`autoStatus`, `stageStatus`, `syncPipeline`, `syncRooms`,
-  `syncNextAction`, `syncProducts`), the fixed lists from `domain.js` and the counting
-  rules from `stats.js` are copied into the function. Change one in `app.js` and it
-  must change there too. If the connector stays, these belong in the database, where
-  the app and the assistant would share them and `controle.sql` could check them.
+- **The database moves the follow-up, not the connector.** What a contact moment
+  does to the colour, the stage and the rooms is decided in `write_state()` (see
+  "The database decides what a contact moment does"); the connector writes the
+  moment, ticks its products and reports what `read_state()` gives back after the
+  write. If that read fails, the reply still says it was saved, so the assistant does
+  not log the moment twice. What it still copies from `domain.js` — `stageStatus`
+  and `zonderProduct` for hand edits, a new row in `update_follow_up`, the order of
+  planned moments (`byWhen`, `tickOffDate`), the fixed lists, the type rules
+  (`typesFor`, `typesAmong`, `shared`) and the counting rules (`units`, `rooms`,
+  `signedRooms`) — `tests/` compares with the original. **Deploy order:** the schema
+  first, then the connector. The old connector against the new schema is harmless,
+  since the rules give the same answer twice; the new connector against an old schema
+  logs moments that move nothing.
 
 Signing in goes through Supabase Auth acting as an OAuth server. In the dashboard:
 OAuth Server on, authorization path `/consent.html`, dynamic client registration off,
@@ -621,6 +895,61 @@ the cause was not found, so whether the token renews by itself after an hour is
 unproven; and signing out of the app ends every session of that account, which as
 far as we know includes the assistant's.
 
+## The calendar feed
+
+Someone can subscribe to the agenda from Outlook, Google or Apple: "Abonneren" on
+the agenda's planned tab makes an address that the calendar app fetches by itself.
+One way only — the calendar shows, planning stays here. A planned moment becomes an
+event with the type, product and hospital as its title, the hospital's name and
+address as the location, and the note; with a `time` it lasts an hour, without one
+it is a whole day. No contact person: that is a clinician's name in a third
+party's calendar, on lock screens. There is no download of a single moment any
+more: it was a copy that did not follow changes, and the subscription does the
+same job properly.
+
+- **The address is the key.** A calendar app signs in as nobody, so the address
+  carries a 64-hex secret. `public.calendar_feeds` keeps only its SHA-256, so the
+  app shows it once, at creation. The table is revoked and has RLS with no
+  policy; everything goes through `feed_create()`, `feed_list()`,
+  `feed_remove()` (owner or admin) and `calendar_feed()`, the only function
+  `anon` may execute. Not through the assistant's key: `feed_create()` refuses
+  `via_assistant()`.
+- **The wall is the owner's, as it stands now.** `followup.feed_events()` runs
+  the stored document through `scope_doc()` with the owner's current
+  `app_users.products`, then narrows by the subscription's own choice ("planned
+  for me" follows `assigneeOf()`; a product choice leaves out moments without a
+  product). Narrowing someone's products narrows their feeds at the next fetch.
+  It is pure, so `controle.sql` checks it on a literal document (60–66).
+- **A subscription belongs to an account**: `owner` references `app_users` with
+  `on delete cascade`, which itself cascades from `auth.users`. An admin sees
+  and stops every subscription at the foot of the users screen. **Banning** an
+  account in Supabase Auth or resetting its password does **not** stop its
+  feeds: the address needs no sign-in. When someone leaves, stop their
+  subscriptions on the users screen, or delete the account.
+- **Managed by a person.** `feed_create()`, `feed_list()` and `feed_remove()` all
+  refuse an assistant's key (`via_assistant()`), and `feed_create()` takes an
+  advisory lock so two simultaneous calls cannot pass the cap of ten together.
+  The cap lives in one place, `followup.feed_max()`: `feed_list()` hands it to the
+  app with the list (`{feeds, max}`), so the dialog hides the form at the
+  maximum without a copy of the number in the browser.
+- **What reaches the calendar is escaped, or reduced.** Every text property
+  goes through `text()`; the record id, which sits in `UID`, is cut down to
+  letters, digits, `-` and `_` (`uidOf()`), because anyone who can write can put
+  any string there, and `check_payload()` refuses an id with a control
+  character. Countries and types are looked up with `Object.hasOwn`, never
+  through the prototype. `tests/agenda.mjs` keeps both.
+- **The Edge Function** `supabase/functions/calendar/index.ts` turns
+  `calendar_feed()` into `text/calendar`. It runs with the public key and no
+  service key, needs **Verify JWT off** (a calendar sends no token), answers 404
+  for an unknown or stopped address and 503 when the database fails, because a
+  404 makes some calendars drop the subscription. It is the only code that
+  writes iCalendar, and it holds a copy of the type labels in both languages;
+  the language is chosen per subscription.
+- **From thirty days back onwards**, so an overdue moment stays until ticked off.
+  The logbook is not in the feed, and neither is a planned moment without a date.
+- **It is not instant**: Apple lets you choose, Outlook takes hours, Google up to
+  a day. The dialog says so.
+
 ## Git
 
 - Repository lives in the **Prion-Medical** organisation; push as the `PrionMedical`
@@ -668,7 +997,12 @@ Not bugs; decisions. Reviewers will flag them, so the reasoning is recorded here
 - **Restoring a backup is a dashboard job.** `app_state_backups` is revoked from
   `authenticated`, because it holds the full unscoped document and would have been a
   door next to the wall.
-- **No tests.** If this changes, plain Node assertions over the pure functions
-  (`normalize`, VRR-style maths, CSV writing, i18n key coverage) — not a test framework.
+- **Tests only for the copies.** `tests/` holds plain Node assertions, no framework
+  and no packages (see Checking the copies). They check that rules kept in more than one
+  place still agree, not the app as a whole.
 - **`app.js` is large** for a single file. Splitting it is reasonable eventually, but
   there is no module bundler and no appetite for one, so it stays until the pain is real.
+  `feeds.js` is a narrow exception, not the start of a split: a feature that already
+  had its own file on the server (`supabase/functions/calendar`), and that needs
+  nothing from `app.js` beyond a handful of helpers. A piece of `app.js` that reads
+  or redraws its state does not qualify.
